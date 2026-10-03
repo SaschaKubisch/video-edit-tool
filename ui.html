@@ -1,0 +1,886 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ambient Video Automation</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #0f0f1a;
+    color: #e0e0e0;
+    min-height: 100vh;
+  }
+
+  /* ── Layout ── */
+  .app { display: flex; flex-direction: column; min-height: 100vh; }
+  header {
+    background: #1a1a2e;
+    padding: 16px 24px;
+    border-bottom: 1px solid #2a2a4a;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  header h1 { font-size: 1.3em; color: #e94560; }
+  .status-bar {
+    display: flex; align-items: center; gap: 12px;
+    font-size: 0.85em; color: #888;
+  }
+  .status-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: #444;
+  }
+  .status-dot.active { background: #e94560; animation: pulse 1.5s infinite; }
+  .status-dot.done { background: #2ecc71; }
+  .status-dot.error { background: #e74c3c; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+  main { flex: 1; padding: 24px; max-width: 1400px; margin: 0 auto; width: 100%; }
+
+  /* ── Steps ── */
+  .steps { display: flex; gap: 8px; margin-bottom: 24px; }
+  .step-tab {
+    padding: 8px 20px;
+    background: #1a1a2e;
+    border: 1px solid #2a2a4a;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.85em;
+    color: #888;
+    transition: all 0.2s;
+  }
+  .step-tab:hover { border-color: #e94560; color: #ccc; }
+  .step-tab.active { background: #e94560; border-color: #e94560; color: white; }
+  .step-tab.completed { border-color: #2ecc71; color: #2ecc71; }
+  .step-tab .num { font-weight: 700; margin-right: 6px; }
+
+  .step-panel { display: none; }
+  .step-panel.active { display: block; }
+
+  /* ── Cards ── */
+  .card {
+    background: #1a1a2e;
+    border-radius: 8px;
+    padding: 20px;
+    margin-bottom: 16px;
+    border: 1px solid #2a2a4a;
+  }
+  .card h2 { font-size: 1.1em; color: #ccc; margin-bottom: 12px; }
+  .card p { color: #888; font-size: 0.9em; margin-bottom: 12px; line-height: 1.5; }
+
+  /* ── Directory Picker ── */
+  .dir-picker { margin-bottom: 16px; }
+  .dir-picker label { display: block; font-size: 0.85em; color: #888; margin-bottom: 6px; }
+  .dir-input-row { display: flex; gap: 8px; }
+  .dir-input {
+    flex: 1;
+    padding: 10px 14px;
+    background: #0f0f1a;
+    border: 1px solid #2a2a4a;
+    border-radius: 6px;
+    color: #e0e0e0;
+    font-family: monospace;
+    font-size: 0.9em;
+  }
+  .dir-input:focus { outline: none; border-color: #e94560; }
+
+  /* ── Buttons ── */
+  .btn {
+    padding: 10px 20px;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.9em;
+    font-weight: 500;
+    transition: all 0.2s;
+  }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .btn-primary { background: #e94560; color: white; }
+  .btn-primary:hover:not(:disabled) { background: #c73e54; }
+  .btn-secondary { background: #2a2a4a; color: #ccc; }
+  .btn-secondary:hover:not(:disabled) { background: #3a3a5a; }
+  .btn-small { padding: 6px 14px; font-size: 0.8em; }
+  .btn-browse { background: #2a2a4a; color: #ccc; white-space: nowrap; }
+  .btn-browse:hover { background: #3a3a5a; }
+
+  /* ── File Browser Modal ── */
+  .modal-overlay {
+    display: none;
+    position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.7);
+    z-index: 1000;
+    justify-content: center;
+    align-items: center;
+  }
+  .modal-overlay.open { display: flex; }
+  .modal {
+    background: #1a1a2e;
+    border-radius: 10px;
+    width: 600px;
+    max-height: 70vh;
+    display: flex;
+    flex-direction: column;
+    border: 1px solid #2a2a4a;
+  }
+  .modal-header {
+    padding: 16px 20px;
+    border-bottom: 1px solid #2a2a4a;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .modal-header h3 { font-size: 1em; color: #ccc; }
+  .modal-path {
+    padding: 8px 20px;
+    font-family: monospace;
+    font-size: 0.8em;
+    color: #e94560;
+    background: #0f0f1a;
+    border-bottom: 1px solid #2a2a4a;
+    word-break: break-all;
+  }
+  .modal-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px;
+  }
+  .modal-footer {
+    padding: 12px 20px;
+    border-top: 1px solid #2a2a4a;
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+  .file-entry {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.85em;
+  }
+  .file-entry:hover { background: #0f3460; }
+  .file-entry .icon { width: 20px; text-align: center; }
+  .file-entry.dir .icon { color: #e94560; }
+  .file-entry.file .icon { color: #666; }
+
+  /* ── Progress ── */
+  .progress-bar {
+    height: 4px;
+    background: #2a2a4a;
+    border-radius: 2px;
+    margin: 12px 0;
+    overflow: hidden;
+  }
+  .progress-fill {
+    height: 100%;
+    background: #e94560;
+    border-radius: 2px;
+    transition: width 0.3s;
+    width: 0%;
+  }
+
+  /* ── Scene cards ── */
+  .scene-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 12px;
+    margin-top: 12px;
+  }
+  .scene-card {
+    background: #0f3460;
+    border-radius: 8px;
+    overflow: hidden;
+    border: 2px solid transparent;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .scene-card:hover { border-color: #e94560; transform: translateY(-2px); }
+  .scene-card.selected { border-color: #2ecc71; }
+  .scene-card .thumb {
+    width: 100%;
+    aspect-ratio: 16/9;
+    object-fit: cover;
+    display: block;
+    background: #0a0a2e;
+  }
+  .scene-card .scene-info {
+    padding: 10px 12px;
+  }
+  .scene-card .scene-title {
+    font-weight: 600;
+    font-size: 0.9em;
+    color: #e94560;
+    margin-bottom: 4px;
+  }
+  .scene-card .scene-meta {
+    font-size: 0.75em;
+    color: #888;
+    line-height: 1.4;
+  }
+  .scene-card .scene-files {
+    font-size: 0.7em;
+    color: #555;
+    margin-top: 4px;
+    word-break: break-all;
+  }
+  .conf-badge {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-size: 0.8em;
+    font-weight: 600;
+  }
+  .conf-high { background: #1b4332; color: #95d5b2; }
+  .conf-med { background: #3d3200; color: #ffd166; }
+  .conf-low { background: #4a1111; color: #ff6b6b; }
+
+  /* ── Timeline ── */
+  .timeline-area {
+    background: #16213e;
+    border-radius: 8px;
+    min-height: 120px;
+    padding: 12px;
+    margin-top: 12px;
+    border: 2px dashed #2a2a4a;
+  }
+  .timeline-area.drag-over { border-color: #e94560; background: #1a1a3e; }
+  .timeline-area .empty-msg {
+    text-align: center;
+    color: #444;
+    padding: 30px;
+    font-size: 0.9em;
+  }
+  .timeline-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    background: #0f3460;
+    border-radius: 6px;
+    padding: 8px 12px;
+    margin-bottom: 6px;
+    cursor: grab;
+    border: 2px solid transparent;
+  }
+  .timeline-item:hover { border-color: #e94560; }
+  .timeline-item.dragging { opacity: 0.4; }
+  .timeline-item.drag-over { border-color: #2ecc71; }
+  .timeline-item .order {
+    width: 28px; height: 28px;
+    background: #e94560;
+    color: white;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 700; font-size: 0.85em;
+    flex-shrink: 0;
+  }
+  .timeline-item .tl-thumb {
+    width: 80px; height: 45px;
+    border-radius: 4px;
+    object-fit: cover;
+    flex-shrink: 0;
+  }
+  .timeline-item .tl-info { flex: 1; min-width: 0; }
+  .timeline-item .tl-title { font-size: 0.85em; font-weight: 600; color: #ccc; }
+  .timeline-item .tl-meta { font-size: 0.75em; color: #888; }
+  .trim-row {
+    display: flex; gap: 8px; align-items: center;
+    margin-top: 4px; font-size: 0.75em;
+  }
+  .trim-row label { color: #666; }
+  .trim-input {
+    width: 55px; padding: 3px 6px;
+    background: #0a0a2e; border: 1px solid #333;
+    color: #e0e0e0; border-radius: 3px;
+    font-size: 0.95em; text-align: center;
+  }
+  .tl-remove {
+    background: none; border: none;
+    color: #666; cursor: pointer;
+    font-size: 1.2em; padding: 4px 8px;
+  }
+  .tl-remove:hover { color: #e74c3c; }
+
+  /* ── Sync settings ── */
+  .setting-row {
+    display: flex; align-items: center; gap: 12px;
+    margin-bottom: 10px;
+  }
+  .setting-row label { font-size: 0.85em; color: #888; width: 140px; }
+  .setting-input {
+    padding: 8px 12px;
+    background: #0f0f1a;
+    border: 1px solid #2a2a4a;
+    border-radius: 6px;
+    color: #e0e0e0;
+    font-size: 0.9em;
+    flex: 1;
+    max-width: 300px;
+  }
+  .setting-input:focus { outline: none; border-color: #e94560; }
+
+  /* ── Results ── */
+  .result-list { list-style: none; }
+  .result-list li {
+    padding: 6px 0;
+    font-size: 0.85em;
+    color: #aaa;
+    border-bottom: 1px solid #1a1a2e;
+  }
+  .result-list li .filename { color: #e94560; font-family: monospace; }
+
+  .total-bar {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-top: 16px; padding: 12px 16px;
+    background: #16213e; border-radius: 8px;
+  }
+  .total-bar .dur { font-size: 1.1em; color: #ccc; font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <h1>Ambient Video Automation</h1>
+    <div class="status-bar">
+      <div class="status-dot" id="statusDot"></div>
+      <span id="statusText">Ready</span>
+    </div>
+  </header>
+
+  <main>
+    <!-- Step tabs -->
+    <div class="steps">
+      <div class="step-tab active" data-step="1" onclick="showStep(1)">
+        <span class="num">1</span>Match
+      </div>
+      <div class="step-tab" data-step="2" onclick="showStep(2)">
+        <span class="num">2</span>Select &amp; Order
+      </div>
+      <div class="step-tab" data-step="3" onclick="showStep(3)">
+        <span class="num">3</span>Sync &amp; Export
+      </div>
+    </div>
+
+    <!-- STEP 1: Match -->
+    <div class="step-panel active" id="step1">
+      <div class="card">
+        <h2>Match Video + Audio Files</h2>
+        <p>Select the folders containing your BMPCC 4K video files and Zoom H2N audio recordings.
+           The tool will extract scratch audio from each video and match it to the corresponding H2N file.</p>
+
+        <div class="dir-picker">
+          <label>Video folder (BMPCC 4K files)</label>
+          <div class="dir-input-row">
+            <input type="text" class="dir-input" id="videoDirInput"
+                   placeholder="/path/to/video/files">
+            <button class="btn btn-browse" onclick="openBrowser('video')">Browse</button>
+          </div>
+        </div>
+
+        <div class="dir-picker">
+          <label>Audio folder (Zoom H2N files)</label>
+          <div class="dir-input-row">
+            <input type="text" class="dir-input" id="audioDirInput"
+                   placeholder="/path/to/audio/files">
+            <button class="btn btn-browse" onclick="openBrowser('audio')">Browse</button>
+          </div>
+        </div>
+
+        <div class="progress-bar" id="matchProgress" style="display:none">
+          <div class="progress-fill" id="matchProgressFill"></div>
+        </div>
+
+        <button class="btn btn-primary" id="matchBtn" onclick="startMatch()">
+          Match Files
+        </button>
+      </div>
+
+      <div class="card" id="matchResults" style="display:none">
+        <h2>Match Results</h2>
+        <div id="matchResultsContent"></div>
+      </div>
+    </div>
+
+    <!-- STEP 2: Select & Order -->
+    <div class="step-panel" id="step2">
+      <div class="card">
+        <h2>Available Scenes</h2>
+        <p>Click scenes to add them to your timeline, or drag them into order below.</p>
+        <div class="scene-grid" id="sceneGrid"></div>
+      </div>
+
+      <div class="card">
+        <h2>Your Timeline</h2>
+        <p>Drag to reorder. Set trim points per scene.</p>
+        <div class="timeline-area" id="timelineArea"
+             ondragover="event.preventDefault(); this.classList.add('drag-over')"
+             ondragleave="this.classList.remove('drag-over')"
+             ondrop="handleTimelineDrop(event)">
+          <div class="empty-msg" id="timelineEmpty">
+            Click scenes above or drag them here to build your timeline.
+          </div>
+        </div>
+        <div class="total-bar">
+          <span class="dur" id="totalDuration">Total: 00:00</span>
+          <button class="btn btn-primary" onclick="saveSelection()">
+            Save Selection &amp; Continue
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- STEP 3: Sync & Export -->
+    <div class="step-panel" id="step3">
+      <div class="card">
+        <h2>Copy Audio &amp; Push to Resolve</h2>
+        <p>Copies H2N audio files into your video folder, renamed to match their video counterpart
+           (e.g. ZOOM0042.WAV becomes IMG_2237.WAV). Then both get pushed to DaVinci Resolve
+           with the detected offset. You can correct offsets in Resolve if needed.</p>
+
+        <div class="setting-row">
+          <label>Output folder</label>
+          <div class="dir-input-row" style="flex:1; max-width: 400px;">
+            <input type="text" class="dir-input" id="outputDirInput"
+                   value="" placeholder="(defaults to video folder)">
+            <button class="btn btn-browse btn-small" onclick="openBrowser('output')">Browse</button>
+          </div>
+        </div>
+
+        <div class="progress-bar" id="syncProgress" style="display:none">
+          <div class="progress-fill" id="syncProgressFill"></div>
+        </div>
+
+        <div style="display: flex; gap: 10px; margin-top: 8px;">
+          <button class="btn btn-primary" id="syncBtn" onclick="startSync()">
+            Copy &amp; Rename Audio Files
+          </button>
+          <button class="btn btn-secondary" id="resolveBtn" onclick="pushToResolve()">
+            Push to DaVinci Resolve
+          </button>
+        </div>
+      </div>
+
+      <div class="card" id="syncResults" style="display:none">
+        <h2>Results</h2>
+        <div id="syncResultsContent"></div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- File Browser Modal -->
+<div class="modal-overlay" id="browserModal">
+  <div class="modal">
+    <div class="modal-header">
+      <h3>Select Folder</h3>
+      <button class="btn btn-small btn-secondary" onclick="closeBrowser()">Cancel</button>
+    </div>
+    <div class="modal-path" id="browserPath">~</div>
+    <div class="modal-body" id="browserBody"></div>
+    <div class="modal-footer">
+      <button class="btn btn-primary" onclick="selectCurrentDir()">
+        Select This Folder
+      </button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── State ──
+let currentStep = 1;
+let project = { matches: [], selection: [], selection_trims: {} };
+let timeline = [];
+let browserTarget = null;
+let browserCurrentPath = "";
+let pollTimer = null;
+
+// ── API helpers ──
+async function api(method, path, body) {
+  const opts = { method, headers: { "Content-Type": "application/json" } };
+  if (body) opts.body = JSON.stringify(body);
+  const r = await fetch(path, opts);
+  return r.json();
+}
+
+// ── Step navigation ──
+function showStep(n) {
+  currentStep = n;
+  document.querySelectorAll(".step-tab").forEach(t => {
+    t.classList.toggle("active", parseInt(t.dataset.step) === n);
+  });
+  document.querySelectorAll(".step-panel").forEach((p, i) => {
+    p.classList.toggle("active", i + 1 === n);
+  });
+  if (n === 2) renderScenes();
+}
+
+function markStepCompleted(n) {
+  document.querySelector(`.step-tab[data-step="${n}"]`).classList.add("completed");
+}
+
+// ── Status polling ──
+function startPolling() {
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(async () => {
+    const s = await api("GET", "/api/status");
+    if (s.progress >= 100 || s.step === "error" || s.step === "idle") {
+      clearInterval(pollTimer);
+      pollTimer = null;
+      if (s.step !== "error") await loadProject();
+    }
+    updateStatus(s);
+  }, 800);
+}
+
+function updateStatus(s) {
+  const dot = document.getElementById("statusDot");
+  const text = document.getElementById("statusText");
+  text.textContent = s.message;
+
+  dot.className = "status-dot";
+  if (s.step === "error") dot.classList.add("error");
+  else if (s.progress >= 100) dot.classList.add("done");
+  else if (s.step !== "idle") dot.classList.add("active");
+
+  // Update progress bars
+  if (s.step.startsWith("match") || s.step === "thumbnails") {
+    document.getElementById("matchProgress").style.display = "block";
+    document.getElementById("matchProgressFill").style.width = s.progress + "%";
+    if (s.progress >= 100) {
+      document.getElementById("matchBtn").disabled = false;
+      document.getElementById("matchBtn").textContent = "Re-match Files";
+      showMatchResults();
+      markStepCompleted(1);
+    }
+  }
+  if (s.step.startsWith("sync")) {
+    document.getElementById("syncProgress").style.display = "block";
+    document.getElementById("syncProgressFill").style.width = s.progress + "%";
+    if (s.progress >= 100) {
+      document.getElementById("syncBtn").disabled = false;
+      markStepCompleted(3);
+      showSyncResults(s.message);
+    }
+  }
+  if (s.step === "resolve_done") {
+    document.getElementById("resolveBtn").disabled = false;
+    showSyncResults(s.message);
+  }
+}
+
+async function loadProject() {
+  project = await api("GET", "/api/project");
+  if (currentStep === 2) renderScenes();
+}
+
+// ── Step 1: Match ──
+async function startMatch() {
+  const videoDir = document.getElementById("videoDirInput").value.trim();
+  const audioDir = document.getElementById("audioDirInput").value.trim();
+  if (!videoDir || !audioDir) {
+    alert("Please select both video and audio folders.");
+    return;
+  }
+
+  document.getElementById("matchBtn").disabled = true;
+  document.getElementById("matchBtn").textContent = "Matching...";
+  document.getElementById("matchProgress").style.display = "block";
+  document.getElementById("matchProgressFill").style.width = "5%";
+
+  await api("POST", "/api/match", { video_dir: videoDir, audio_dir: audioDir });
+  startPolling();
+}
+
+function showMatchResults() {
+  const container = document.getElementById("matchResults");
+  const content = document.getElementById("matchResultsContent");
+  container.style.display = "block";
+
+  if (!project.matches || project.matches.length === 0) {
+    content.innerHTML = '<p style="color:#e74c3c">No matches found. Try different folders or check your files.</p>';
+    return;
+  }
+
+  let html = `<p>Found <strong>${project.matches.length}</strong> matched pairs:</p><ul class="result-list">`;
+  project.matches.forEach(m => {
+    const confClass = m.confidence >= 0.3 ? "conf-high" : m.confidence >= 0.15 ? "conf-med" : "conf-low";
+    html += `<li>
+      <span class="filename">${m.video_file}</span> &harr;
+      <span class="filename">${m.audio_file}</span>
+      &nbsp; <span class="conf-badge ${confClass}">${(m.confidence * 100).toFixed(0)}%</span>
+      &nbsp; offset: ${m.offset.toFixed(2)}s
+    </li>`;
+  });
+  html += '</ul><br><button class="btn btn-primary" onclick="showStep(2)">Next: Select &amp; Order Scenes</button>';
+  content.innerHTML = html;
+}
+
+// ── Step 2: Select & Order ──
+function renderScenes() {
+  const grid = document.getElementById("sceneGrid");
+  if (!project.matches || project.matches.length === 0) {
+    grid.innerHTML = '<p style="color:#888;padding:20px;">No matched scenes. Complete Step 1 first.</p>';
+    return;
+  }
+
+  const timelineIndices = new Set(timeline.map(t => t.index));
+
+  grid.innerHTML = project.matches
+    .filter(m => !timelineIndices.has(m.index))
+    .map(m => {
+      const dur = fmtDur(m.video_duration);
+      const confClass = m.confidence >= 0.3 ? "conf-high" : m.confidence >= 0.15 ? "conf-med" : "conf-low";
+      const thumbSrc = m.has_thumbnail ? `/api/thumbnail/${m.index}` : "";
+      const thumbHtml = thumbSrc
+        ? `<img class="thumb" src="${thumbSrc}" alt="Scene ${m.index}" loading="lazy">`
+        : `<div class="thumb" style="display:flex;align-items:center;justify-content:center;color:#333;">No thumbnail</div>`;
+
+      return `<div class="scene-card" onclick="addToTimeline(${m.index})" draggable="true"
+                   ondragstart="event.dataTransfer.setData('text/plain','${m.index}')">
+        ${thumbHtml}
+        <div class="scene-info">
+          <div class="scene-title">Scene ${m.index}</div>
+          <div class="scene-meta">${dur} &nbsp;
+            <span class="conf-badge ${confClass}">match: ${(m.confidence*100).toFixed(0)}%</span>
+            &nbsp; offset: ${m.offset.toFixed(2)}s
+          </div>
+          <div class="scene-files">${m.video_file}<br>${m.audio_file}</div>
+        </div>
+      </div>`;
+    }).join("");
+}
+
+function addToTimeline(index) {
+  if (timeline.find(t => t.index === index)) return;
+  const match = project.matches.find(m => m.index === index);
+  if (!match) return;
+  timeline.push({ ...match, trimStart: 0, trimEnd: 0 });
+  renderTimeline();
+  renderScenes();
+}
+
+function removeFromTimeline(index) {
+  timeline = timeline.filter(t => t.index !== index);
+  renderTimeline();
+  renderScenes();
+}
+
+function renderTimeline() {
+  const area = document.getElementById("timelineArea");
+  const empty = document.getElementById("timelineEmpty");
+
+  if (timeline.length === 0) {
+    empty.style.display = "block";
+    // Remove all timeline items but keep the empty message
+    area.querySelectorAll(".timeline-item").forEach(el => el.remove());
+    updateTotalDuration();
+    return;
+  }
+
+  empty.style.display = "none";
+  // Rebuild
+  const items = timeline.map((t, i) => {
+    const thumbSrc = t.has_thumbnail ? `/api/thumbnail/${t.index}` : "";
+    const thumbHtml = thumbSrc
+      ? `<img class="tl-thumb" src="${thumbSrc}">`
+      : `<div class="tl-thumb" style="background:#0a0a2e;display:flex;align-items:center;justify-content:center;color:#333;font-size:0.7em;">?</div>`;
+
+    return `<div class="timeline-item" draggable="true" data-idx="${i}"
+                 ondragstart="tlDragStart(event,${i})"
+                 ondragover="event.preventDefault();this.classList.add('drag-over')"
+                 ondragleave="this.classList.remove('drag-over')"
+                 ondrop="tlDrop(event,${i})">
+      <div class="order">${i + 1}</div>
+      ${thumbHtml}
+      <div class="tl-info">
+        <div class="tl-title">Scene ${t.index} — ${fmtDur(t.video_duration)}</div>
+        <div class="tl-meta">${t.video_file} + ${t.audio_file}</div>
+        <div class="trim-row">
+          <label>Trim start:</label>
+          <input type="number" class="trim-input" step="0.5" min="0"
+                 value="${t.trimStart}" onchange="updateTrim(${t.index},'start',this.value)">
+          <label>end:</label>
+          <input type="number" class="trim-input" step="0.5" min="0"
+                 value="${t.trimEnd}" onchange="updateTrim(${t.index},'end',this.value)">
+        </div>
+      </div>
+      <button class="tl-remove" onclick="removeFromTimeline(${t.index})">&times;</button>
+    </div>`;
+  }).join("");
+
+  // Keep empty msg node, replace items
+  area.querySelectorAll(".timeline-item").forEach(el => el.remove());
+  area.insertAdjacentHTML("beforeend", items);
+  updateTotalDuration();
+}
+
+function updateTrim(index, which, value) {
+  const item = timeline.find(t => t.index === index);
+  if (!item) return;
+  if (which === "start") item.trimStart = parseFloat(value) || 0;
+  else item.trimEnd = parseFloat(value) || 0;
+  updateTotalDuration();
+}
+
+function updateTotalDuration() {
+  const total = timeline.reduce((sum, t) =>
+    sum + t.video_duration - (t.trimStart || 0) - (t.trimEnd || 0), 0);
+  document.getElementById("totalDuration").textContent = "Total: " + fmtDur(total);
+}
+
+let tlDragIdx = null;
+function tlDragStart(e, idx) { tlDragIdx = idx; e.target.classList.add("dragging"); }
+function tlDrop(e, targetIdx) {
+  e.preventDefault();
+  e.target.closest(".timeline-item")?.classList.remove("drag-over");
+
+  // Check if this is a new scene from the grid
+  const data = e.dataTransfer.getData("text/plain");
+  if (tlDragIdx === null && data) {
+    const sceneIdx = parseInt(data);
+    addToTimeline(sceneIdx);
+    // Move it to the target position
+    const item = timeline.pop();
+    timeline.splice(targetIdx, 0, item);
+    renderTimeline();
+    return;
+  }
+
+  if (tlDragIdx === null || tlDragIdx === targetIdx) return;
+  const [moved] = timeline.splice(tlDragIdx, 1);
+  timeline.splice(targetIdx, 0, moved);
+  tlDragIdx = null;
+  renderTimeline();
+}
+function handleTimelineDrop(e) {
+  e.preventDefault();
+  e.target.classList.remove("drag-over");
+  const data = e.dataTransfer.getData("text/plain");
+  if (data) addToTimeline(parseInt(data));
+}
+
+async function saveSelection() {
+  const selection = timeline.map(t => t.index);
+  const trims = {};
+  timeline.forEach(t => {
+    if (t.trimStart > 0 || t.trimEnd > 0) {
+      trims[t.index] = { start: t.trimStart || 0, end: t.trimEnd || 0 };
+    }
+  });
+
+  await api("POST", "/api/select", { selection, selection_trims: trims });
+  markStepCompleted(2);
+  showStep(3);
+}
+
+// ── Step 3: Sync ──
+async function startSync() {
+  const outputDir = document.getElementById("outputDirInput").value.trim() || "";
+  document.getElementById("syncBtn").disabled = true;
+  document.getElementById("syncBtn").textContent = "Copying...";
+  document.getElementById("syncProgress").style.display = "block";
+  document.getElementById("syncProgressFill").style.width = "5%";
+
+  await api("POST", "/api/sync", { output_dir: outputDir || undefined });
+  startPolling();
+}
+
+async function pushToResolve() {
+  const outputDir = document.getElementById("outputDirInput").value.trim() || "synced_output";
+  document.getElementById("resolveBtn").disabled = true;
+
+  const name = prompt("Resolve project name:", "Ambient Video Project");
+  if (!name) { document.getElementById("resolveBtn").disabled = false; return; }
+
+  await api("POST", "/api/resolve", { name, clips_dir: outputDir });
+  startPolling();
+}
+
+function showSyncResults(message) {
+  document.getElementById("syncResults").style.display = "block";
+  document.getElementById("syncResultsContent").innerHTML =
+    `<p style="color:#2ecc71">${message}</p>`;
+}
+
+// ── File Browser ──
+function openBrowser(target) {
+  browserTarget = target;
+  const input = target === "video" ? "videoDirInput"
+    : target === "audio" ? "audioDirInput" : "outputDirInput";
+  const startPath = document.getElementById(input).value || "~";
+  navigateBrowser(startPath.startsWith("~") ? "" : startPath);
+  document.getElementById("browserModal").classList.add("open");
+}
+
+function closeBrowser() {
+  document.getElementById("browserModal").classList.remove("open");
+}
+
+async function navigateBrowser(path) {
+  const homeResp = path ? null : await api("GET", "/api/browse");
+  const resp = path ? await api("GET", `/api/browse?path=${encodeURIComponent(path)}`) : homeResp;
+
+  if (resp.error) {
+    alert(resp.error);
+    return;
+  }
+
+  browserCurrentPath = resp.current;
+  document.getElementById("browserPath").textContent = resp.current;
+
+  const body = document.getElementById("browserBody");
+  body.innerHTML = resp.entries.map(e => {
+    if (!e.is_dir) return "";
+    const icon = e.name === ".." ? "&#8593;" : "&#128193;";
+    return `<div class="file-entry dir" ondblclick="navigateBrowser('${e.path.replace(/'/g, "\\'")}')">
+      <span class="icon">${icon}</span>
+      <span>${e.name}</span>
+    </div>`;
+  }).join("");
+}
+
+function selectCurrentDir() {
+  const input = browserTarget === "video" ? "videoDirInput"
+    : browserTarget === "audio" ? "audioDirInput" : "outputDirInput";
+  document.getElementById(input).value = browserCurrentPath;
+  closeBrowser();
+}
+
+// ── Helpers ──
+function fmtDur(sec) {
+  if (!sec || sec <= 0) return "0:00";
+  const m = Math.floor(sec / 60);
+  const s = (sec % 60).toFixed(1);
+  return m > 0 ? m + ":" + s.padStart(4, "0") : s + "s";
+}
+
+// ── Init ──
+(async () => {
+  try {
+    const data = await api("GET", "/api/project");
+    if (data.matches && data.matches.length > 0) {
+      project = data;
+      document.getElementById("videoDirInput").value = data.video_dir || "";
+      document.getElementById("audioDirInput").value = data.audio_dir || "";
+      document.getElementById("outputDirInput").value = data.output_dir || data.video_dir || "";
+      markStepCompleted(1);
+      if (data.selection && data.selection.length > 0) {
+        // Restore timeline
+        data.selection.forEach(idx => {
+          const m = project.matches.find(x => x.index === idx);
+          if (m) {
+            const trims = data.selection_trims[idx] || {};
+            timeline.push({ ...m, trimStart: trims.start || 0, trimEnd: trims.end || 0 });
+          }
+        });
+        markStepCompleted(2);
+      }
+    }
+  } catch(e) { /* no project yet */ }
+})();
+</script>
+</body>
+</html>
