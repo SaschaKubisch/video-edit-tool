@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Ambient Video Automation</title>
+<link rel="icon" href="data:,">
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
@@ -338,6 +339,15 @@
     background: #16213e; border-radius: 8px;
   }
   .total-bar .dur { font-size: 1.1em; color: #ccc; font-weight: 600; }
+  .total-bar .actions { display: flex; align-items: center; gap: 10px; }
+  .hint { font-size: 0.8em; color: #888; }
+  .timeline-tools { display: flex; gap: 8px; margin-top: 12px; }
+  .sync-summary { font-size: 0.9em; color: #ccc; margin-bottom: 12px; }
+  .sync-summary.empty { color: #e9a845; }
+  .link-btn {
+    background: none; border: none; padding: 0; margin-left: 6px;
+    color: #e94560; cursor: pointer; font-size: inherit; text-decoration: underline;
+  }
 </style>
 </head>
 <body>
@@ -409,6 +419,10 @@
       <div class="card">
         <h2>Available Scenes</h2>
         <p>Click scenes to add them to your timeline, or drag them into order below.</p>
+        <div class="timeline-tools">
+          <button class="btn btn-secondary btn-small" id="addAllBtn" onclick="addAllToTimeline()">Add all</button>
+          <button class="btn btn-secondary btn-small" id="clearBtn" onclick="clearTimeline()">Clear</button>
+        </div>
         <div class="scene-grid" id="sceneGrid"></div>
       </div>
 
@@ -425,9 +439,12 @@
         </div>
         <div class="total-bar">
           <span class="dur" id="totalDuration">Total: 00:00</span>
-          <button class="btn btn-primary" onclick="saveSelection()">
-            Save Selection &amp; Continue
-          </button>
+          <div class="actions">
+            <span class="hint" id="saveHint">Add at least one scene</span>
+            <button class="btn btn-primary" id="saveBtn" onclick="saveSelection()" disabled>
+              Save Selection &amp; Continue
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -459,6 +476,8 @@
           <input type="text" class="setting-input" id="resolveTimelineInput"
                  value="Main Timeline">
         </div>
+
+        <div class="sync-summary" id="syncSummary"></div>
 
         <div class="progress-bar" id="syncProgress" style="display:none">
           <div class="progress-fill" id="syncProgressFill"></div>
@@ -504,6 +523,7 @@
 let currentStep = 1;
 let project = { matches: [], selection: [], selection_trims: {} };
 let timeline = [];
+let savedSelection = { count: 0, total: 0 };
 let browserTarget = null;
 let browserCurrentPath = "";
 let pollTimer = null;
@@ -544,6 +564,7 @@ function showStep(n) {
     p.classList.toggle("active", i + 1 === n);
   });
   if (n === 2) renderScenes();
+  if (n === 3) refreshSyncControls();
 }
 
 function markStepCompleted(n) {
@@ -582,6 +603,7 @@ function updateStatus(s) {
     document.getElementById("syncBtn").disabled = false;
     document.getElementById("syncBtn").textContent = SYNC_LABEL;
     document.getElementById("resolveBtn").disabled = false;
+    refreshSyncControls();
     ["matchProgress", "syncProgress"].forEach(id => {
       document.getElementById(id).style.display = "none";
     });
@@ -600,7 +622,11 @@ function updateStatus(s) {
       document.getElementById("matchBtn").textContent = "Re-match Files";
       // The server resets the selection on every match, so reset the timeline too
       timeline = [];
+      savedSelection = { count: 0, total: 0 };
+      document.querySelector('.step-tab[data-step="2"]').classList.remove("completed");
       renderTimeline();
+      renderScenes();
+      refreshSyncControls();
       const outInput = document.getElementById("outputDirInput");
       if (!outInput.value.trim()) outInput.value = project.video_dir || "";
       showMatchResults();
@@ -614,11 +640,13 @@ function updateStatus(s) {
       document.getElementById("syncBtn").disabled = false;
       document.getElementById("syncBtn").textContent = SYNC_LABEL;
       markStepCompleted(3);
+      refreshSyncControls();
       showSyncResults(s.message);
     }
   }
   if (s.step === "resolve_done") {
     document.getElementById("resolveBtn").disabled = false;
+    refreshSyncControls();
     showSyncResults(s.message);
   }
 }
@@ -721,6 +749,22 @@ function removeFromTimeline(index) {
   renderScenes();
 }
 
+// Append every scene not yet in the timeline, in recording order
+function addAllToTimeline() {
+  const inTimeline = new Set(timeline.map(t => t.index));
+  (project.matches || []).forEach(m => {
+    if (!inTimeline.has(m.index)) timeline.push({ ...m, trimStart: 0, trimEnd: 0 });
+  });
+  renderTimeline();
+  renderScenes();
+}
+
+function clearTimeline() {
+  timeline = [];
+  renderTimeline();
+  renderScenes();
+}
+
 function renderTimeline() {
   const area = document.getElementById("timelineArea");
   const empty = document.getElementById("timelineEmpty");
@@ -730,6 +774,7 @@ function renderTimeline() {
     // Remove all timeline items but keep the empty message
     area.querySelectorAll(".timeline-item").forEach(el => el.remove());
     updateTotalDuration();
+    updateTimelineControls();
     return;
   }
 
@@ -768,6 +813,21 @@ function renderTimeline() {
   area.querySelectorAll(".timeline-item").forEach(el => el.remove());
   area.insertAdjacentHTML("beforeend", items);
   updateTotalDuration();
+  updateTimelineControls();
+}
+
+function updateTimelineControls() {
+  const empty = timeline.length === 0;
+  document.getElementById("saveBtn").disabled = empty;
+  document.getElementById("saveHint").style.display = empty ? "inline" : "none";
+  document.getElementById("clearBtn").disabled = empty;
+  const total = project.matches ? project.matches.length : 0;
+  document.getElementById("addAllBtn").disabled = timeline.length >= total;
+}
+
+function timelineTotal(items) {
+  return items.reduce((sum, t) =>
+    sum + t.video_duration - (t.trimStart || 0) - (t.trimEnd || 0), 0);
 }
 
 function updateTrim(index, which, value) {
@@ -779,9 +839,7 @@ function updateTrim(index, which, value) {
 }
 
 function updateTotalDuration() {
-  const total = timeline.reduce((sum, t) =>
-    sum + t.video_duration - (t.trimStart || 0) - (t.trimEnd || 0), 0);
-  document.getElementById("totalDuration").textContent = "Total: " + fmtDur(total);
+  document.getElementById("totalDuration").textContent = "Total: " + fmtDur(timelineTotal(timeline));
 }
 
 let tlDragIdx = null;
@@ -821,6 +879,7 @@ function handleTimelineDrop(e) {
 }
 
 async function saveSelection() {
+  if (timeline.length === 0) return;
   const selection = timeline.map(t => t.index);
   const trims = {};
   timeline.forEach(t => {
@@ -829,12 +888,34 @@ async function saveSelection() {
     }
   });
 
-  await api("POST", "/api/select", { selection, selection_trims: trims });
+  const resp = await api("POST", "/api/select", { selection, selection_trims: trims });
+  if (resp.error) { showRequestError(resp.error); return; }
+  savedSelection = { count: selection.length, total: timelineTotal(timeline) };
   markStepCompleted(2);
   showStep(3);
 }
 
 // ── Step 3: Sync ──
+function fmtClock(sec) {
+  const t = Math.max(0, Math.round(sec));
+  return Math.floor(t / 60) + ":" + String(t % 60).padStart(2, "0");
+}
+
+// Summary of the saved selection; disables the actions while it is empty
+function refreshSyncControls() {
+  const box = document.getElementById("syncSummary");
+  const none = savedSelection.count === 0;
+  box.classList.toggle("empty", none);
+  if (none) {
+    box.innerHTML = 'No scenes selected yet. <button class="link-btn" onclick="showStep(2)">Go to Step 2</button>';
+  } else {
+    const n = savedSelection.count;
+    box.textContent = n + (n === 1 ? " scene" : " scenes") + " selected (" + fmtClock(savedSelection.total) + " total)";
+  }
+  document.getElementById("syncBtn").disabled = none;
+  document.getElementById("resolveBtn").disabled = none;
+}
+
 async function startSync() {
   const outputDir = document.getElementById("outputDirInput").value.trim() || "";
   document.getElementById("syncBtn").disabled = true;
@@ -941,10 +1022,16 @@ function fmtDur(sec) {
         });
         renderTimeline();
         renderScenes();
-        markStepCompleted(2);
+        if (timeline.length > 0) {
+          savedSelection = { count: timeline.length, total: timelineTotal(timeline) };
+          markStepCompleted(2);
+        }
       }
     }
+    refreshSyncControls();
   } catch(e) { /* no project yet */ }
+  renderTimeline();
+  refreshSyncControls();
 })();
 </script>
 </body>
