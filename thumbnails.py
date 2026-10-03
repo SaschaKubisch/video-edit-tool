@@ -79,7 +79,7 @@ def extract_all_thumbnails(
             m.thumbnail_path = str(thumb_path)
             project.matches[i] = m
             print(f"  [{m.index}] {Path(m.video_path).name} -> {thumb_path.name}")
-        except RuntimeError as e:
+        except Exception as e:  # noqa: BLE001 - one bad file must not stop the rest
             print(f"  [{m.index}] Failed: {e}")
 
     return project

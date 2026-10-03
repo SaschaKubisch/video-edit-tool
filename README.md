@@ -4,7 +4,7 @@ A local tool for the BMPCC 4K + Zoom H2N dual-system workflow. It pairs each cam
 
 ## What it does
 
-1. **Match** - pairs every video with one audio file. Duration similarity is the primary criterion, solved globally (Hungarian assignment). When several audio files have near-identical durations, onset-envelope cross-correlation between the camera scratch track and the candidates breaks the tie. The same correlation yields the sync offset per pair. Videos or audio files left without a partner are listed in the console.
+1. **Match** - pairs videos with audio files. Both are assumed to be recorded and named in sequential order (natural sort: `ZOOM0009` before `ZOOM0010`), so pairs never cross: audio 9 is never paired with video 2. Either side may have files that were not recorded (video 9 can pair with audio 8 when one clip has no audio). The pairing is an order-preserving alignment on duration similarity; pairs differing by more than 10 s are not matched. When several audio files are admissible with near-identical durations, onset-envelope cross-correlation between the camera scratch track and the candidates breaks the tie. The same correlation yields the sync offset per pair. Videos or audio files left without a partner are listed in the console.
 2. **Copy and rename** - each matched audio file is copied next to its video as `<video stem>.<audio ext>` (`IMG_2231.MOV` and `IMG_2231.WAV`). Originals are untouched and nothing is transcoded. The copies are recorded in `ambient_audio_copies.json` so they can be removed again.
 3. **Resolve (optional)** - creates a project and timeline with the selected scenes in order: video on V1, audio on A2, offset and trims applied.
 
@@ -70,7 +70,13 @@ python3 main.py sync --undo --output DIR
 
 This deletes only the files listed in `ambient_audio_copies.json` in that folder, then the manifest. Videos and original recordings are never touched. Note that a copy which replaced an existing file of the same name is also removed; the tool logs a warning when it overwrites a file of different size.
 
+## Camera formats
+
+`.braw` (Blackmagic RAW) files are supported for matching, sync and Resolve: ffprobe reads them as QuickTime containers and ffmpeg extracts their PCM audio. ffmpeg cannot decode the BRAW video, so **no thumbnail** can be generated for them; the UI shows a "No thumbnail" placeholder and everything else works. Video and audio may live in the same folder.
+
 ## Configuration
+
+To turn off the sequential-recording rule (e.g. when mixing cards whose numbering resets), set `MATCH_PRESERVE_ORDER = False` in `config.py`; matching then uses a global duration assignment that ignores file order. `MATCH_MAX_DURATION_DIFF_SEC` (default 10) and `MATCH_SKIP_PENALTY` (default 6) tune the order-preserving mode.
 
 `config.py` holds the constants: file extensions, `MATCH_SAMPLE_RATE`, `MATCH_MAX_DURATION_SEC` (seconds of audio used for correlation, default 60; raise it if scenes start with long silence), thumbnail time/width/quality, the port and `PROJECT_FILE`.
 

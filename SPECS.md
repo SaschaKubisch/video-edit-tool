@@ -35,10 +35,13 @@ Constants only (unused constants from the old export/re-encode design were remov
 
 | Name | Value | Purpose |
 |------|-------|---------|
-| `VIDEO_EXTENSIONS` | `.mp4 .mov .avi .mkv .mxf` | Discovery (case-insensitive) |
+| `VIDEO_EXTENSIONS` | `.mp4 .mov .avi .mkv .mxf .braw` | Discovery (case-insensitive) |
 | `AUDIO_EXTENSIONS` | `.wav .flac .aiff .aif` | Discovery |
 | `MATCH_SAMPLE_RATE` | 16000 | Downsample rate for correlation |
 | `MATCH_MAX_DURATION_SEC` | 60 | Only first N seconds extracted for correlation |
+| `MATCH_PRESERVE_ORDER` | `True` | Order-preserving (non-crossing) matching; `False` = plain Hungarian |
+| `MATCH_MAX_DURATION_DIFF_SEC` | 10.0 | Order mode: pairs with a larger duration difference are disallowed |
+| `MATCH_SKIP_PENALTY` | 6.0 | Order mode: cost (s) of leaving one file unmatched |
 | `THUMBNAIL_TIME_SEC` / `_WIDTH` / `_FORMAT` / `_QUALITY` | 3.0 / 480 / jpg / 85 | Frame grab position, size, encoding |
 | `RENAME_PATTERN` | `scene_{index:02d}` | Legacy `rename` command only |
 | `SELECTOR_PORT` | 8765 | HTTP port |
@@ -83,21 +86,24 @@ class Project:
 ### 2.3 `matcher.py` — pairing algorithm
 
 **Inputs:** `video_dir`, `audio_dir`, optional `max_duration`.
-**Output:** `list[SceneMatch]` sorted by video filename (indices renumbered after sorting).
+**Output:** `list[SceneMatch]` sorted by video filename using the natural key (indices renumbered after sorting).
+`video_dir` and `audio_dir` may be the same folder (extensions are disjoint).
 
 Pipeline:
 
-1. **Discover** files via `find_files()` (both lower/upper-case extensions).
+1. **Discover** files via `find_files()`: one directory listing, extension compared case-insensitively, hidden files (`._*`) ignored, deduplicated by resolved path (no double entries on case-insensitive filesystems), returned in natural order. `_natural_key(name)` splits digit runs and compares them as numbers, case-insensitive (`ZOOM0009 < ZOOM0010`, `C112 < C113`). Natural order is the **recording order**.
 2. **Durations** via `ffprobe -show_entries format=duration` for every file. A file ffprobe cannot read is skipped and reported.
-3. **Cost matrix** `C[i][j] = |dur_video_i − dur_audio_j|`.
-4. **Initial assignment** `scipy.optimize.linear_sum_assignment(C)`; unequal counts leave extra files unassigned.
-5. **Ambiguity detection.** For each video *i* with assigned audio *j\**, candidates are `{ j : |C[i][j] − C[i][j*]| ≤ 5 s }`. Rows with more than one candidate get correlation scores.
+3. **Cost matrix** `C[i][j] = |dur_video_i − dur_audio_j|`, `inf` where the difference exceeds `MATCH_MAX_DURATION_DIFF_SEC` (order mode).
+4. **Initial assignment.**
+   - **`MATCH_PRESERVE_ORDER = True` (default).** Both lists are in recording order and the matching must be monotonic: if video *i < k* are matched to audio *a, b* then *a < b*. Either side may have unmatched files anywhere. `_align_in_order(cost, skip_penalty)` is a pure DP (sequence alignment with skips, O(n·m)) minimising `Σ C[i][j]` over matched pairs `+ MATCH_SKIP_PENALTY` per unmatched video and per unmatched audio file; ties prefer matching. With tolerance 10 s and penalty 6 s a pair is matched whenever its difference is below 10 s (skipping both would cost 12 s), so real pairs (0.1–0.3 s, a few seconds at worst) always match while wildly different durations are skipped instead of forced. Console output lists the sorted order used and every skip (`C108: no audio (skipped)`).
+   - **`MATCH_PRESERVE_ORDER = False`.** `scipy.optimize.linear_sum_assignment(C)` on the plain duration matrix; order is ignored (use for cards whose numbering resets).
+5. **Ambiguity detection.** For each matched video *i* with audio *j\**, candidates are `{ j : |C[i][j] − C[i][j*]| ≤ 5 s }`. In order mode only **order-admissible** columns count: those strictly between the audio indices of the previous and next matched video (the neighbours' window) with finite cost. Rows with more than one candidate get correlation scores.
    - Audio is extracted as mono 16 kHz PCM (first 60 s) for the video and all candidates, **in parallel** (`ThreadPoolExecutor`, 4 workers) and cached per file.
    - Score = peak of the **normalised cross-correlation (NCC) of onset envelopes**: 20 ms mean-abs windows, `log(env + eps)`, positive first difference, mean removed. Steady ambience contributes ~0, claps and transients dominate, gain differences do not matter. Scores lie in [0, 1].
-6. **Hungarian re-solve with correlation-adjusted cost.** For every row that has scores, each column gets `+ W · (best_score_in_row − score)` (missing score counts as 0, `W = 20 × 5 s`, so a 0.1 correlation difference equals 10 s of duration error). The matrix is solved once, globally, so chained reassignments cannot undo each other. Every score and reassignment is logged to the console.
+6. **Re-solve with correlation-adjusted cost.** For every row that has scores, each column gets `+ W · (best_score_in_row − score)` (missing score counts as 0, `W = 20 × 5 s`, so a 0.1 correlation difference equals 10 s of duration error). The adjusted matrix is solved once, globally: by the DP in order mode (`_resolve_alignment`, so correlation can only choose among order-consistent alignments) or by Hungarian otherwise (`_resolve_assignment`). Every score and reassignment is logged to the console.
 7. **Confidence (margin based, 0..1).**
    - Row decided by correlation (scores for ≥ 2 columns): `(score_chosen − best_other) / 0.2`.
-   - Otherwise duration margin: `(runner_up_cost − chosen_cost) / 5 s`.
+   - Otherwise duration margin: `(runner_up_cost − chosen_cost) / 5 s`. In order mode the runner-up is the best alternative that is **order-admissible** (inside the neighbours' window, via `_admissible_cost`; neighbours' assignments are held fixed). A video with no admissible alternative gets full margin.
    - Caps: duration difference ≥ 30 s caps at 0.1, 10–30 s caps at 0.25.
    - Console status buckets: `<10 s OK`, `10–30 s WARN`, `≥30 s BAD`.
 8. **Unmatched files** (videos without audio, audio without video, ffprobe-skipped files) are listed in the console.
@@ -109,6 +115,8 @@ Pipeline:
 Correlation decisions are console-only; the UI shows only the final confidence.
 
 ### 2.4 `thumbnails.py`
+Videos ffmpeg cannot decode (e.g. `.braw`) make `extract_thumbnail` raise `RuntimeError`; callers (`server.py`, `extract_all_thumbnails`) log it and continue, and the UI shows "No thumbnail".
+
 `extract_thumbnail(video_path, out_path)` → `ffmpeg -ss 3 -i … -vframes 1 -vf scale=480:-1`. `extract_all_thumbnails(project, output_dir)` is used by `main.py match`; the server calls `extract_thumbnail` per scene so it can report progress. Both write to `thumbnails/` **next to `project.json`** (`thumb_<index>.jpg`) and fill `SceneMatch.thumbnail_path`. The old standalone HTML selector was removed.
 
 ### 2.5 `syncer.py` — audio copy/rename

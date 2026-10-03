@@ -240,7 +240,7 @@ class AppHandler(BaseHTTPRequestHandler):
                     try:
                         extract_thumbnail(m.video_path, str(thumb_path))
                         m.thumbnail_path = str(thumb_path)
-                    except RuntimeError as e:
+                    except Exception as e:  # noqa: BLE001 - e.g. .braw has no decoder
                         print(f"  [{m.index}] Thumbnail failed: {e}")
 
                 with _project_lock:

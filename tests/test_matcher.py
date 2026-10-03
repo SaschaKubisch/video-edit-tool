@@ -6,6 +6,7 @@ import tempfile
 import unittest
 import wave
 from pathlib import Path
+from unittest import mock
 
 import numpy as np
 
@@ -158,6 +159,182 @@ class ResolveAssignmentTests(unittest.TestCase):
         cands = matcher._ambiguous_candidates(cost, {0: 0, 1: 2}, 5.0)
         self.assertEqual(cands, {0: [0, 1]})
 
+
+SKIP = config.MATCH_SKIP_PENALTY
+
+
+def _align(v_durs, a_durs):
+    cost = matcher._order_cost_matrix(v_durs, a_durs)
+    return matcher._align_in_order(cost, SKIP)
+
+
+class NaturalSortTests(unittest.TestCase):
+    def test_numeric_chunks(self):
+        names = ["ZOOM0010.WAV", "ZOOM0009.WAV", "ZOOM0002.wav"]
+        self.assertEqual(sorted(names, key=matcher._natural_key),
+                         ["ZOOM0002.wav", "ZOOM0009.WAV", "ZOOM0010.WAV"])
+
+    def test_numbers_not_lexicographic(self):
+        self.assertLess(matcher._natural_key("clip9.mov"), matcher._natural_key("clip10.mov"))
+
+    def test_braw_names(self):
+        a = matcher._natural_key("A002_01060832_C112.braw")
+        b = matcher._natural_key("A002_01060832_C113.braw")
+        self.assertLess(a, b)
+
+    def test_case_insensitive(self):
+        self.assertEqual(matcher._natural_key("ABC1.MOV"), matcher._natural_key("abc1.mov"))
+
+    def test_find_files_no_duplicates_mixed_case(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for n in ["ZOOM0010.WAV", "ZOOM0009.wav", "C1.braw", "C2.BRAW", ".__x.WAV"]:
+                (Path(tmp) / n).write_bytes(b"x")
+            audio = matcher.find_files(tmp, config.AUDIO_EXTENSIONS)
+            video = matcher.find_files(tmp, config.VIDEO_EXTENSIONS)
+            self.assertEqual([f.name for f in audio], ["ZOOM0009.wav", "ZOOM0010.WAV"])
+            self.assertEqual([f.name for f in video], ["C1.braw", "C2.BRAW"])
+
+
+class AlignInOrderTests(unittest.TestCase):
+    def test_pure_dp_simple(self):
+        cost = np.array([[0.0, 1.0], [1.0, 0.0]])
+        self.assertEqual(matcher._align_in_order(cost, 5.0), [(0, 0), (1, 1)])
+
+    def test_never_crosses_where_hungarian_would(self):
+        # video 2 has the duration of audio 9 and vice versa
+        v = [15.0 * k for k in range(1, 11)]
+        a = [d + 0.2 for d in v]
+        a[1], a[8] = v[8] + 0.2, v[1] + 0.2
+        pairs = _align(v, a)
+        js = [j for _i, j in pairs]
+        self.assertEqual(js, sorted(js))
+        self.assertNotIn((1, 8), pairs)
+        # sanity: plain Hungarian does cross here
+        cost = np.abs(np.array(v)[:, None] - np.array(a)[None, :])
+        ri, ci = matcher.linear_sum_assignment(cost)
+        self.assertEqual(dict(zip(ri, ci))[1], 8)
+
+    def test_user_example_video_missing_audio(self):
+        # videos 1-9, audios 1-8; one video has no audio
+        base = [12.0, 30.0, 45.0, 20.0, 70.0, 8.0, 55.0, 25.0, 40.0]
+        for missing in (0, 4, 8):
+            v = list(base)
+            a = [d + 0.15 for k, d in enumerate(base) if k != missing]
+            pairs = _align(v, a)
+            expected = [(i, i if i < missing else i - 1)
+                        for i in range(9) if i != missing]
+            self.assertEqual(pairs, expected, f"missing={missing}")
+
+    def test_video9_matches_audio8_at_end(self):
+        base = [12.0, 30.0, 45.0, 20.0, 70.0, 8.0, 55.0, 25.0, 40.0]
+        # audio 9 never recorded: video 1-8 <-> audio 1-8, video 9 unmatched
+        pairs = _align(base, [d + 0.1 for d in base[:8]])
+        self.assertEqual(pairs, [(i, i) for i in range(8)])
+        # audio for video 1 never recorded: video 9 <-> audio 8
+        pairs = _align(base, [d + 0.1 for d in base[1:]])
+        self.assertIn((8, 7), pairs)
+        self.assertEqual(len(pairs), 8)
+
+    def test_extra_audio_start_middle_end(self):
+        base = [12.0, 30.0, 45.0, 20.0, 70.0]
+        for extra in (0, 2, 5):
+            a = [d + 0.1 for d in base]
+            a.insert(extra, 200.0 + extra)  # not close to any video
+            pairs = _align(base, a)
+            expected = [(i, i if i < extra else i + 1) for i in range(5)]
+            self.assertEqual(pairs, expected, f"extra={extra}")
+
+    def test_far_duration_is_skipped_not_forced(self):
+        pairs = _align([10.0, 100.0], [10.1, 300.0])
+        self.assertEqual(pairs, [(0, 0)])
+
+    def test_order_resolves_near_identical_durations(self):
+        v = [20.0, 20.1, 20.2]
+        a = [20.15, 20.05, 20.1]
+        self.assertEqual(_align(v, a), [(0, 0), (1, 1), (2, 2)])
+
+    def test_empty_matrix_shapes(self):
+        self.assertEqual(matcher._align_in_order(np.zeros((0, 3)), 5.0), [])
+        self.assertEqual(matcher._align_in_order(np.zeros((3, 0)), 5.0), [])
+
+    def test_real_data_regression(self):
+        v = [21.188293, 35.869268, 17.684878, 89.089756, 3.504390,
+             10.010732, 11.345366, 28.528780, 9.677073]
+        a = [35.754000, 17.491333, 88.999333, 3.416000, 9.847333,
+             11.212000, 28.397333, 9.456000]
+        pairs = _align(v, a)
+        self.assertEqual(pairs, [(i, i - 1) for i in range(1, 9)])
+        cost = matcher._order_cost_matrix(v, a)
+        assign = dict(pairs)
+        windows = matcher._order_windows(assign, len(a))
+        self.assertEqual(windows[1], (-1, 1))
+        self.assertEqual(matcher._order_ambiguous_candidates(cost, assign, 5.0), {})
+
+    def test_real_data_skip_penalty_vs_tolerance(self):
+        # C108 (21.19s) vs ZOOM0105 (35.75s): beyond tolerance, never matched
+        cost = matcher._order_cost_matrix([21.188293], [35.754])
+        self.assertTrue(np.isinf(cost[0, 0]))
+
+
+class OrderConfidenceTests(unittest.TestCase):
+    def test_runner_up_must_be_order_admissible(self):
+        # row 1 chose col 1; col 0 and col 2 are taken by neighbours.  A
+        # near-identical duration there must not lower confidence.
+        cost = np.array([[0.1, 50.0, 50.0], [0.11, 0.1, 0.11], [50.0, 50.0, 0.1]])
+        assign = {0: 0, 1: 1, 2: 2}
+        adm = matcher._admissible_cost(cost, assign)
+        self.assertGreater(matcher._pair_confidence(adm, {}, assign, 1, 5.0), 0.9)
+        self.assertLess(matcher._pair_confidence(cost, {}, assign, 1, 5.0), 0.15)
+
+    def test_resolve_alignment_uses_correlation(self):
+        # two admissible candidates for the single video; correlation picks col 1
+        cost = np.array([[0.10, 0.12]])
+        scores = {(0, 0): 0.05, (0, 1): 0.6}
+        self.assertEqual(matcher._resolve_alignment(cost, scores, 5.0, SKIP), {0: 1})
+        cands = matcher._order_ambiguous_candidates(cost, {0: 0}, 5.0)
+        self.assertEqual(cands, {0: [0, 1]})
+
+
+class MatchFilesOrderTests(unittest.TestCase):
+    """match_files with ffprobe/ffmpeg mocked out (no media needed)."""
+
+    def _run(self, vdurs, adurs, preserve, same_dir=False):
+        vfiles = [Path(f"/v/{n}.braw") for n in vdurs]
+        afiles = [Path(f"/{'v' if same_dir else 'a'}/{n}.WAV") for n in adurs]
+        dur = {**{str(f): d for f, d in zip(vfiles, vdurs.values())},
+               **{str(f): d for f, d in zip(afiles, adurs.values())}}
+
+        def fake_find(directory, exts):
+            return vfiles if ".braw" in exts else afiles
+
+        with mock.patch.object(config, "MATCH_PRESERVE_ORDER", preserve), \
+                mock.patch.object(matcher, "find_files", fake_find), \
+                mock.patch.object(matcher, "_get_duration", lambda p: dur[p]), \
+                mock.patch.object(matcher, "_extract_audio_raw",
+                                  lambda p, m=None: np.zeros(1000, dtype=np.float32)), \
+                mock.patch.object(matcher, "_find_offset", lambda v, a: 0.0), \
+                mock.patch.object(matcher, "tqdm", lambda it, **k: it):
+            vd = "/v"
+            return matcher.match_files(vd, vd if same_dir else "/a")
+
+    def _pairs(self, matches):
+        return [(Path(m.video_path).stem, Path(m.audio_path).stem) for m in matches]
+
+    def test_order_mode_skips_and_sorts_naturally(self):
+        v = {"C9": 10.0, "C10": 20.0, "C11": 30.0}
+        a = {"Z0010": 20.1, "Z0011": 30.1}
+        pairs = self._pairs(self._run(v, a, True, same_dir=True))
+        # inputs given in this order; output sorted naturally by video name
+        self.assertEqual(pairs, [("C10", "Z0010"), ("C11", "Z0011")])
+
+    def test_preserve_order_false_uses_hungarian(self):
+        v = {"C1": 10.0, "C2": 50.0}
+        a = {"Z1": 50.1, "Z2": 10.1}  # crossing is the best duration match
+        crossed = self._pairs(self._run(v, a, False))
+        self.assertEqual(crossed, [("C1", "Z2"), ("C2", "Z1")])
+        ordered = self._pairs(self._run(v, a, True))
+        # the order rule forbids crossing: only one pair survives, one is skipped
+        self.assertEqual(ordered, [("C1", "Z2")])
 
 class ConfidenceTests(unittest.TestCase):
     def test_clear_duration_match_high(self):

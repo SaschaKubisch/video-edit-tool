@@ -9,6 +9,7 @@ occurs `offset` seconds LATER in the audio file than in the video's scratch
 track (the recorder was started earlier than the camera).
 """
 
+import re
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -186,17 +187,28 @@ def _find_offset(video_audio: np.ndarray, audio_audio: np.ndarray) -> float:
     return float((k - zero_f + delta) / sr)
 
 
+def _natural_key(name) -> tuple:
+    """Natural sort key: digit runs compare as numbers, case-insensitive
+    (ZOOM0009 < ZOOM0010, C112 < C113).  Recording order = this order."""
+    parts = re.split(r"(\d+)", str(name).lower())
+    return tuple(int(p) if i % 2 else p for i, p in enumerate(parts))
+
+
 def find_files(directory: str, extensions: set) -> list[Path]:
-    """Find all files with given extensions in a directory."""
+    """Find all files with given extensions (case-insensitive) in a directory,
+    in natural (recording) order.  Hidden files (e.g. macOS ._ files) are
+    ignored; every file appears once even on case-insensitive filesystems."""
     d = Path(directory)
     if not d.is_dir():
         raise FileNotFoundError(f"Directory not found: {directory}")
 
-    files = []
-    for ext in extensions:
-        files.extend(d.glob(f"*{ext}"))
-        files.extend(d.glob(f"*{ext.upper()}"))
-    return sorted(set(files))
+    exts = {e.lower() for e in extensions}
+    found = {}
+    for f in d.iterdir():
+        if f.name.startswith(".") or f.suffix.lower() not in exts or not f.is_file():
+            continue
+        found.setdefault(f.resolve(), f)
+    return sorted(found.values(), key=lambda f: (_natural_key(f.name), f.name))
 
 
 def _correlation_score(video_audio: np.ndarray, audio_audio: np.ndarray) -> float:
@@ -283,6 +295,97 @@ def _pair_confidence(cost: np.ndarray, corr_scores: dict, assignment: dict,
     return conf
 
 
+def _order_cost_matrix(v_durs, a_durs, max_diff=None) -> np.ndarray:
+    """Duration-difference cost; pairs beyond the tolerance are inf (disallowed)."""
+    max_diff = config.MATCH_MAX_DURATION_DIFF_SEC if max_diff is None else max_diff
+    cost = np.abs(np.array(v_durs, dtype=float)[:, None] - np.array(a_durs, dtype=float)[None, :])
+    cost[cost > max_diff] = np.inf
+    return cost
+
+
+def _align_in_order(cost: np.ndarray, skip_penalty: float) -> list:
+    """
+    Order-preserving (monotonic, non-crossing) alignment of rows (videos) and
+    columns (audio files), both already in recording order.
+
+    Minimises  sum(cost[i, j] for matched pairs) + skip_penalty * (number of
+    unmatched rows + unmatched columns)  by dynamic programming, O(rows*cols).
+    cost[i, j] = inf forbids a pair.  Ties prefer matching.
+    Returns the matched pairs [(i, j), ...] with i and j both increasing.
+    """
+    n, m = cost.shape
+    dp = np.zeros((n + 1, m + 1))
+    dp[:, 0] = skip_penalty * np.arange(n + 1)
+    dp[0, :] = skip_penalty * np.arange(m + 1)
+    for i in range(1, n + 1):
+        for j in range(1, m + 1):
+            dp[i, j] = min(dp[i - 1, j - 1] + cost[i - 1, j - 1],
+                           dp[i - 1, j] + skip_penalty,
+                           dp[i, j - 1] + skip_penalty)
+    pairs = []
+    i, j = n, m
+    while i > 0 and j > 0:
+        c = dp[i - 1, j - 1] + cost[i - 1, j - 1]
+        if np.isfinite(c) and c <= dp[i, j] + 1e-9:
+            pairs.append((i - 1, j - 1))
+            i, j = i - 1, j - 1
+        elif dp[i - 1, j] + skip_penalty <= dp[i, j] + 1e-9:
+            i -= 1
+        else:
+            j -= 1
+    pairs.reverse()
+    return pairs
+
+
+def _order_windows(assignment: dict, n_cols: int) -> dict:
+    """For every matched row: (lo, hi) exclusive column bounds given by the
+    neighbouring matched rows' columns.  Columns strictly between are the
+    order-admissible alternatives for that row."""
+    rows = sorted(assignment)
+    out = {}
+    for k, r in enumerate(rows):
+        lo = assignment[rows[k - 1]] if k > 0 else -1
+        hi = assignment[rows[k + 1]] if k + 1 < len(rows) else n_cols
+        out[r] = (lo, hi)
+    return out
+
+
+def _order_ambiguous_candidates(cost: np.ndarray, assignment: dict, threshold: float) -> dict:
+    """Like _ambiguous_candidates, but only order-admissible, allowed columns
+    (inside the neighbours' window, finite cost) count as candidates."""
+    out = {}
+    windows = _order_windows(assignment, cost.shape[1])
+    for r, c in assignment.items():
+        lo, hi = windows[r]
+        cands = [j for j in range(lo + 1, hi)
+                 if np.isfinite(cost[r, j]) and abs(cost[r, j] - cost[r, c]) <= threshold]
+        if len(cands) > 1:
+            out[r] = cands
+    return out
+
+
+def _admissible_cost(cost: np.ndarray, assignment: dict) -> np.ndarray:
+    """Copy of cost with every column outside a row's order window set to inf,
+    so confidence runner-ups are order-admissible alternatives only."""
+    adm = np.full(cost.shape, np.inf)
+    for r, (lo, hi) in _order_windows(assignment, cost.shape[1]).items():
+        adm[r, lo + 1:hi] = cost[r, lo + 1:hi]
+    return adm
+
+
+def _resolve_alignment(cost: np.ndarray, corr_scores: dict, ambiguity_threshold: float,
+                       skip_penalty: float) -> dict:
+    """Order-preserving counterpart of _resolve_assignment: the same
+    correlation adjustment W * (best_score_in_row - score) is added to the
+    pair costs of rows that have scores, then the DP is re-run once."""
+    adjusted = np.array(cost, dtype=float)
+    weight = _CORR_WEIGHT_FACTOR * ambiguity_threshold
+    for r in {r for (r, _c) in corr_scores}:
+        row_scores = np.array([corr_scores.get((r, j), 0.0) for j in range(adjusted.shape[1])])
+        adjusted[r] += weight * (row_scores.max() - row_scores)
+    return {int(i): int(j) for i, j in _align_in_order(adjusted, skip_penalty)}
+
+
 class _AudioCache:
     """Lazy per-file extraction cache with optional threaded prefetch."""
 
@@ -325,12 +428,18 @@ def match_files(
     Match video files to audio files.
 
     Strategy:
-      1. Duration cost matrix |video_dur - audio_dur| + Hungarian assignment.
-      2. For videos with several audio candidates within the ambiguity
-         threshold, compute onset-envelope correlation for all candidate pairs,
-         add W * (best - score) to the cost and re-solve once (global, so
-         chained reassignments cannot undo each other).
-      3. Margin-based confidence (see _pair_confidence).
+      1. Duration cost matrix |video_dur - audio_dur|.  With
+         config.MATCH_PRESERVE_ORDER (default) files are sorted naturally and
+         aligned monotonically by dynamic programming (_align_in_order; pairs
+         never cross, either side may have unmatched files, differences above
+         MATCH_MAX_DURATION_DIFF_SEC are disallowed).  Otherwise a global
+         Hungarian assignment ignores file order.
+      2. For videos with several (order-admissible) audio candidates within
+         the ambiguity threshold, compute onset-envelope correlation for all
+         candidate pairs, add W * (best - score) to the cost and re-solve once
+         (global, so chained reassignments cannot undo each other).
+      3. Margin-based confidence (see _pair_confidence); in order mode the
+         runner-up must be order-admissible (inside the neighbours' window).
       4. Sync offset per final pair (offset = t_audio - t_video, see _find_offset).
 
     Args:
@@ -380,15 +489,29 @@ def match_files(
         raise RuntimeError("No readable video or audio files (ffprobe failed for all of one kind).")
 
     # -- Step 2: duration cost + Hungarian --------------------------------
+    preserve = config.MATCH_PRESERVE_ORDER
+    skip_pen = config.MATCH_SKIP_PENALTY
     print(f"\nBuilding duration cost matrix ({n_vid} videos x {n_aud} audio)...")
-    cost = np.abs(np.array(v_durs)[:, None] - np.array(a_durs)[None, :])
-    row_idx, col_idx = linear_sum_assignment(cost)
-    assignment = {int(r): int(c) for r, c in zip(row_idx, col_idx)}
+    if preserve:
+        print("Order-preserving matching (recording order = natural filename order):")
+        print("  videos: " + ", ".join(f.stem for f in v_files))
+        print("  audio:  " + ", ".join(f.stem for f in a_files))
+        print(f"  max duration diff {config.MATCH_MAX_DURATION_DIFF_SEC}s, "
+              f"skip penalty {skip_pen}s per unmatched file")
+        cost = _order_cost_matrix(v_durs, a_durs)
+        assignment = {i: j for i, j in _align_in_order(cost, skip_pen)}
+    else:
+        cost = np.abs(np.array(v_durs)[:, None] - np.array(a_durs)[None, :])
+        row_idx, col_idx = linear_sum_assignment(cost)
+        assignment = {int(r): int(c) for r, c in zip(row_idx, col_idx)}
 
     # -- Step 3: ambiguity resolution via correlation ---------------------
     print("\nChecking for ambiguous duration matches...")
     cache = _AudioCache(max_duration)
-    candidates = _ambiguous_candidates(cost, assignment, _AMBIGUITY_THRESHOLD_SEC)
+    if preserve:
+        candidates = _order_ambiguous_candidates(cost, assignment, _AMBIGUITY_THRESHOLD_SEC)
+    else:
+        candidates = _ambiguous_candidates(cost, assignment, _AMBIGUITY_THRESHOLD_SEC)
     corr_scores = {}
 
     if candidates:
@@ -422,12 +545,17 @@ def match_files(
 
     changed = 0
     if corr_scores:
-        new_assignment = _resolve_assignment(cost, corr_scores, _AMBIGUITY_THRESHOLD_SEC)
-        for r in sorted(new_assignment):
-            if new_assignment[r] != assignment.get(r):
+        if preserve:
+            new_assignment = _resolve_alignment(cost, corr_scores,
+                                                _AMBIGUITY_THRESHOLD_SEC, skip_pen)
+        else:
+            new_assignment = _resolve_assignment(cost, corr_scores, _AMBIGUITY_THRESHOLD_SEC)
+        for r in sorted(set(new_assignment) | set(assignment)):
+            if new_assignment.get(r) != assignment.get(r):
                 changed += 1
-                print(f"  -> Re-assigned {v_files[r].name}: "
-                      f"{a_files[assignment[r]].name} -> {a_files[new_assignment[r]].name}")
+                old = a_files[assignment[r]].name if r in assignment else "(none)"
+                new = a_files[new_assignment[r]].name if r in new_assignment else "(none)"
+                print(f"  -> Re-assigned {v_files[r].name}: {old} -> {new}")
         assignment = new_assignment
         print(f"\n  Cross-correlation changed {changed} assignment(s).")
     else:
@@ -436,9 +564,16 @@ def match_files(
     # -- Step 4: final pairs, confidence, logging -------------------------
     print("\nFinal matches:")
     matched_pairs = []
+    conf_cost = _admissible_cost(cost, assignment) if preserve else cost
+    if preserve:
+        for i in range(n_vid):
+            if i not in assignment:
+                print(f"  {v_files[i].stem}: no audio (skipped)")
+        for j in sorted(set(range(n_aud)) - set(assignment.values())):
+            print(f"  {a_files[j].stem}: no video (skipped)")
     for r, c in sorted(assignment.items()):
         dur_diff = float(cost[r, c])
-        confidence = _pair_confidence(cost, corr_scores, assignment, r,
+        confidence = _pair_confidence(conf_cost, corr_scores, assignment, r,
                                       _AMBIGUITY_THRESHOLD_SEC)
         status = "OK" if dur_diff < 10 else "WARN" if dur_diff < 30 else "BAD"
         print(f"  [{status}] {v_files[r].name} ({v_durs[r]:.1f}s) <-> {a_files[c].name} "
@@ -485,7 +620,7 @@ def match_files(
             confidence=float(confidence),
         ))
 
-    matches.sort(key=lambda m: Path(m.video_path).name)
+    matches.sort(key=lambda m: _natural_key(Path(m.video_path).name))
     for i, m in enumerate(matches):
         m.index = i
 

@@ -39,7 +39,7 @@ A single user (the filmmaker) running the tool locally on macOS. No multi-user, 
 
 | ID | Requirement | Priority |
 |----|-------------|----------|
-| F1 | Discover video (`.mov .mp4 .mkv .avi .mxf`) and audio (`.wav .flac .aiff`) files in two user-chosen folders. | Must |
+| F1 | Discover video (`.mov .mp4 .mkv .avi .mxf .braw`) and audio (`.wav .flac .aiff`) files in two user-chosen folders. | Must |
 | F2 | Match each video to exactly one audio file using duration similarity as the primary criterion, solved globally (not greedily). | Must |
 | F3 | When multiple audio files have near-identical durations, disambiguate using waveform cross-correlation between the camera scratch track and the candidate recordings (claps/transients). | Must |
 | F4 | Compute a sync offset (seconds) per pair and store it. | Must |
@@ -53,6 +53,7 @@ A single user (the filmmaker) running the tool locally on macOS. No multi-user, 
 | F12 | Work with the **free** edition of DaVinci Resolve (script runnable from Resolve's *Workspace → Scripts* menu). | Should |
 | F13 | CLI subcommands for every step so the pipeline can be run without the browser UI. | Could |
 | F14 | Undo for any file renames performed by the tool. | Could |
+| F15 | Pairs preserve recording order; files may be missing on either side. | Must |
 
 ## 6. Non-Functional Requirements
 
