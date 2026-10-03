@@ -1,124 +1,83 @@
 # Ambient Video Automation
 
-A local web app that automates the BMPCC 4K + Zoom H2N ambient video workflow. Run it, point it at your folders, and it handles matching, syncing, ordering, and exporting — with optional DaVinci Resolve integration.
-
-## Quick Start
-
-```bash
-pip install -r requirements.txt
-python main.py
-```
-
-This launches the app at `http://localhost:8765` and opens your browser. Everything happens through the UI — no command line needed after this.
+A local tool for the BMPCC 4K + Zoom H2N dual-system workflow. It pairs each camera clip with its H2N recording, copies the recording next to the video under the video's file name (no re-encoding), and optionally builds an ordered timeline in DaVinci Resolve.
 
 ## What it does
 
-1. **Match** — Extracts scratch audio from each BMPCC video and cross-correlates it against your Zoom H2N WAV files to find which audio goes with which video. Also calculates the precise sync offset.
-2. **Select & Order** — Shows thumbnails from each scene in a visual interface. Click to add to your timeline, drag to reorder, set per-scene trim points.
-3. **Sync & Export** — For each scene: replaces the BMPCC scratch audio with the H2N recording (using the auto-detected offset), applies trims, exports numbered clips.
-4. **Push to Resolve** (optional) — Creates a DaVinci Resolve project with all clips on a timeline.
+1. **Match** - pairs every video with one audio file. Duration similarity is the primary criterion, solved globally (Hungarian assignment). When several audio files have near-identical durations, onset-envelope cross-correlation between the camera scratch track and the candidates breaks the tie. The same correlation yields the sync offset per pair. Videos or audio files left without a partner are listed in the console.
+2. **Copy and rename** - each matched audio file is copied next to its video as `<video stem>.<audio ext>` (`IMG_2231.MOV` and `IMG_2231.WAV`). Originals are untouched and nothing is transcoded. The copies are recorded in `ambient_audio_copies.json` so they can be removed again.
+3. **Resolve (optional)** - creates a project and timeline with the selected scenes in order: video on V1, audio on A2, offset and trims applied.
 
-## Setup
+## Quick start
 
 ```bash
-# Requirements: Python 3.10+, ffmpeg
 pip install -r requirements.txt
+brew install ffmpeg        # provides ffmpeg and ffprobe
+python3 main.py            # opens http://localhost:8765
 ```
 
-**requirements.txt** installs: `numpy`, `scipy`, `tqdm`
+Requires Python 3.9 or newer, numpy, scipy, tqdm and ffmpeg/ffprobe on the PATH.
 
-## Workflow
+## UI workflow
 
-### Step 1: Match
+1. **Match** - pick the video folder and the audio folder, click Match. The result list shows each pair, its offset and a confidence value (green high, red low - check red ones by hand).
+2. **Select & Order** - click thumbnails to add scenes to the timeline, drag to reorder, set optional trim values (seconds cut from the start and from the end of the clip). Save the selection.
+3. **Copy Audio & Push to Resolve** - copy and rename the audio (output folder defaults to the video folder), then optionally enter a project and timeline name and push to Resolve.
 
-Point the tool at your two folders:
+Only one job (match, copy, Resolve) runs at a time. State is saved to `project.json`, so the app resumes where you left off.
+
+## CLI
+
+Every step also works without the browser. The global `--project/-p FILE` option (default `project.json`) goes before the subcommand.
 
 ```bash
-python main.py match --video ./BMPCC_clips/ --audio ./H2N_recordings/
+python3 main.py                       # same as: app
+python3 main.py app [--port 8765]
+python3 main.py match --video DIR --audio DIR [--output DIR]
+python3 main.py sync [--selection JSON | --selection-file FILE] [--output DIR]
+python3 main.py sync --undo [--output DIR]
+python3 main.py resolve [--project-name NAME] [--timeline NAME] [--fps N] [--list]
+python3 main.py rename [--pattern P] [--dry-run] [--undo rename_log.json]   # legacy
 ```
 
-This will:
-- Find all video files (mp4/mov/mkv/mxf) and audio files (wav/flac)
-- Extract scratch audio from each video
-- Cross-correlate to find the best audio match for each video
-- Extract a thumbnail from each video
-- Save everything to `project.json`
+- `match` writes `project.json` and the thumbnails.
+- `sync` uses the selection saved in `project.json` unless one is passed, e.g. `--selection '{"selection":[3,1,5],"selection_trims":{"3":{"start":2,"end":1}}}'`. The selection holds scene indices in timeline order.
+- `rename` is a legacy helper that renames both files of each pair to `scene_NN.*`. It refuses to run if a target name already exists, and `--undo` reverses it from `rename_log.json`. The normal flow does not need it.
 
-### Step 2: Rename (optional)
+## Offset sign
+
+`offset = t_audio - t_video`. A positive offset means the same event occurs later in the audio file than in the video, i.e. the recorder was started before the camera. In Resolve the audio clip's source in-point is advanced by the offset. A negative offset places the audio that much later on the timeline.
+
+## Resolve
+
+- DaVinci Resolve must be running. External scripting (what this tool uses) may require **Resolve Studio**, with Preferences > System > General > External scripting using: **Local**.
+- The tool looks for Resolve's scripting modules automatically; otherwise set `PYTHONPATH` to `.../DaVinci Resolve/Developer/Scripting/Modules/`.
+- Free edition: running the same logic from inside Resolve via Workspace > Scripts is planned (`resolve_import.py`, not yet shipped). Until then use Resolve's Auto Sync Audio by file name on the copied files.
+- Layout API calls are built from a pure `build_timeline_plan()`; a few Resolve API behaviours (clip info keys, end frame handling) are assumptions flagged in SPECS.md.
+
+## Files
+
+- `project.json` is written to the current working directory (path configurable with `--project`).
+- Thumbnails go to a `thumbnails/` folder next to `project.json`.
+- `ambient_audio_copies.json` lives in the output folder (default: the video folder).
+
+## Undo the copy step
 
 ```bash
-# Preview what would be renamed
-python main.py rename --dry-run
-
-# Do the rename
-python main.py rename
-
-# Undo if needed
-python main.py rename --undo rename_log.json
+python3 main.py sync --undo            # uses the output folder from project.json
+python3 main.py sync --undo --output DIR
 ```
 
-### Step 3: Select scenes visually
-
-```bash
-python main.py select
-```
-
-This opens an HTML page in your browser showing thumbnails of all matched scenes. Drag scenes from "Available" to "Timeline" to build your sequence. Set per-scene trim points. Click "Export Selection" to get a JSON string.
-
-### Step 4: Sync and export
-
-```bash
-# Paste the JSON from the selector
-python main.py sync --selection '{"selection":[3,1,5,2],"selection_trims":{"3":{"start":2,"end":1}}}'
-
-# Or save the JSON to a file first
-python main.py sync --selection-file selection.json
-
-# Specify output directory
-python main.py sync --selection-file selection.json --output ./for_davinci/
-```
-
-Output clips are named `01_scene_03.mp4`, `02_scene_01.mp4`, etc. — numbered in your chosen order, ready to import into DaVinci Resolve.
+This deletes only the files listed in `ambient_audio_copies.json` in that folder, then the manifest. Videos and original recordings are never touched. Note that a copy which replaced an existing file of the same name is also removed; the tool logs a warning when it overwrites a file of different size.
 
 ## Configuration
 
-Edit `config.py` to adjust:
+`config.py` holds the constants: file extensions, `MATCH_SAMPLE_RATE`, `MATCH_MAX_DURATION_SEC` (seconds of audio used for correlation, default 60; raise it if scenes start with long silence), thumbnail time/width/quality, the port and `PROJECT_FILE`.
 
-- **Matching sensitivity** — `MATCH_MIN_CONFIDENCE` (lower = accept weaker matches)
-- **Matching speed** — `MATCH_MAX_DURATION_SEC` (uses first N seconds of audio; 60s is usually enough)
-- **Thumbnail appearance** — `THUMBNAIL_TIME_SEC`, `THUMBNAIL_WIDTH`
-- **Output quality** — `OUTPUT_AUDIO_CODEC` (default: PCM 24-bit to match H2N), `REENCODE_CRF`
-- **Naming pattern** — `RENAME_PATTERN`
-
-### Step 5: Push to DaVinci Resolve (optional)
-
-Instead of importing clips manually, push them straight into a Resolve project:
+## Tests
 
 ```bash
-# Make sure DaVinci Resolve Studio is running, then:
-python main.py resolve --clips ./synced_output/
-
-# Custom project name and frame rate
-python main.py resolve --clips ./synced_output/ --name "Forest Ambience" --fps 23.976
-
-# List existing Resolve projects
-python main.py resolve --list
+python3 -m unittest discover -s tests -v
 ```
 
-This creates a new project in Resolve, imports all synced clips into the Media Pool, and builds a timeline with clips in your selected order. Switch to Resolve and start color grading.
-
-**Requirements for Resolve integration:**
-- DaVinci Resolve **Studio** (paid version — the free version doesn't support external scripting)
-- Resolve must be running with external scripting enabled: Preferences > System > General > External scripting using: **Local**
-- Set `PYTHONPATH` to include Resolve's scripting modules (the tool tries to find it automatically):
-  - macOS: `export PYTHONPATH="/Library/Application Support/Blackmagic Design/DaVinci Resolve/Developer/Scripting/Modules/"`
-  - Linux: `export PYTHONPATH="/opt/resolve/Developer/Scripting/Modules/"`
-  - Windows: `set PYTHONPATH="C:\ProgramData\Blackmagic Design\DaVinci Resolve\Support\Developer\Scripting\Modules\"`
-
-## Tips
-
-- **Matching accuracy**: The tool uses the first 60 seconds of audio by default. If your scenes start with silence, increase `MATCH_MAX_DURATION_SEC` in config.py.
-- **Unmatched files**: After matching, the tool reports any video or audio files it couldn't pair. Check these manually.
-- **Re-running**: Each step reads from and writes back to `project.json`. You can re-run any step without losing earlier work.
-- **Audio offset**: The sync step uses the auto-detected offset. If a particular scene sounds off, you can manually adjust the offset in `project.json`.
-- **4K performance**: Video is stream-copied (no re-encoding) when possible, so syncing is fast even with 4K footage. Re-encoding only happens when trimming requires frame-precise cuts.
+See `PRD.md` for requirements and `SPECS.md` for the technical design.

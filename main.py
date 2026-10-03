@@ -2,36 +2,27 @@
 """
 Dual-System Audio Video Automation
 ====================================
-Automates the BMPCC 4K + Zoom H2N ambient video workflow:
+Automates the BMPCC 4K + Zoom H2N ambient video workflow.
 
-  1. match   — Audio-fingerprint match video files to audio files
-  2. rename  — Give matched pairs consistent names
-  3. select  — Visual HTML interface to pick & order scenes
-  4. sync    — Replace scratch audio with H2N, trim, export clips for DaVinci
+Commands:
+  app      Web app (default): match, pick/order/trim scenes, sync, Resolve
+  match    Audio-fingerprint match video files to audio files
+  sync     Copy audio renamed to the video's stem (into the video folder
+           by default), using the selection saved in project.json;
+           `sync --undo` removes those copies again
+  resolve  Push the ordered timeline (V1 video, A2 audio) into DaVinci Resolve
+  rename   (legacy) rename both files of each pair to scene_NN.*, with undo
 
 Usage:
-  # Step 1: Match video files to audio files
+  python main.py
   python main.py match --video ./video/ --audio ./audio/
-
-  # Step 2 (optional): Rename matched pairs
-  python main.py rename
-
-  # Step 3: Open visual scene selector
-  python main.py select
-
-  # Step 4: Sync and export clips (after selecting in the browser)
-  python main.py sync --selection '{"selection":[3,1,5,2]}'
-  # or
-  python main.py sync --selection-file selection.json
-
-  # Or specify output directory
-  python main.py sync --output ./synced_clips/
+  python main.py sync
+  python main.py resolve --project-name "My Project" --timeline "Cut 1"
 """
 
 import argparse
 import json
 import sys
-import webbrowser
 from pathlib import Path
 
 import config
@@ -61,37 +52,36 @@ def cmd_match(args):
         sys.exit(1)
 
     print("=" * 60)
-    print("STEP 1: Matching video files to audio recordings")
+    print("Matching video files to audio recordings")
     print("=" * 60)
 
     matches = match_files(
         video_dir=video_dir,
         audio_dir=audio_dir,
-        min_confidence=args.min_confidence,
     )
 
     if not matches:
-        print("\nNo matches found. Try lowering --min-confidence.")
+        print("\nNo matches found.")
         sys.exit(1)
 
     # Create project
     project = Project(
         video_dir=video_dir,
         audio_dir=audio_dir,
-        output_dir=args.output or "synced_output",
+        output_dir=args.output or "",
         matches=matches,
     )
 
     # Extract thumbnails
-    thumb_dir = Path(args.output or ".") / "thumbnails"
+    project_file = args.project or config.PROJECT_FILE
+    thumb_dir = Path(project_file).resolve().parent / "thumbnails"
     print(f"\nExtracting thumbnails...")
     project = extract_all_thumbnails(project, str(thumb_dir))
 
     # Save project
-    project_file = args.project or config.PROJECT_FILE
     project.save(project_file)
     print(f"\nProject saved to: {project_file}")
-    print(f"Next step: python main.py select")
+    print(f"Next step: python main.py app  (pick and order scenes)")
 
 
 def cmd_rename(args):
@@ -100,7 +90,11 @@ def cmd_rename(args):
 
     if args.undo:
         log_path = args.undo
-        undo_renames(log_path, dry_run=args.dry_run)
+        try:
+            undo_renames(log_path, dry_run=args.dry_run)
+        except FileExistsError as e:
+            print(f"Error: {e}")
+            sys.exit(1)
         return
 
     project_file = args.project or config.PROJECT_FILE
@@ -112,58 +106,45 @@ def cmd_rename(args):
     project = Project.load(project_file)
 
     print("=" * 60)
-    print("STEP 2: Renaming matched file pairs")
+    print("Renaming matched file pairs")
     print("=" * 60)
 
-    rename_matches(
-        project=project,
-        pattern=args.pattern,
-        dry_run=args.dry_run,
-    )
+    try:
+        rename_matches(
+            project=project,
+            pattern=args.pattern,
+            dry_run=args.dry_run,
+        )
+    except FileExistsError as e:
+        print(f"Error: {e}")
+        sys.exit(1)
 
     if not args.dry_run:
         project.save(project_file)
         print(f"\nProject updated: {project_file}")
 
 
-def cmd_select(args):
-    """Generate and open the visual scene selector."""
-    from thumbnails import generate_selector_html
-
-    project_file = args.project or config.PROJECT_FILE
-    if not Path(project_file).exists():
-        print(f"Error: Project file not found: {project_file}")
-        print("Run 'python main.py match' first.")
-        sys.exit(1)
-
-    project = Project.load(project_file)
-
-    print("=" * 60)
-    print("STEP 3: Visual scene selector")
-    print("=" * 60)
-
-    html_path = generate_selector_html(
-        project=project,
-        output_path=args.html or config.SELECTOR_HTML,
-    )
-
-    # Open in browser
-    abs_path = Path(html_path).resolve()
-    url = f"file://{abs_path}"
-    print(f"\nOpening in browser: {url}")
-    print("Drag scenes to arrange your timeline, set trim points,")
-    print("then click 'Export Selection' and copy the JSON.")
-    print(f"\nNext step: python main.py sync --selection '<paste JSON here>'")
-
-    if not args.no_open:
-        webbrowser.open(url)
-
-
 def cmd_sync(args):
-    """Sync audio to video for selected scenes and export clips."""
-    from syncer import sync_all_scenes
+    """Copy the matched audio next to the video, renamed to the video's stem."""
+    from syncer import sync_all_scenes, remove_copied_audio
 
     project_file = args.project or config.PROJECT_FILE
+
+    if args.undo:
+        out_dir = args.output
+        if not out_dir:
+            if not Path(project_file).exists():
+                print(f"Error: Project file not found: {project_file}")
+                print("Pass --output DIR to name the folder holding the copies.")
+                sys.exit(1)
+            proj = Project.load(project_file)
+            out_dir = proj.output_dir or proj.video_dir
+        removed = remove_copied_audio(out_dir)
+        for path in removed:
+            print(f"  Removed: {path}")
+        print(f"Removed {len(removed)} copied audio file(s) from {out_dir}")
+        return
+
     if not Path(project_file).exists():
         print(f"Error: Project file not found: {project_file}")
         print("Run 'python main.py match' first.")
@@ -186,7 +167,7 @@ def cmd_sync(args):
         }
     else:
         print("Error: No selection provided.")
-        print("Run 'python main.py select' first, then pass the exported JSON:")
+        print("Pick scenes in the app first (python main.py app), or pass:")
         print("  python main.py sync --selection '{\"selection\":[0,2,1]}'")
         print("  python main.py sync --selection-file selection.json")
         sys.exit(1)
@@ -196,22 +177,22 @@ def cmd_sync(args):
     project.selection_trims = selection_data.get("selection_trims", {})
 
     print("=" * 60)
-    print("STEP 4: Syncing audio and exporting clips")
+    print("Copying audio renamed to the video names")
     print("=" * 60)
     print(f"Selection: {project.selection}")
     if project.selection_trims:
         print(f"Trims: {project.selection_trims}")
 
-    output_dir = args.output or project.output_dir or "synced_output"
+    output_dir = args.output or project.output_dir or None
     outputs = sync_all_scenes(project, output_dir)
+    shown_dir = output_dir or project.video_dir
 
     # Save selection back to project
     project.save(project_file)
 
     print(f"\n{'=' * 60}")
-    print(f"Done! {len(outputs)} synced clips saved to: {output_dir}/")
-    print(f"Import them into DaVinci Resolve in numbered order,")
-    print(f"or run: python main.py resolve --clips {output_dir}")
+    print(f"Done! {len(outputs)} renamed audio files saved to: {shown_dir}/")
+    print(f"Next: python main.py resolve")
     print(f"{'=' * 60}")
 
 
@@ -234,34 +215,27 @@ def cmd_resolve(args):
             print(f"Error: {e}")
         return
 
-    # Load our project data
     if not Path(project_file).exists():
-        print(f"Warning: Project file not found: {project_file}")
-        print("Continuing with clips directory only.\n")
-        proj = Project(output_dir=args.clips or "synced_output")
-    else:
-        proj = Project.load(project_file)
-
-    clips_dir = args.clips or proj.output_dir or "synced_output"
+        print(f"Error: Project file not found: {project_file}")
+        print("Run 'python main.py match' (or the app) first.")
+        sys.exit(1)
+    proj = Project.load(project_file)
 
     print("=" * 60)
-    print("STEP 5: Creating DaVinci Resolve project")
+    print("Creating DaVinci Resolve project")
     print("=" * 60)
 
     try:
         result = create_resolve_project(
             project=proj,
-            project_name=args.name or "Ambient Video Project",
+            project_name=args.project_name or "Ambient Video Project",
             timeline_name=args.timeline or "Main Timeline",
-            frame_rate=args.fps,
-            width=args.width,
-            height=args.height,
-            clips_dir=clips_dir,
+            fps=args.fps,
         )
     except ConnectionError as e:
         print(f"\nError: {e}")
         sys.exit(1)
-    except RuntimeError as e:
+    except (RuntimeError, ValueError, FileNotFoundError) as e:
         print(f"\nError: {e}")
         sys.exit(1)
 
@@ -290,9 +264,7 @@ def main():
     p_match.add_argument("--audio", "-a", required=True,
         help="Directory containing Zoom H2N audio files")
     p_match.add_argument("--output", "-o",
-        help="Output directory for synced clips (default: synced_output)")
-    p_match.add_argument("--min-confidence", type=float, default=None,
-        help=f"Minimum match confidence (default: {config.MATCH_MIN_CONFIDENCE})")
+        help="Directory for renamed audio copies (default: the video folder)")
     p_match.set_defaults(func=cmd_match)
 
     # ── rename ──
@@ -306,41 +278,29 @@ def main():
         help="Path to rename_log.json to undo previous renames")
     p_rename.set_defaults(func=cmd_rename)
 
-    # ── select ──
-    p_select = subparsers.add_parser("select",
-        help="Open visual scene selector in browser")
-    p_select.add_argument("--html",
-        help=f"Output HTML file path (default: {config.SELECTOR_HTML})")
-    p_select.add_argument("--no-open", action="store_true",
-        help="Don't auto-open in browser")
-    p_select.set_defaults(func=cmd_select)
-
     # ── sync ──
     p_sync = subparsers.add_parser("sync",
-        help="Sync audio and export clips for selected scenes")
+        help="Copy matched audio next to the video, renamed to the video's stem")
     p_sync.add_argument("--selection", "-s",
-        help='Selection JSON from the visual selector (e.g. \'{"selection":[0,2,1]}\')')
+        help='Selection JSON (default: the selection saved in project.json)')
     p_sync.add_argument("--selection-file", "-f",
         help="Path to a selection JSON file")
     p_sync.add_argument("--output", "-o",
-        help="Output directory for synced clips (default: synced_output)")
+        help="Directory for renamed audio copies (default: the video folder)")
+    p_sync.add_argument("--undo", action="store_true",
+        help="Delete the audio copies made by a previous sync (listed in "
+             "ambient_audio_copies.json) and exit")
     p_sync.set_defaults(func=cmd_sync)
 
     # ── resolve ──
     p_resolve = subparsers.add_parser("resolve",
-        help="Create a DaVinci Resolve project with clips on a timeline")
-    p_resolve.add_argument("--clips", "-c",
-        help="Directory containing synced clips (default: synced_output)")
-    p_resolve.add_argument("--name", "-n",
+        help="Create a Resolve project with video + audio on a timeline")
+    p_resolve.add_argument("--project-name", "-n", dest="project_name",
         help='Resolve project name (default: "Ambient Video Project")')
     p_resolve.add_argument("--timeline", "-t",
         help='Timeline name (default: "Main Timeline")')
     p_resolve.add_argument("--fps", type=float,
-        help="Project frame rate (default: auto-detect)")
-    p_resolve.add_argument("--width", type=int,
-        help="Project width in pixels (default: auto-detect)")
-    p_resolve.add_argument("--height", type=int,
-        help="Project height in pixels (default: auto-detect)")
+        help="Override timeline frame rate (default: Resolve's timeline rate)")
     p_resolve.add_argument("--list", action="store_true",
         help="List existing projects in Resolve and exit")
     p_resolve.set_defaults(func=cmd_resolve)

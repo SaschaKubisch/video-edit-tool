@@ -3,12 +3,13 @@ Local web server for the Ambient Video Automation app.
 Provides API endpoints that the frontend calls, and serves the UI.
 """
 
+import copy
 import json
 import os
 import sys
 import threading
 import traceback
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 
@@ -19,17 +20,63 @@ from project import Project, SceneMatch
 _project = Project()
 _project_lock = threading.Lock()
 _status = {"step": "idle", "message": "Ready", "progress": 0}
+_status_lock = threading.Lock()
+
+# Only one background job (match, sync, resolve) may run at a time
+_job_running = False
+_job_lock = threading.Lock()
 
 
 def _set_status(step: str, message: str, progress: int = 0):
     global _status
-    _status = {"step": step, "message": message, "progress": progress}
+    with _status_lock:
+        _status = {"step": step, "message": message, "progress": progress}
+
+
+def _get_status() -> dict:
+    with _status_lock:
+        return dict(_status)
+
+
+def _try_start_job() -> bool:
+    """Claim the job slot. Returns False if a job is already running."""
+    global _job_running
+    with _job_lock:
+        if _job_running:
+            return False
+        _job_running = True
+        return True
+
+
+def _end_job():
+    global _job_running
+    with _job_lock:
+        _job_running = False
+
+
+def _thumb_dir() -> Path:
+    """Thumbnails live next to the project file."""
+    return Path(config.PROJECT_FILE).resolve().parent / "thumbnails"
+
+
+def _load_project():
+    """Load the saved project from disk, if there is one (resume)."""
+    global _project
+    if not Path(config.PROJECT_FILE).exists():
+        return
+    try:
+        loaded = Project.load()
+        with _project_lock:
+            _project = loaded
+        print(f"  Resumed project from {config.PROJECT_FILE}")
+    except Exception as e:
+        print(f"  Could not load {config.PROJECT_FILE}, starting empty: {e}")
+        traceback.print_exc()
 
 
 def _json_response(handler, data, status=200):
     handler.send_response(status)
     handler.send_header("Content-Type", "application/json")
-    handler.send_header("Access-Control-Allow-Origin", "*")
     handler.end_headers()
     handler.wfile.write(json.dumps(data).encode())
 
@@ -47,21 +94,30 @@ class AppHandler(BaseHTTPRequestHandler):
         # Suppress default logging to keep terminal clean
         pass
 
-    def do_OPTIONS(self):
-        self.send_response(200)
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
-        self.end_headers()
+    def _check_request(self, is_post: bool) -> bool:
+        """Reject requests not addressed to this local server (DNS rebinding / CSRF)."""
+        port = self.server.server_address[1]
+        hosts = {f"localhost:{port}", f"127.0.0.1:{port}"}
+        if self.headers.get("Host", "") not in hosts:
+            _json_response(self, {"error": "Forbidden host"}, 403)
+            return False
+        if is_post:
+            origin = self.headers.get("Origin")
+            if origin is not None and origin not in {f"http://{h}" for h in hosts}:
+                _json_response(self, {"error": "Forbidden origin"}, 403)
+                return False
+        return True
 
     def do_GET(self):
+        if not self._check_request(False):
+            return
         parsed = urlparse(self.path)
         path = parsed.path
 
         if path == "/" or path == "/index.html":
             self._serve_ui()
         elif path == "/api/status":
-            _json_response(self, _status)
+            _json_response(self, _get_status())
         elif path == "/api/project":
             with _project_lock:
                 _json_response(self, self._project_to_dict())
@@ -74,6 +130,8 @@ class AppHandler(BaseHTTPRequestHandler):
             self.send_error(404)
 
     def do_POST(self):
+        if not self._check_request(True):
+            return
         parsed = urlparse(self.path)
         path = parsed.path
 
@@ -86,10 +144,10 @@ class AppHandler(BaseHTTPRequestHandler):
                 self._handle_sync()
             elif path == "/api/resolve":
                 self._handle_resolve()
-            elif path == "/api/rename":
-                self._handle_rename()
             else:
                 self.send_error(404)
+        except json.JSONDecodeError:
+            _json_response(self, {"error": "Invalid JSON body"}, 400)
         except Exception as e:
             traceback.print_exc()
             _json_response(self, {"error": str(e)}, 500)
@@ -136,13 +194,20 @@ class AppHandler(BaseHTTPRequestHandler):
     # ── Match ──
 
     def _handle_match(self):
-        global _project
         body = _read_body(self)
         video_dir = body.get("video_dir", "")
         audio_dir = body.get("audio_dir", "")
 
         if not video_dir or not audio_dir:
             _json_response(self, {"error": "video_dir and audio_dir are required"}, 400)
+            return
+        for d in (video_dir, audio_dir):
+            if not Path(d).is_dir():
+                _json_response(self, {"error": f"Folder not found: {d}"}, 400)
+                return
+
+        if not _try_start_job():
+            _json_response(self, {"error": "Another job is already running"}, 409)
             return
 
         _set_status("matching", "Matching audio fingerprints...", 10)
@@ -151,22 +216,35 @@ class AppHandler(BaseHTTPRequestHandler):
             global _project
             try:
                 from matcher import match_files
-                from thumbnails import extract_all_thumbnails
+                from thumbnails import extract_thumbnail
 
                 matches = match_files(video_dir, audio_dir)
 
-                with _project_lock:
-                    _project = Project(
-                        video_dir=video_dir,
-                        audio_dir=audio_dir,
-                        matches=matches,
-                    )
+                # Build the new project locally so the lock is not held during ffmpeg
+                new_project = Project(
+                    video_dir=video_dir,
+                    audio_dir=audio_dir,
+                    matches=matches,
+                )
 
-                _set_status("thumbnails", "Extracting thumbnails...", 60)
+                thumb_dir = _thumb_dir()
+                thumb_dir.mkdir(parents=True, exist_ok=True)
+                total = len(new_project.matches)
+                for i, m in enumerate(new_project.matches):
+                    if not isinstance(m, SceneMatch):
+                        m = new_project.matches[i] = SceneMatch(**m)
+                    _set_status("thumbnails",
+                                f"Extracting thumbnails ({i + 1}/{total})...",
+                                60 + int(39 * i / max(total, 1)))
+                    thumb_path = thumb_dir / f"thumb_{m.index:03d}.{config.THUMBNAIL_FORMAT}"
+                    try:
+                        extract_thumbnail(m.video_path, str(thumb_path))
+                        m.thumbnail_path = str(thumb_path)
+                    except RuntimeError as e:
+                        print(f"  [{m.index}] Thumbnail failed: {e}")
 
-                thumb_dir = Path(video_dir).parent / "thumbnails"
                 with _project_lock:
-                    _project = extract_all_thumbnails(_project, str(thumb_dir))
+                    _project = new_project
                     _project.save()
 
                 _set_status("matched", f"Found {len(matches)} matched pairs.", 100)
@@ -174,6 +252,8 @@ class AppHandler(BaseHTTPRequestHandler):
             except Exception as e:
                 traceback.print_exc()
                 _set_status("error", f"Matching failed: {e}", 0)
+            finally:
+                _end_job()
 
         thread = threading.Thread(target=do_match, daemon=True)
         thread.start()
@@ -183,7 +263,6 @@ class AppHandler(BaseHTTPRequestHandler):
     # ── Select ──
 
     def _handle_select(self):
-        global _project
         body = _read_body(self)
 
         selection = body.get("selection", [])
@@ -199,18 +278,21 @@ class AppHandler(BaseHTTPRequestHandler):
     # ── Sync ──
 
     def _handle_sync(self):
-        global _project
         body = _read_body(self)
+
+        if not _try_start_job():
+            _json_response(self, {"error": "Another job is already running"}, 409)
+            return
 
         _set_status("syncing", "Copying and renaming audio files...", 10)
 
         def do_sync():
-            global _project
             try:
                 from syncer import sync_all_scenes
 
+                # Work on a copy so the in-memory project stays the single source of truth
                 with _project_lock:
-                    proj_copy = Project.load()
+                    proj_copy = copy.deepcopy(_project)
 
                 if not proj_copy.selection:
                     _set_status("error", "No scenes selected.", 0)
@@ -230,6 +312,8 @@ class AppHandler(BaseHTTPRequestHandler):
             except Exception as e:
                 traceback.print_exc()
                 _set_status("error", f"Sync failed: {e}", 0)
+            finally:
+                _end_job()
 
         thread = threading.Thread(target=do_sync, daemon=True)
         thread.start()
@@ -241,6 +325,10 @@ class AppHandler(BaseHTTPRequestHandler):
     def _handle_resolve(self):
         body = _read_body(self)
 
+        if not _try_start_job():
+            _json_response(self, {"error": "Another job is already running"}, 409)
+            return
+
         _set_status("resolve", "Creating DaVinci Resolve project...", 10)
 
         def do_resolve():
@@ -248,12 +336,14 @@ class AppHandler(BaseHTTPRequestHandler):
                 from resolve_integration import create_resolve_project
 
                 with _project_lock:
-                    proj_copy = Project.load()
+                    proj_copy = copy.deepcopy(_project)
 
                 result = create_resolve_project(
                     project=proj_copy,
-                    project_name=body.get("name", "Ambient Video Project"),
-                    timeline_name=body.get("timeline", "Main Timeline"),
+                    project_name=(body.get("project_name") or body.get("name")
+                                  or "Ambient Video Project"),
+                    timeline_name=(body.get("timeline_name") or body.get("timeline")
+                                   or "Main Timeline"),
                 )
 
                 _set_status("resolve_done",
@@ -262,33 +352,19 @@ class AppHandler(BaseHTTPRequestHandler):
             except Exception as e:
                 traceback.print_exc()
                 _set_status("error", f"Resolve failed: {e}", 0)
+            finally:
+                _end_job()
 
         thread = threading.Thread(target=do_resolve, daemon=True)
         thread.start()
 
         _json_response(self, {"status": "started"})
 
-    # ── Rename ──
-
-    def _handle_rename(self):
-        global _project
-        body = _read_body(self)
-        dry_run = body.get("dry_run", False)
-
-        from renamer import rename_matches
-
-        with _project_lock:
-            ops = rename_matches(_project, dry_run=dry_run)
-            if not dry_run:
-                _project.save()
-
-        _json_response(self, {"operations": ops, "dry_run": dry_run})
-
     # ── Thumbnails ──
 
     def _serve_thumbnail(self, path):
         """Serve a thumbnail image file."""
-        # path is /api/thumbnail/<index>
+        # path is /api/thumbnail/<index>; the ?v= cache-busting query is already stripped by urlparse
         try:
             index = int(path.split("/")[-1])
         except ValueError:
@@ -311,7 +387,7 @@ class AppHandler(BaseHTTPRequestHandler):
         ext = thumb_path.suffix.lstrip(".")
         mime = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png"}.get(ext, "image/jpeg")
         self.send_header("Content-Type", mime)
-        self.send_header("Cache-Control", "max-age=3600")
+        self.send_header("Cache-Control", "no-cache")
         self.end_headers()
         self.wfile.write(thumb_path.read_bytes())
 
@@ -340,7 +416,15 @@ class AppHandler(BaseHTTPRequestHandler):
             d = asdict(m_obj)
             d["video_file"] = Path(m_obj.video_path).name
             d["audio_file"] = Path(m_obj.audio_path).name
-            d["has_thumbnail"] = bool(m_obj.thumbnail_path and Path(m_obj.thumbnail_path).exists())
+            d["has_thumbnail"] = False
+            d["thumb_version"] = 0
+            if m_obj.thumbnail_path:
+                try:
+                    # mtime changes on every re-match, so the UI can bust its cache
+                    d["thumb_version"] = Path(m_obj.thumbnail_path).stat().st_mtime_ns
+                    d["has_thumbnail"] = True
+                except OSError:
+                    pass
             matches.append(d)
 
         return {
@@ -353,19 +437,22 @@ class AppHandler(BaseHTTPRequestHandler):
         }
 
 
-def run_server(port: int = None):
+def run_server(port: int = None, open_browser: bool = True):
     """Start the app server."""
     port = port or config.SELECTOR_PORT
-    server = HTTPServer(("127.0.0.1", port), AppHandler)
+    _load_project()
+    server = ThreadingHTTPServer(("127.0.0.1", port), AppHandler)
+    server.daemon_threads = True
     print(f"\n  Ambient Video Automation")
     print(f"  Running at: http://localhost:{port}")
     print(f"  Press Ctrl+C to stop.\n")
 
-    try:
-        import webbrowser
-        webbrowser.open(f"http://localhost:{port}")
-    except Exception:
-        pass
+    if open_browser:
+        try:
+            import webbrowser
+            webbrowser.open(f"http://localhost:{port}")
+        except Exception:
+            pass
 
     try:
         server.serve_forever()

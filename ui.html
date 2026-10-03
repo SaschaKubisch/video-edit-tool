@@ -449,6 +449,17 @@
           </div>
         </div>
 
+        <div class="setting-row">
+          <label>Resolve project name</label>
+          <input type="text" class="setting-input" id="resolveProjectInput"
+                 value="Ambient Video Project">
+        </div>
+        <div class="setting-row">
+          <label>Timeline name</label>
+          <input type="text" class="setting-input" id="resolveTimelineInput"
+                 value="Main Timeline">
+        </div>
+
         <div class="progress-bar" id="syncProgress" style="display:none">
           <div class="progress-fill" id="syncProgressFill"></div>
         </div>
@@ -496,13 +507,31 @@ let timeline = [];
 let browserTarget = null;
 let browserCurrentPath = "";
 let pollTimer = null;
+const SYNC_LABEL = "Copy & Rename Audio Files";
 
 // ── API helpers ──
 async function api(method, path, body) {
   const opts = { method, headers: { "Content-Type": "application/json" } };
   if (body) opts.body = JSON.stringify(body);
   const r = await fetch(path, opts);
-  return r.json();
+  let data;
+  try { data = await r.json(); } catch (e) { data = { error: "Unexpected server response (" + r.status + ")" }; }
+  if (!r.ok && !data.error) data.error = "Request failed (" + r.status + ")";
+  return data;
+}
+
+function escapeHtml(str) {
+  return String(str).replace(/[&<>"']/g, c => (
+    { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+function thumbUrl(m) {
+  return `/api/thumbnail/${m.index}?v=${encodeURIComponent(m.thumb_version || 0)}`;
+}
+
+// Show a POST error in the status bar and let the user try again
+function showRequestError(message) {
+  updateStatus({ step: "error", message, progress: 0 });
 }
 
 // ── Step navigation ──
@@ -526,6 +555,7 @@ function startPolling() {
   if (pollTimer) clearInterval(pollTimer);
   pollTimer = setInterval(async () => {
     const s = await api("GET", "/api/status");
+    if (s.error) { return; }
     if (s.progress >= 100 || s.step === "error" || s.step === "idle") {
       clearInterval(pollTimer);
       pollTimer = null;
@@ -545,6 +575,22 @@ function updateStatus(s) {
   else if (s.progress >= 100) dot.classList.add("done");
   else if (s.step !== "idle") dot.classList.add("active");
 
+  if (s.step === "error") {
+    const hasMatches = project.matches && project.matches.length > 0;
+    document.getElementById("matchBtn").disabled = false;
+    document.getElementById("matchBtn").textContent = hasMatches ? "Re-match Files" : "Match Files";
+    document.getElementById("syncBtn").disabled = false;
+    document.getElementById("syncBtn").textContent = SYNC_LABEL;
+    document.getElementById("resolveBtn").disabled = false;
+    ["matchProgress", "syncProgress"].forEach(id => {
+      document.getElementById(id).style.display = "none";
+    });
+    ["matchProgressFill", "syncProgressFill"].forEach(id => {
+      document.getElementById(id).style.width = "0%";
+    });
+    return;
+  }
+
   // Update progress bars
   if (s.step.startsWith("match") || s.step === "thumbnails") {
     document.getElementById("matchProgress").style.display = "block";
@@ -561,6 +607,7 @@ function updateStatus(s) {
     document.getElementById("syncProgressFill").style.width = s.progress + "%";
     if (s.progress >= 100) {
       document.getElementById("syncBtn").disabled = false;
+      document.getElementById("syncBtn").textContent = SYNC_LABEL;
       markStepCompleted(3);
       showSyncResults(s.message);
     }
@@ -590,7 +637,8 @@ async function startMatch() {
   document.getElementById("matchProgress").style.display = "block";
   document.getElementById("matchProgressFill").style.width = "5%";
 
-  await api("POST", "/api/match", { video_dir: videoDir, audio_dir: audioDir });
+  const resp = await api("POST", "/api/match", { video_dir: videoDir, audio_dir: audioDir });
+  if (resp.error) { showRequestError(resp.error); return; }
   startPolling();
 }
 
@@ -608,8 +656,8 @@ function showMatchResults() {
   project.matches.forEach(m => {
     const confClass = m.confidence >= 0.3 ? "conf-high" : m.confidence >= 0.15 ? "conf-med" : "conf-low";
     html += `<li>
-      <span class="filename">${m.video_file}</span> &harr;
-      <span class="filename">${m.audio_file}</span>
+      <span class="filename">${escapeHtml(m.video_file)}</span> &harr;
+      <span class="filename">${escapeHtml(m.audio_file)}</span>
       &nbsp; <span class="conf-badge ${confClass}">${(m.confidence * 100).toFixed(0)}%</span>
       &nbsp; offset: ${m.offset.toFixed(2)}s
     </li>`;
@@ -633,7 +681,7 @@ function renderScenes() {
     .map(m => {
       const dur = fmtDur(m.video_duration);
       const confClass = m.confidence >= 0.3 ? "conf-high" : m.confidence >= 0.15 ? "conf-med" : "conf-low";
-      const thumbSrc = m.has_thumbnail ? `/api/thumbnail/${m.index}` : "";
+      const thumbSrc = m.has_thumbnail ? thumbUrl(m) : "";
       const thumbHtml = thumbSrc
         ? `<img class="thumb" src="${thumbSrc}" alt="Scene ${m.index}" loading="lazy">`
         : `<div class="thumb" style="display:flex;align-items:center;justify-content:center;color:#333;">No thumbnail</div>`;
@@ -647,7 +695,7 @@ function renderScenes() {
             <span class="conf-badge ${confClass}">match: ${(m.confidence*100).toFixed(0)}%</span>
             &nbsp; offset: ${m.offset.toFixed(2)}s
           </div>
-          <div class="scene-files">${m.video_file}<br>${m.audio_file}</div>
+          <div class="scene-files">${escapeHtml(m.video_file)}<br>${escapeHtml(m.audio_file)}</div>
         </div>
       </div>`;
     }).join("");
@@ -683,13 +731,13 @@ function renderTimeline() {
   empty.style.display = "none";
   // Rebuild
   const items = timeline.map((t, i) => {
-    const thumbSrc = t.has_thumbnail ? `/api/thumbnail/${t.index}` : "";
+    const thumbSrc = t.has_thumbnail ? thumbUrl(t) : "";
     const thumbHtml = thumbSrc
       ? `<img class="tl-thumb" src="${thumbSrc}">`
       : `<div class="tl-thumb" style="background:#0a0a2e;display:flex;align-items:center;justify-content:center;color:#333;font-size:0.7em;">?</div>`;
 
     return `<div class="timeline-item" draggable="true" data-idx="${i}"
-                 ondragstart="tlDragStart(event,${i})"
+                 ondragstart="tlDragStart(event,${i})" ondragend="tlDragEnd(event)"
                  ondragover="event.preventDefault();this.classList.add('drag-over')"
                  ondragleave="this.classList.remove('drag-over')"
                  ondrop="tlDrop(event,${i})">
@@ -697,7 +745,7 @@ function renderTimeline() {
       ${thumbHtml}
       <div class="tl-info">
         <div class="tl-title">Scene ${t.index} — ${fmtDur(t.video_duration)}</div>
-        <div class="tl-meta">${t.video_file} + ${t.audio_file}</div>
+        <div class="tl-meta">${escapeHtml(t.video_file)} + ${escapeHtml(t.audio_file)}</div>
         <div class="trim-row">
           <label>Trim start:</label>
           <input type="number" class="trim-input" step="0.5" min="0"
@@ -733,6 +781,11 @@ function updateTotalDuration() {
 
 let tlDragIdx = null;
 function tlDragStart(e, idx) { tlDragIdx = idx; e.target.classList.add("dragging"); }
+function tlDragEnd(e) {
+  tlDragIdx = null;
+  e.target.classList.remove("dragging");
+  document.querySelectorAll(".timeline-item.drag-over").forEach(el => el.classList.remove("drag-over"));
+}
 function tlDrop(e, targetIdx) {
   e.preventDefault();
   e.target.closest(".timeline-item")?.classList.remove("drag-over");
@@ -784,25 +837,25 @@ async function startSync() {
   document.getElementById("syncProgress").style.display = "block";
   document.getElementById("syncProgressFill").style.width = "5%";
 
-  await api("POST", "/api/sync", { output_dir: outputDir || undefined });
+  const resp = await api("POST", "/api/sync", { output_dir: outputDir || undefined });
+  if (resp.error) { showRequestError(resp.error); return; }
   startPolling();
 }
 
 async function pushToResolve() {
-  const outputDir = document.getElementById("outputDirInput").value.trim() || "synced_output";
+  const projectName = document.getElementById("resolveProjectInput").value.trim() || "Ambient Video Project";
+  const timelineName = document.getElementById("resolveTimelineInput").value.trim() || "Main Timeline";
   document.getElementById("resolveBtn").disabled = true;
 
-  const name = prompt("Resolve project name:", "Ambient Video Project");
-  if (!name) { document.getElementById("resolveBtn").disabled = false; return; }
-
-  await api("POST", "/api/resolve", { name, clips_dir: outputDir });
+  const resp = await api("POST", "/api/resolve", { project_name: projectName, timeline_name: timelineName });
+  if (resp.error) { showRequestError(resp.error); return; }
   startPolling();
 }
 
 function showSyncResults(message) {
   document.getElementById("syncResults").style.display = "block";
   document.getElementById("syncResultsContent").innerHTML =
-    `<p style="color:#2ecc71">${message}</p>`;
+    `<p style="color:#2ecc71">${escapeHtml(message)}</p>`;
 }
 
 // ── File Browser ──
@@ -835,11 +888,14 @@ async function navigateBrowser(path) {
   body.innerHTML = resp.entries.map(e => {
     if (!e.is_dir) return "";
     const icon = e.name === ".." ? "&#8593;" : "&#128193;";
-    return `<div class="file-entry dir" ondblclick="navigateBrowser('${e.path.replace(/'/g, "\\'")}')">
+    return `<div class="file-entry dir" data-path="${escapeHtml(e.path)}">
       <span class="icon">${icon}</span>
-      <span>${e.name}</span>
+      <span>${escapeHtml(e.name)}</span>
     </div>`;
   }).join("");
+  body.querySelectorAll(".file-entry").forEach(el => {
+    el.addEventListener("dblclick", () => navigateBrowser(el.dataset.path));
+  });
 }
 
 function selectCurrentDir() {

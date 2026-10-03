@@ -3,7 +3,7 @@
 **Version:** 1.0
 **Date:** 2026-10-03
 **Owner:** Sascha Kubisch
-**Status:** Implemented (v1), Resolve script integration pending
+**Status:** Implemented (v1); undo for audio copies done; in-Resolve script (`resolve_import.py`) pending
 
 ---
 
@@ -61,7 +61,7 @@ A single user (the filmmaker) running the tool locally on macOS. No multi-user, 
 - **Speed.** Matching 30 × 30 files should finish in well under a minute on a laptop; expensive audio extraction happens only when needed (ambiguous pairs, offset detection) and only on the first 60 s of each file.
 - **Transparency.** Console output explains each matching decision (duration diff, correlation scores, swaps) so the user can audit results.
 - **Recoverability.** Any mistake must be correctable in Resolve: audio is delivered as a separate file and track, never baked into the video.
-- **Minimal dependencies.** Python 3.10+, `numpy`, `scipy`, `tqdm`, plus system `ffmpeg`/`ffprobe`.
+- **Minimal dependencies.** Python 3.9+, `numpy`, `scipy`, `tqdm`, plus system `ffmpeg`/`ffprobe`.
 
 ## 7. Out of Scope (v1)
 
@@ -91,8 +91,14 @@ A single user (the filmmaker) running the tool locally on macOS. No multi-user, 
 
 ## 10. Open Items / Future Work
 
-- Ship `resolve_import.py` as a drop-in for `/Library/Application Support/Blackmagic Design/DaVinci Resolve/Fusion/Scripts/Utility/`.
-- Surface the "ambiguous → resolved by correlation" decisions in the UI, not just the console.
+Done since v1:
+- F14 undo: `python3 main.py sync --undo` removes the audio copies listed in `ambient_audio_copies.json`; the legacy `rename` command has its own undo and now aborts on name collisions.
+- Resolve push from the app/CLI (external scripting, may require Studio), with a pure, unit-tested timeline plan.
+
+Still open:
+- Ship `resolve_import.py` as a drop-in for `/Library/Application Support/Blackmagic Design/DaVinci Resolve/Fusion/Scripts/Utility/` (free edition, F12).
+- Surface the "ambiguous → resolved by correlation" decisions in the UI; they are still console-only.
+- Undo for the copy step from the UI (CLI only today).
 - Allow manual re-pairing in the UI (drag an audio onto a different video).
 - Optional `.srt` generation for narration subtitles from per-scene labels.
 - Package as a double-clickable `.command` / `.app` so Terminal isn't required.
