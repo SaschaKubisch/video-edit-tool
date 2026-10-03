@@ -598,6 +598,11 @@ function updateStatus(s) {
     if (s.progress >= 100) {
       document.getElementById("matchBtn").disabled = false;
       document.getElementById("matchBtn").textContent = "Re-match Files";
+      // The server resets the selection on every match, so reset the timeline too
+      timeline = [];
+      renderTimeline();
+      const outInput = document.getElementById("outputDirInput");
+      if (!outInput.value.trim()) outInput.value = project.video_dir || "";
       showMatchResults();
       markStepCompleted(1);
     }
@@ -922,16 +927,20 @@ function fmtDur(sec) {
       document.getElementById("videoDirInput").value = data.video_dir || "";
       document.getElementById("audioDirInput").value = data.audio_dir || "";
       document.getElementById("outputDirInput").value = data.output_dir || data.video_dir || "";
+      document.getElementById("matchBtn").textContent = "Re-match Files";
+      showMatchResults();
       markStepCompleted(1);
       if (data.selection && data.selection.length > 0) {
         // Restore timeline
         data.selection.forEach(idx => {
           const m = project.matches.find(x => x.index === idx);
           if (m) {
-            const trims = data.selection_trims[idx] || {};
+            const trims = (data.selection_trims || {})[idx] || {};
             timeline.push({ ...m, trimStart: trims.start || 0, trimEnd: trims.end || 0 });
           }
         });
+        renderTimeline();
+        renderScenes();
         markStepCompleted(2);
       }
     }
