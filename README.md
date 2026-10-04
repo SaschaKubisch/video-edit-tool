@@ -87,3 +87,7 @@ python3 -m unittest discover -s tests -v
 ```
 
 See `PRD.md` for requirements and `SPECS.md` for the technical design.
+
+## License
+
+MIT, see `LICENSE`.

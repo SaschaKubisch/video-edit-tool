@@ -14,6 +14,7 @@
   guards against saving or copying an empty selection.
 - Resolve project and timeline name fields in the UI.
 - `--version` flag.
+- MIT license.
 - Test suite (`python3 -m unittest discover -s tests`, 60 tests).
 
 ### Changed
