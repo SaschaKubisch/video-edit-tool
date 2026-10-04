@@ -1,9 +1,9 @@
 # Product Requirements Document — Ambient Video Auto
 
-**Version:** 1.0
+**Version:** 1.1
 **Date:** 2026-10-03
 **Owner:** Sascha Kubisch
-**Status:** Implemented (v1); undo for audio copies done; in-Resolve script (`resolve_import.py`) pending
+**Status:** Implemented (v1.1.0); undo for audio copies done; in-Resolve script (`resolve_import.py`) pending
 
 ---
 

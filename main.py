@@ -245,6 +245,7 @@ def main():
         description="Dual-System Audio Video Automation (BMPCC 4K + Zoom H2N)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
+    parser.add_argument("--version", action="version", version=f"%(prog)s {config.VERSION}")
     parser.add_argument("--project", "-p", help=f"Project file path (default: {config.PROJECT_FILE})")
 
     subparsers = parser.add_subparsers(dest="command")

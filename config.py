@@ -3,6 +3,8 @@ Configuration for Dual-System Audio Video Automation.
 Designed for BMPCC 4K + Zoom H2N workflow. Constants only.
 """
 
+VERSION = "1.1.0"
+
 # ── File discovery ───────────────────────────────────────────────
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".mxf", ".braw"}
 AUDIO_EXTENSIONS = {".wav", ".flac", ".aiff", ".aif"}
