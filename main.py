@@ -13,7 +13,7 @@ Commands:
   resolve  Push the ordered timeline (V1 video, A2 audio) into DaVinci Resolve
   rename   (legacy) rename both files of each pair to scene_NN.*, with undo
   convert  make a small preview copy of every matched .braw clip in the work folder
-  analyse  find the sync clap at the start of each clip (report in the work folder)
+  analyse  find the sync clap at the start of each clip, find the steady scenes (reports in the work folder)
   timeline validate the timeline file
 
 Usage:
@@ -343,16 +343,15 @@ def cmd_convert(args, decoder=None):
 
 
 def cmd_analyse(args):
-    """Analyse the clips of the project (SPECS 7). So far: the sync clap."""
-    import clap
+    """Analyse the clips of the project (SPECS 7): the sync clap and the steady scenes."""
     import safety
 
     def fail(message):
         print(f"Error: {message}")
         sys.exit(2)
 
-    if not args.clap:
-        fail("Say what to analyse. So far only --clap exists.")
+    if not (args.clap or args.scenes):
+        fail("Say what to analyse: --clap (the sync clap) or --scenes (the steady scenes).")
     project_file = args.project or config.PROJECT_FILE
     if not Path(project_file).exists():
         fail(f"Project file not found: {project_file}\nRun 'python main.py match' first.")
@@ -361,14 +360,30 @@ def cmd_analyse(args):
     if not work_dir:
         fail("No work directory. Pass --work DIR (a folder on the SSD) or set "
              "work_dir in the project file.")
-    try:
-        rows = clap.analyse_project(project, work_dir, limit=args.limit,
-                                    report_name=args.report_name)
-    except safety.OriginalsProtectedError as e:
-        fail(str(e))
-    print()
-    print(clap.format_report(rows))
-    print(f"Report: {os.path.join(work_dir, 'reports', args.report_name)}.json / .txt")
+    only = [s.strip() for s in args.only.split(",") if s.strip()] if args.only else None
+    if args.clap:
+        import clap
+        name = args.report_name or "clap-report"
+        try:
+            rows = clap.analyse_project(project, work_dir, limit=args.limit, report_name=name)
+        except safety.OriginalsProtectedError as e:
+            fail(str(e))
+        print()
+        print(clap.format_report(rows))
+        print(f"Report: {os.path.join(work_dir, 'reports', name)}.json / .txt")
+    if args.scenes:
+        import stable
+        name = args.report_name or "scenes-report"
+        if args.clap and args.report_name:
+            name = f"{args.report_name}-scenes"
+        try:
+            rows = stable.analyse_project(project, work_dir, limit=args.limit, only=only,
+                                          report_name=name)
+        except safety.OriginalsProtectedError as e:
+            fail(str(e))
+        print()
+        print(stable.format_report(rows))
+        print(f"Report: {os.path.join(work_dir, 'reports', name)}.json / .txt")
 
 
 def cmd_timeline(args):
@@ -485,15 +500,22 @@ def build_parser():
 
     # ── analyse ──
     p_analyse = subparsers.add_parser("analyse",
-        help="Analyse the clips: find the sync clap")
+        help="Analyse the clips: find the sync clap, find the steady scenes")
     p_analyse.add_argument("--clap", action="store_true",
         help="Find the sync clap at the start of each clip (camera audio and WAV)")
+    p_analyse.add_argument("--scenes", action="store_true",
+        help="Find the steady scenes of each clip in its preview copy "
+             "(only copies whose status in conversion.json is done)")
     p_analyse.add_argument("--work", "-w",
         help="Work folder on the SSD (default: work_dir of the project file)")
     p_analyse.add_argument("--limit", type=int,
         help="Analyse only the first N matched clips")
-    p_analyse.add_argument("--report-name", default="clap-report",
-        help="Name of the report files in <work>/reports (default: clap-report)")
+    p_analyse.add_argument("--only",
+        help="With --scenes: analyse only the clips with these names (comma separated, "
+             "no extension)")
+    p_analyse.add_argument("--report-name",
+        help="Name of the report files in <work>/reports (default: clap-report, "
+             "scenes-report)")
     p_analyse.set_defaults(func=cmd_analyse)
 
     # ── timeline ──

@@ -89,3 +89,18 @@ CLAP_LATE_SEC = 10.0          # a clap later than this is flagged for review
 # 0.37 s; the lowest of the 96 is 0.0851 s, so the lower end is 0.085). An offset
 # outside it is flagged for review.
 USUAL_OFFSET_RANGE_SEC = (0.085, 0.37)
+
+# ── Steady scenes (`analyse --scenes`, SPECS 7.4, decision D7: every steady scene) ──
+# All values are starting values; the owner corrects them from the report.
+STABLE_SAMPLE_FPS = 5         # the analysis looks at about 5 frames per second
+STABLE_WIDTH_PX = 480         # ... scaled to 480 pixels wide, grey
+STABLE_GRID = (4, 3)          # columns and rows of blocks; each block is measured on its own
+STABLE_MOVE_PX = 0.5          # camera shift between two samples that counts as movement
+STABLE_DRIFT_PX = 3.0         # shift against the first sample of the run that counts as movement
+STABLE_MIN_PEAK = 0.15        # a block whose correlation peak is lower is not used
+STABLE_MIN_INLIERS = 3        # blocks that must agree on one camera motion to measure a step
+STABLE_INLIER_PX = 0.75       # blocks agree when they differ by less than this
+STABLE_CUT_DIFF = 0.12        # mean picture change (0 to 1) that counts as a cut when no block can be measured
+STABLE_MIN_RUN_SEC = 2.0      # D7: a scene shorter than this is dropped
+STABLE_MERGE_GAP_SEC = 0.5    # a shake shorter than this that ends where it began does not split a scene
+STABLE_GUARD_SEC = 0.3        # each scene loses this much at both ends, so the camera has settled
