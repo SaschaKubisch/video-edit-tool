@@ -1,9 +1,9 @@
 # Product Requirements Document - Ambient Video Auto
 
-**Version:** 2.1 (draft for the owner's review)
+**Version:** 2.2 (draft for the owner's review)
 **Date:** 2026-10-26
 **Owner:** Sascha Kubisch
-**Status:** Matching and sync (requirements M1 to M6) are built and released as v1.1.0. Step 1, the conversion test, is done: its results are in section 5 and in `SPECS.md` section 6. Everything else in this document is planned and not built. Section 3 records the owner's decisions of 2026-10-26 on storage, colour, frame, Python and export. Section 2 replaces the goal of v1.1.
+**Status:** Matching and sync (requirements M1 to M6) are built and released as v1.1.0. Step 1, the conversion test, is done: its results are in section 5 and in `SPECS.md` section 6. Everything else in this document is planned and not built. Section 3 records the owner's decisions of 2026-10-26 on storage, colour, frame, Python and export. Section 2 replaces the goal of v1.1. Version 2.2 records the owner's decisions of 2026-10-26 on the clap (D6), steady scenes (D7), transitions (D8), reading cuts back from Shotcut (D11) and the encoder (D17); step 2 is being built.
 
 Companion document: `SPECS.md` (how it is built, the timeline file format, the tests).
 
@@ -21,7 +21,7 @@ Companion document: `SPECS.md` (how it is built, the timeline file format, the t
 - **Timeline file**: the one JSON file that describes the film: which segments in which order, fades, colour, loudness, titles, subtitles, export settings. Defined in `SPECS.md`.
 - **Sync clap**: the clap made at the start of a recording so picture and sound can be aligned.
 - **Offset**: the number of seconds by which the same event comes later in the audio file than in the video. offset = t_audio - t_video.
-- **ProRes**: Apple's editing video format. It stores every frame whole, so a cut at any frame is exact. "10-bit" means 1024 levels per colour channel. In this plan it is used only for the optional master file and for a possible Shotcut copy (D11).
+- **ProRes**: Apple's editing video format. It stores every frame whole, so a cut at any frame is exact. "10-bit" means 1024 levels per colour channel. In this plan it is used only for the optional master file.
 - **Preview copy**: the small video file (MP4) the tool makes once from each `.braw` clip. It is 2048 pixels wide, has the base LUT applied, and carries the camera's audio. Analysis, the film preview in the tool's page and Shotcut read the preview copies. The final render does not: it reads the `.braw` files.
 - **Film preview**: the small rendering of the whole film from the timeline file that the tool's page plays.
 - **Decoder**: software that turns BRAW data into pictures.
@@ -67,11 +67,11 @@ The tool does all automatic work on one timeline file. It renders a preview and 
 
 ## 3. Settled Decisions (Owner)
 
-These decisions are settled. This document builds on them and does not reopen them. Each is also a row in section 12 or a requirement in section 9. D1, D2, D3 and D5 were open decisions in version 2.0; the owner answered them on 2026-10-26 (section 14 lists what remains open).
+These decisions are settled. This document builds on them and does not reopen them. Each is also a row in section 12 or a requirement in section 9. D1, D2, D3 and D5 were open decisions in version 2.0; the owner answered them on 2026-10-26 (section 14 lists what remains open). D6, D7, D8, D11 and D17 were answered later the same day.
 
 | Area | Decision |
 |------|----------|
-| Editing | The tool does all automatic work on one timeline file (JSON) that Claude Code can edit. The tool renders a preview and the final film itself. The tool's web page gets a small preview with simple trim controls. The tool also writes a Shotcut project (MLT XML) for rare hand work, done last, because Shotcut edits do not flow back. |
+| Editing | The tool does all automatic work on one timeline file (JSON) that Claude Code can edit. The tool renders a preview and the final film itself. The tool's web page gets a small preview with simple trim controls. The tool also writes a Shotcut project (MLT XML) for rare hand work, done last. After the hand work the tool reads the cut points and the order back from the Shotcut project (D11, section 3). |
 | Footage | All clips are BRAW from a BMPCC 4K. Audio comes from a Zoom H2N as WAV. ffmpeg cannot decode BRAW video. |
 | Storage (D1) | **Option A.** The owner asked: "can we have it smaller", then decided: "okay lets do A". The tool keeps no full-resolution working copies. It makes only small preview copies (H.264, 2048 pixels wide) for analysis, the film preview in the tool's page and Shotcut. The final 4K render decodes the original `.braw` files directly: best quality, one encode. The ProRes working copies of version 2.0 are dropped. |
 | Decoder | Decoding goes through `vapoursynth-brawsource` (a plugin for the VapourSynth video framework, using the Apple GPU through Metal). Step 1 tested it on two real clips and it works (section 5). The Blackmagic RAW SDK stays the second decoder and is written only if the plugin fails later. |
@@ -79,6 +79,11 @@ These decisions are settled. This document builds on them and does not reopen th
 | Frame (D5) | **DCI 4K, 4096 x 2160**, as the owner decided: "DCI 4K, bars for wide". The wider clips (4096 x 1720) keep their full picture and are letterboxed: black bars above and below. Nothing is cropped from them. |
 | Python (D3) | **Python 3.12 and OpenCV allowed**, as the owner decided: "Yes, 3.12 + OpenCV". The tool moves to Python 3.12 and runs in its own environment. It may use OpenCV. |
 | Export | **Default final export:** MP4, H.264 video, DCI 4K 4096 x 2160, about 45 Mbit/s, AAC audio. YouTube's recommended range for 4K at 30 frames per second is 35 to 45 Mbit/s [documented, Src11]. **Master:** a ProRes 422 HQ `.mov` file is made only when the owner ticks it; it needs about 130 GB per 20 minutes at DCI 4K [estimate given with the decision; `SPECS.md` section 5.6 gives the arithmetic], so the free space is checked first. **Vertical shorts:** MP4, H.264, 1080 x 1920. The owner first said: "for the final export we can do quick time movie or another best practice format", then chose this. |
+| Clap (D6) | **"Only at the start".** Each clip has one clap, at its beginning. The tool cuts everything up to 0.5 s after the clap (starting value, changeable). A clip without a clap is kept from its first steady frame and is listed in the report. |
+| Steady scenes (D7) | **"Every steady scene".** The tool keeps each steady part of a clip as its own scene and drops only the movement between them. A scene shorter than 2 s is dropped (starting value, changeable). |
+| Transitions (D8) | **"Hard cut"** for the picture. The sound crossfades for 0.5 s at every join. The film fades in over 1 s and out over 2 s (starting values, changeable). |
+| Shotcut read-back (D11) | **"Tool reads cuts back".** After hand work in Shotcut, the tool reads the cut points and the order from the Shotcut project back into its timeline and renders the 4K film from the `.braw` files. Effects made only in Shotcut do not come back. Built in step 3. This answers the part of D11 about the preview size. The part about the audio form is still open (section 14). |
+| Encoder (D17) | **"Hardware (fast)".** The default encoder of the final export is `h264_videotoolbox` (Apple's hardware encoder) at 45 Mbit/s. `libx264` (software) stays selectable. |
 | Delivery | 4K films. Vertical 9:16 shorts are cut from the 4K source. |
 | Speech | English. This covers subtitles and transcript search. |
 | Installs allowed | `ffmpeg-full` (Homebrew, GPL, keg-only, installed beside the existing ffmpeg), VapourSynth with the BRAW plugin in the tool's own Python 3.12 environment, OpenCV, and Shotcut (installed on 2026-10-26, version 26.9.28 [measured]). |
@@ -133,7 +138,7 @@ All numbers below are [measured] on 2026-10-26.
 5. **Look and sound.** The default look is the Blackmagic Gen 5 Film to Video LUT. If the user wants a creative LUT on top, the tool shows side-by-side stills of real clips with candidate LUTs and the user picks one. The tool levels the loudness and exports the 4K film (MP4, H.264, DCI 4K, about 45 Mbit/s) from the `.braw` files. A ProRes 422 HQ master is made only if the user ticks it.
 6. **Words.** The tool writes English subtitles from the speech. The user adds titles by hand or asks Claude Code for them.
 7. **Prompt edits.** The user tells Claude Code what to change ("cut out the scene where I am frying a sausage"). Claude Code edits the timeline file, the tool checks it, and the preview shows the result.
-8. **Shotcut, last.** For rare hand work the tool writes a Shotcut project that uses the preview copies. Edits made there do not come back.
+8. **Shotcut, last.** For rare hand work the tool writes a Shotcut project that uses the preview copies. After the hand work the tool reads the cut points and the order from the Shotcut project back into the timeline file and renders the 4K film from the `.braw` files. Effects made only in Shotcut do not come back.
 9. **Shorts.** The user asks for a vertical short of a given length. The tool builds a second timeline file from the film.
 
 ## 7. Steps (Order of Work)
@@ -143,13 +148,13 @@ Each step is usable on its own. A later step starts only when the step before it
 | Step | Name | What the owner can do when it is done | Needed before it starts |
 |------|------|---------------------------------------|-------------------------|
 | 1 | Conversion test. **Done** on 2026-10-26: the conversion test, and its addendum, the preview-copy check. Results in section 5.1. | The owner knows how long one real clip takes to convert, how large the copies are and that the colour is right. Two preview copies exist and open in QuickTime-compatible players and in Shotcut's `melt`. | - |
-| 2 | Preview copies, timeline file and assembly | Get preview copies of all clips (the `convert` command, requirements C1 to C7), then a rough film in recording order, without clap and camera movement, with audio crossfades and film fades. Watch it in the page and trim it. | Step 1 result; D6 (clap), D7 (steady scene), D8 (fades) |
-| 3 | Look and sound | Get a levelled, graded DCI 4K film in MP4 (H.264, about 45 Mbit/s), rendered from the `.braw` files. Choose a creative LUT from stills if wanted. Get the Shotcut project, and the ProRes master if ticked. | D9 (loudness), D10 (creative LUT sources), D11 (Shotcut audio and size), D17 (encoder) |
+| 2 | Preview copies, timeline file and assembly | Get preview copies of all clips (the `convert` command, requirements C1 to C7), then a rough film in recording order, without clap and camera movement, with audio crossfades and film fades. Watch it in the page and trim it. | Step 1 result; D6, D7 and D8 are settled (section 3) |
+| 3 | Look and sound | Get a levelled, graded DCI 4K film in MP4 (H.264, about 45 Mbit/s), rendered from the `.braw` files. Choose a creative LUT from stills if wanted. Get the Shotcut project and read its cuts back, and the ProRes master if ticked. | D9 (loudness), D10 (creative LUT sources), D11 (audio form in the Shotcut project) |
 | 4 | Words | Get English subtitles and titles, burned in or as a file. | D12 (Whisper model), D13 (subtitle form and fonts) |
 | 5 | Prompt edits | Change the film by describing scenes to Claude Code. | D14 (meaning of "cut out", search method) |
 | 6 | Vertical shorts | Get a 9:16 short of a chosen length from the 16:9 film. | D15 (default length), D16 (crop and importance) |
 
-D4 (the Resolve option) can be answered at any time. The open decisions are in section 14. D1, D2, D3 and D5 are answered (section 3).
+D4 (the Resolve option) can be answered at any time. The open decisions are in section 14. D1, D2, D3, D5, D6, D7, D8, D17 and the preview-size part of D11 are answered (section 3).
 
 ## 8. Scope
 
@@ -159,7 +164,7 @@ D4 (the Resolve option) can be answered at any time. The open decisions are in s
 - One-time conversion of BRAW clips to preview copies.
 - The timeline file, automatic assembly, film preview, final render from the `.braw` files, export.
 - A web page with a preview player and simple trim controls.
-- A Shotcut project written from the timeline file. It uses the preview copies.
+- A Shotcut project written from the timeline file. It uses the preview copies. The tool reads the cut points and the order back from it (D11).
 - English transcript, subtitles and titles.
 - Scene search by description through Claude Code.
 - Vertical shorts.
@@ -167,7 +172,7 @@ D4 (the Resolve option) can be answered at any time. The open decisions are in s
 **Out of scope**
 
 - A full timeline editor in the browser. The page has playback and simple trim controls only.
-- Reading Shotcut edits back into the timeline file.
+- Reading Shotcut effects back into the timeline file: filters, transitions and other changes made only in Shotcut. Only cut points and order come back (D11).
 - Editing at full resolution in Shotcut. Shotcut cannot read BRAW and works on the preview copies (D11).
 - Correcting camera movement. The owner films static; movement is cut out, not corrected.
 - Grading beyond one LUT per film: no per-clip correction, no scopes.
@@ -176,7 +181,7 @@ D4 (the Resolve option) can be answered at any time. The open decisions are in s
 - HDR output. Output is SDR Rec.709 [inference: the Blackmagic Film-to-Video conversions target it].
 - Several cameras or several recorders. Windows and Linux.
 - Upload to YouTube or any other service. Any use of cloud services at run time.
-- Transitions between pictures other than a hard cut, until D8 is answered.
+- Transitions between pictures other than a hard cut (D8).
 
 ## 9. Functional Requirements
 
@@ -273,9 +278,10 @@ Step 1 tested this method on two clips (section 5.1). These requirements describ
 | E1 | Render a film preview of the film or a time range from the timeline file, from the preview copies. | Must |
 | E2 | Render the final film from the original `.braw` files, decoded at full size, never from the preview copies or the film preview. | Must |
 | E3 | Export the default final film: MP4, H.264, 4096 x 2160, about 45 Mbit/s, AAC audio. Other sizes of the same shape are allowed. | Must |
-| E4 | Write a Shotcut project (MLT XML) from the timeline file. It uses the preview copies. The export is one-way. | Must |
+| E4 | Write a Shotcut project (MLT XML) from the timeline file. It uses the preview copies. The cut points and the order can be read back (E7). | Must |
 | E5 | Write a render report: what was shortened, capped or missing. | Should |
 | E6 | Make a ProRes 422 HQ master (`.mov`) only when the owner ticks it. Before it starts, check the free space against the estimate and refuse if it is too small. | Should |
+| E7 | Read the cut points (`in`, `out`) and the order of the segments from a Shotcut project written by E4 back into the timeline file. Effects made only in Shotcut are not read; the report lists them. The 4K film is then rendered from the `.braw` files (E2). | Must |
 
 **U - Web page (steps 2 and 3)**
 
@@ -357,10 +363,14 @@ Step 1 tested this method on two clips (section 5.1). These requirements describ
 | The default look is the Blackmagic "Gen 5 Film to Video" LUT (panel d of the step-1 comparison). The preview copies carry it baked in; the final render applies it to the RAW decode. (D2, D10 in part) | Owner | The Pocket 4K Film to Video v4 LUT (panel c); the "Extended Video" variants (panels e and f); the decoder's own Rec.709 conversion (panel b); a base conversion applied only at render, with unconverted copies. | The clips are generation 5 and record Blackmagic Design Film [measured]. The owner picked panel d from the side-by-side stills. Baking it into the copies makes the film preview and the analysis show the final colours. Changing the base LUT later means making all copies again (about 39 minutes, section 5.1). |
 | The film frame is DCI 4K, 4096 x 2160. Wider clips are letterboxed. (D5) | Owner | A 3840 x 2160 UHD frame with a crop (loses up to 7 percent of the width) or a slight scale; a crop of the wide clips to fill the frame. | The owner said "DCI 4K, bars for wide". The decoded `brlt` picture is already 4096 x 2160, so it needs no crop and no scale; the `brhq` picture (4096 x 1720) keeps all its pixels, with 220-pixel bars above and below [measured sizes, arithmetic]. |
 | The tool moves to Python 3.12 in its own environment and may use OpenCV. (D3) | Owner | Python 3.12 only for the convert step; no new packages. | The owner said "Yes, 3.12 + OpenCV". The VapourSynth wheel needs 3.12 [documented, Src1]. |
-| Default export: MP4, H.264, 4096 x 2160, about 45 Mbit/s, AAC. A ProRes 422 HQ `.mov` master only on the owner's tick. Shorts: MP4, H.264, 1080 x 1920. | Owner | QuickTime movie (ProRes) as the default final export; MP4 with CRF instead of a bitrate. | The owner said "for the final export we can do quick time movie or another best practice format", then chose this. YouTube recommends 35 to 45 Mbit/s for 4K at 30 frames per second [documented, Src11]. The ProRes master is about 130 GB per 20 minutes [estimate], so it is off by default. Which encoder makes the H.264 file is open (D17). |
+| Default export: MP4, H.264, 4096 x 2160, about 45 Mbit/s, AAC. A ProRes 422 HQ `.mov` master only on the owner's tick. Shorts: MP4, H.264, 1080 x 1920. | Owner | QuickTime movie (ProRes) as the default final export; MP4 with CRF instead of a bitrate. | The owner said "for the final export we can do quick time movie or another best practice format", then chose this. YouTube recommends 35 to 45 Mbit/s for 4K at 30 frames per second [documented, Src11]. The ProRes master is about 130 GB per 20 minutes [estimate], so it is off by default. The encoder is `h264_videotoolbox` by default (D17, next rows); `libx264` stays an option. |
 | One timeline file (JSON) holds the edit. | Owner | A browser timeline editor (months of work [inference]); a native Swift app (more [inference]); a generated Shotcut project as the main file. | An agent edits a small JSON file more reliably than MLT XML [inference]. Shotcut and Kdenlive project files are not stable interfaces [documented, Src6, Src7]. |
 | The tool renders preview and film itself. | Owner | Render with Shotcut's engine (`melt`). | Owner decision. The specification builds on `ffmpeg-full` and the decoder (Design). `melt` reads the preview copies and renders from them, and Shotcut's own ffmpeg cannot decode BRAW [measured]. |
-| A Shotcut project is written last and never read back. | Owner | Kdenlive; a reader for Shotcut edits. | Reading edits back needs a reader for MLT XML [inference]. |
+| A Shotcut project is written last. After hand work the tool reads the cut points and the order back; effects made only in Shotcut do not come back. (D11) | Owner | Never read back (version 2.1); a reader for all Shotcut edits, filters included; full-size ProRes copies for Shotcut. | The owner answered "Tool reads cuts back". Cut points and order are plain numbers in the MLT XML (`in` and `out` of each playlist entry) [inference]. The preview copy and the `.braw` file have the same frame numbers, so the 4K render can use them. A reader for effects would need a model of every Shotcut filter [inference]. The MLT format is documented as unstable [documented, Src6], so the reader targets one tested Shotcut version. |
+| One clap per clip, at the start. Cut up to 0.5 s after it. A clip without a clap starts at its first steady frame and is listed. (D6) | Owner | A clap at the end as well; search the whole clip. | The owner answered "Only at the start". The 0.5 s guard is a starting value that the owner can change. |
+| Keep every steady scene of a clip; drop only the movement between them; drop scenes shorter than 2 s. (D7) | Owner | Keep only the steadiest scene of each clip. | The owner answered "Every steady scene". 2 s is a starting value. The case of a clip with no scene of 2 s is not decided; the plan leaves the clip out and lists it. |
+| Hard cut for the picture. Sound crossfade 0.5 s. Film fade-in 1 s, fade-out 2 s. (D8) | Owner | A dissolve between scenes. | The owner answered "Hard cut" for the picture. The lengths are starting values that the owner can change. |
+| The default encoder of the final export is `h264_videotoolbox` at 45 Mbit/s; `libx264` stays selectable. (D17) | Owner | `libx264` preset slow as the default. | The owner answered "Hardware (fast)". Measured on 5 s of a `brlt` clip at 4096 x 2160 (section 5.1): `h264_videotoolbox` ran at 13.9 to 15.2 fps and gave 45.7 Mbit/s; `libx264` preset slow ran at 4.1 to 4.4 fps and gave 49.1 Mbit/s with the same 45 Mbit/s setting. A 20-minute film takes about 40 minutes against about 2.4 hours at the loads of that test [arithmetic]. Picture quality was compared on one frame only (PSNR against the step-1 still: 39.1 dB and 39.3 dB). Check 3.8 compares both on the whole first shoot. |
 | One LUT for the whole film, chosen from side-by-side stills; tetrahedral interpolation. | Owner | Per-clip grading. | Fits static ambient films; one choice, easy to repeat. |
 | 4K films; shorts cut from the 4K source. | Owner | 1080p. | A 9:16 window of a 1080p frame is 608 pixels wide and would be enlarged to 1080 [arithmetic]. |
 | English speech only. | Owner | Several languages. | Fixes the Whisper model class and the subtitle rules. |
@@ -380,7 +390,7 @@ Step 1 tested this method on two clips (section 5.1). These requirements describ
 | Disk space. The internal disk has 9.0 GB free. The preview copies of the first shoot take about 3.6 GB; a ProRes master about 130 GB per 20 minutes. | Step 2, E6 | All generated files go to the SSD; C6 and E6 refuse to start without space. |
 | Colour: a LUT made for one input state looks wrong on another. The default LUT matches generation 5, which the test clip carries [measured]; the other clips are probed when `convert` runs. How QuickTime and YouTube display the BT.709-tagged result was not checked [unverified]. | Step 2, step 3 | `convert` reads the generation of every clip and warns when it is not 5. Check 3.8: the owner compares the render with the chosen stills in the players used. |
 | Changing the base LUT after the preview copies exist means making all copies again (about 39 minutes). | Step 2 | `conversion.json` stores the hash of the baked LUT; the timeline check warns when it differs from `look.base`. |
-| Shotcut cannot read BRAW and works on the preview copies. A film exported from Shotcut after hand work is preview-sized (2048 pixels wide), not 4K. | D11 | Shotcut stays a last, rare step. D11 asks what the owner wants here. |
+| Shotcut cannot read BRAW and works on the preview copies. A film exported from Shotcut is preview-sized (2048 pixels wide), not 4K. The reader (E7) depends on the Shotcut file format, which is documented as unstable [documented, Src6]. | D11 | The tool reads the cut points and the order back and renders the 4K film from the `.braw` files. The reader targets one tested Shotcut version and ignores what it does not know. |
 | Blackmagic's own `.cube` files come from the local Resolve install. Their redistribution terms were not found [unverified]. | Step 3 | They are used from the local install and never committed. |
 | Steady-scene thresholds are starting values. A subject that fills the frame can mislead the movement measure [inference]. | Step 2 | Thresholds are settings. The report lists every cut. Calibrate on the real clips. |
 | Clock drift between camera and recorder over a 271-second clip. The offset is measured near the start only. | Step 2 | Step 2 measures the offset again near the end of the longest clips and reports the drift. |
@@ -395,7 +405,7 @@ Step 1 tested this method on two clips (section 5.1). These requirements describ
 
 Nothing here is decided. Where the owner has said something, it is quoted. The current plan in `SPECS.md` is a technical default, not a decision. Each question is needed before the step named.
 
-Answered on 2026-10-26 and moved to section 3 (settled decisions) and section 12 (rationale): **D1** storage (option A), **D2** colour, **D3** Python and packages, **D5** frame shape, and the default LUT of **D10**. The numbers D1, D2, D3 and D5 are not reused. **D17** is new: it comes from the speed measurements of step 1.
+Answered on 2026-10-26 and moved to section 3 (settled decisions) and section 12 (rationale): **D1** storage (option A), **D2** colour, **D3** Python and packages, **D5** frame shape, the default LUT of **D10**, **D6** the clap, **D7** steady scenes, **D8** transitions and fades, **D17** the encoder, and the preview-size part of **D11**. These numbers are not reused. **D17** came from the speed measurements of step 1.
 
 **Any time**
 
@@ -403,16 +413,13 @@ Answered on 2026-10-26 and moved to section 3 (settled decisions) and section 12
 
 **Before step 2**
 
-- **D6. The clap.** Open: where in the clip it is (only at the start? also a clap at the end?), how many seconds after the clap each segment should start (starting value 0.5 s), and what to do when no clap is found.
-- **D7. What "most stable scene" means.** The owner said: "detect the most stable scene and cut out camera movement" and "split a clip with several static scenes into one clip per scene". Open: does the tool keep every steady scene and drop only the movement between them (the plan), or keep only the steadiest scene of each clip? Open: the shortest scene to keep (starting value 2 s), and what to do with a clip that has no steady scene (starting plan: leave it out and list it in the report).
-- **D8. Picture and fades.** The owner asked for "smooth audio fade out and in between scenes" and for fades at the film's start and end. Nothing was said about the picture between scenes. Open: hard cut (the plan) or a dissolve. Open: fade lengths. Starting values: 1.0 s in, 2.0 s out, 0.5 s audio crossfade [inference].
+- **D7, the part not answered.** What to do with a clip that has no steady scene of at least 2 s. The plan: leave the clip out and list it in the report. A setting can keep the whole clip after the clap instead.
 
 **Before step 3**
 
 - **D9. Loudness target.** The owner said: "levelise all audio loudness". Open: the number. YouTube is described as targeting about -14 LUFS integrated with a -1 dBTP peak; the sources are secondary and the official upload page gives no loudness number [documented, secondary, Src12]. Open: is every segment levelled to the same loudness (the plan), or only the film as a whole?
 - **D10. Creative LUT sources (the open part).** The owner asked for "state-of-the-art LUTs". Settled: the default look is the Blackmagic Gen 5 Film to Video LUT. Open: which LUT collection the owner trusts for a creative LUT on top of it, and where it lives on the machine. Free packs exist; their licences were not read [documented, secondary; found in the research report, not in Appendix B].
-- **D11. Shotcut project.** Open: separate audio clips per segment, already shifted by the offset (the plan), or one premixed audio track. Open: Shotcut cannot read BRAW and works on the preview copies (2048 pixels wide, base LUT baked in), so a film exported from Shotcut after hand work is preview-sized, not 4K. Is that acceptable for rare hand work, or should the tool also make full-size ProRes copies of chosen segments for Shotcut (about 2.4 to 2.8 GB per minute of picture [measured, ProRes 422 LT])?
-- **D17. Encoder of the default export.** The owner decided the format: MP4, H.264, about 45 Mbit/s. Which encoder makes it is not decided. Measured on 5 s of a `brlt` clip at 4096 x 2160 (section 5.1): `h264_videotoolbox` (the Apple hardware encoder) ran at 13.9 to 15.2 fps and gave 45.7 Mbit/s; `libx264` preset slow (software) ran at 4.1 to 4.4 fps and gave 49.1 Mbit/s with the same 45 Mbit/s setting. Picture quality was compared on one frame only (PSNR against the step-1 still: 39.1 dB and 39.3 dB). Open: take the fast hardware encoder (about 40 minutes for 20 minutes of film) or the slow software encoder (about 2.4 hours; usually said to give better quality for the same data rate [inference]). The plan starts with `h264_videotoolbox` as a starting value; the owner compares both renders in `SPECS.md` check 3.8.
+- **D11. Shotcut project, the part not answered.** The owner answered the question about the preview size: "Tool reads cuts back" (section 3). Open: in the Shotcut project, separate audio clips per segment, already shifted by the offset (the plan), or one premixed audio track.
 
 **Before step 4**
 
@@ -439,7 +446,13 @@ Answered on 2026-10-26 and moved to section 3 (settled decisions) and section 12
 - Per-scene trims in seconds from the start and the end (`trim_start`, `trim_end`, `selection_trims`) are replaced by segment in-points and out-points in the timeline file. The owner's `project.json` has an empty selection and no trims, so nothing needs to move [measured].
 - The v1.1 open item "ship `resolve_import.py`" depends on D4.
 
-**Changed in version 2.1 (this version) against version 2.0**
+**Changed in version 2.2 (this version) against version 2.1**
+
+- Decisions moved from open to settled: D6 ("Only at the start"), D7 ("Every steady scene"), D8 ("Hard cut"), D17 ("Hardware (fast)") and the preview-size part of D11 ("Tool reads cuts back"). Section 3 has new rows, section 12 new rows, section 14 shrinks.
+- Reading cut points and order back from Shotcut is now in scope (new requirement E7, step 3). It was out of scope in version 2.1. E4 no longer says "one-way".
+- Not answered and still open: what to do with a clip that has no steady scene (D7), and the audio form in the Shotcut project (D11).
+
+**Changed in version 2.1 against version 2.0**
 
 - Decisions moved from open to settled: D1 (option A), D2 (colour), D3 (Python 3.12 and OpenCV), D5 (DCI 4K, letterbox), the default LUT of D10, and the export format (new row in section 3).
 - The ProRes working copies are replaced by H.264 preview copies. The final render decodes the `.braw` files. Requirements C1 to C7, E1 to E4, L1 to L3, M8 and M9 changed; E6 is new.

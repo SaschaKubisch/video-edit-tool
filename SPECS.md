@@ -1,10 +1,12 @@
 # Technical Specification - Ambient Video Auto
 
-**Version:** 2.1 (draft for the owner's review)
+**Version:** 2.2 (draft for the owner's review)
 **Date:** 2026-10-26
 Companion to `PRD.md`. Sections 1 to 17 specify the planned editor. Appendix A describes the system built as v1.1.0, which the plan reuses. Appendix B lists the sources.
 
 Nothing in sections 1 to 17 is built. The one exception is the test of step 1, which was run by hand with scripts that are not in the repository (section 6.1). Each interface named here (commands, endpoints, file names, module names) is a planned interface. Names may change when the code is written.
+
+Version 2.2 adds the owner's decisions on the clap (D6), steady scenes (D7), transitions (D8), reading Shotcut cuts back (D11) and the encoder (D17). Step 2 is being built on the branch `editor-step2`; where the build found the plan wrong, the text is changed and marked "changed in the build".
 
 Version 2.1 records the owner's decisions of 2026-10-26 (storage option A, colour, DCI 4K frame, Python 3.12 with OpenCV, the export format) and the results of step 1. The ProRes working copies of version 2.0 are replaced by H.264 preview copies, and the final render reads the `.braw` files.
 
@@ -136,6 +138,7 @@ Originals stay where they are. The tool opens them read-only and never writes in
 | `look.py` | LUT hashing, comparison stills | New | 3 |
 | `loudness.py` | Measure and level | New | 3 |
 | `export_shotcut.py` | Write `film.mlt` and `audio-synced/` | New | 3 |
+| `import_shotcut.py` | Read cut points and order from `film.mlt` back into the timeline file (D11) | New | 3 |
 | `words.py` | Transcribe, build cues, titles, ASS and SRT | New | 4 |
 | `index.py` | Contact sheets and `index.md` | New | 5 |
 | `shorts.py` | Build a vertical timeline | New | 6 |
@@ -300,7 +303,7 @@ Types: `int` integer, `num` decimal number, `str` string, `bool` true or false. 
 
 ### 3.3 Example
 
-The values are an illustration. The frame rate, frame sizes, frame counts and the base LUT's file name are those of the owner's clips and decision (the clips `A002_01011540_C002` and `A002_01060615_C083` of `Recordings_261003`); the paths, hashes, offsets, the creative LUT and the settings are made up. `mode: both` in `subtitles` and `-14.0` as target are examples of open decisions D13 and D9, not choices. `h264_videotoolbox` is the starting value of open decision D17, not a choice.
+The values are an illustration. The frame rate, frame sizes, frame counts and the base LUT's file name are those of the owner's clips and decision (the clips `A002_01011540_C002` and `A002_01060615_C083` of `Recordings_261003`); the paths, hashes, offsets, the creative LUT and the settings are made up. `mode: both` in `subtitles` and `-14.0` as target are examples of open decisions D13 and D9, not choices. `h264_videotoolbox` is the default encoder (decision D17).
 
 ```json
 {
@@ -464,6 +467,7 @@ Three writers change the file: the tool's own commands, the page, and Claude Cod
 | `film`, `audio`, `exports` | `look`, `render` commands | no | yes |
 | `look` | `look set` | no | by running `look set`, not by hand (the command writes the hash) |
 | `titles`, `subtitles.cues` | yes | no | yes |
+| `segments` after hand work in Shotcut: `in`, `out`, `enabled`, order, new segments | `import-shotcut` only (section 8.6) | no | no |
 | `version`, `kind` | never | never | never |
 
 ### 4.3 How Claude Code works with the file
@@ -629,7 +633,7 @@ An entry in `exports[]` sets one output. Version 1 accepts the codecs of rule V2
 | Container | MP4, `-movflags +faststart` | The most common format; YouTube asks for the moov atom at the front [documented, Src11]. |
 | Frame | 4096 x 2160 (DCI 4K). Other sizes of the same shape are allowed. | Owner decision D5. |
 | Video, delivery | H.264 High profile, 8-bit 4:2:0, about 45 Mbit/s. | Owner decision: "about 45 Mbit/s"; YouTube recommends 35 to 45 Mbit/s for 2160p at 24 to 30 frames per second [documented, Src11]. |
-| Encoder, delivery | Starting value `h264_videotoolbox -b:v 45M`: 45.7 Mbit/s and 13.9 to 15.2 fps at 4096 x 2160 [measured]. Alternative `libx264 -preset slow -b:v 45M`: 49.1 Mbit/s and 4.1 to 4.4 fps with one pass [measured]. `-preset medium` gave the same size at 5.3 fps [measured]. | Open decision D17. A two-pass `libx264` run would hit the bitrate more closely [inference] and was not measured. |
+| Encoder, delivery | Default (decision D17, "Hardware (fast)"): `h264_videotoolbox -b:v 45M`: 45.7 Mbit/s and 13.9 to 15.2 fps at 4096 x 2160 [measured]. Selectable in the export entry: `libx264 -preset slow -b:v 45M`: 49.1 Mbit/s and 4.1 to 4.4 fps with one pass [measured]. `-preset medium` gave the same size at 5.3 fps [measured]. | Owner decision D17. A two-pass `libx264` run would hit the bitrate more closely [inference] and was not measured. |
 | Colour tags | BT.709 primaries, transfer and matrix, TV range. `h264_videotoolbox` writes only the matrix into the stream, and the MP4 muxer writes no `colr` box for it. The bitstream filter `-bsf:v h264_metadata=colour_primaries=1:transfer_characteristics=1:matrix_coefficients=1:video_full_range_flag=0` sets the other values in the stream header [measured: `ffprobe` then reports all four]. | Explicit tags keep players from guessing [inference]. How QuickTime and YouTube display a BT.709-tagged picture made with the "Film to Video" LUT is [unverified] until check 3.8. |
 | Audio, delivery | AAC-LC, 48 kHz, 384 kbps stereo | YouTube recommendation for stereo [documented, Src11]. |
 | Master | ProRes 422 HQ in a `.mov` file, 10-bit 4:2:2, 24-bit PCM audio. Only when the owner ticks it (E6). | Owner decision. |
@@ -911,7 +915,7 @@ From the matched pairs and the preview copies, make a rough film: clips in recor
 
 Outputs: `copies/`, `conversion.json`, `analysis/<stem>/clap.json`, `analysis/<stem>/stable.json`, `timeline.json`, `reports/assembly-report.json`, `previews/`. A rough film without loudness work can be rendered with the renderer of section 5 (`loudness.mode: off`).
 
-Status: not built. Needs the result of step 1 (done) and the answers to D6 to D8. D5, the frame shape, is settled.
+Status: not built. Needs the result of step 1 (done). D5 to D8 are settled (`PRD.md` section 3).
 
 ### 7.2 Finding the clap
 
@@ -924,13 +928,15 @@ Status: not built. Needs the result of step 1 (done) and the answers to D6 to D8
 5. Refine the time to the first sample, within 20 ms around the window, whose absolute value reaches a quarter of the local peak.
 6. The first candidate in time that passes step 4 is the clap. The result also lists the strongest candidate, for the report.
 
+Decision D6: "Only at the start". Each clip has one clap at its beginning, so the search covers the first `CLAP_SEARCH_SEC` seconds only and there is no search for a clap at the end.
+
 `analyse --clap` runs it on the scratch audio of each `.braw` (16 kHz mono, as the matcher extracts it) and on the matched WAV. The two results must agree: `(t_wav - t_video)` equals the stored offset within `CLAP_AGREE_SEC`.
 
 | Result | When | Used |
 |--------|------|------|
 | `agree` | Both found and consistent | The video time. |
 | `single` | Only one found, or they disagree | The one found, converted by the offset. Marked for review. |
-| `none` | Neither found | No clap cut. Marked for review (D6). |
+| `none` | Neither found | No clap cut. The clip is kept from its first steady frame (section 7.5, rule 3) and is listed in the report as "no clap" (D6). |
 
 The segment's first frame is `ceil((t_clap + CLAP_GUARD_SEC) * fps)`. The guard keeps the clap's tail out of the film. Because the audio follows the segment, cutting the picture also cuts the sound at the same instant.
 
@@ -943,7 +949,7 @@ The segment's first frame is `ceil((t_clap + CLAP_GUARD_SEC) * fps)`. The guard 
 | `CLAP_AGREE_SEC` | 0.02 |
 | `CLAP_GUARD_SEC` | 0.5 (the research suggests 0.5 to 1 s) |
 
-All six are [inference] starting values. Check 2.14 prints the clap time of every clip so the owner can listen to a sample and correct the values. D6 asks where the clap really is.
+All six are [inference] starting values. Check 2.14 prints the clap time of every clip so the owner can listen to a sample and correct the values. D6 is settled; the values stay starting values.
 
 ### 7.3 Drift between camera and recorder
 
@@ -995,9 +1001,9 @@ The matcher measures the offset on the first 60 seconds [Appendix A.3]. A camera
 
 1. **Clips.** If `project.selection` is not empty, use those clips in that order. Otherwise use all matched clips in recording order (the natural order of the file names, as in v1.1) (M7, A1).
 2. A clip without a `done` preview copy is left out; the report says why.
-3. **Earliest frame.** The first frame after the clap (section 7.2). With result `none`, frame 0, marked for review.
-4. **Runs.** Each steady run of the clip, cut at the earliest frame, becomes one segment if it is at least `STABLE_MIN_RUN_SEC` long. A clip with several runs gives several segments in time order (A3, A4).
-5. **No steady run.** The clip is left out of the film and listed in the report (D7: starting plan). A setting `on_no_steady_run: keep_whole` keeps the clip after the clap instead.
+3. **Earliest frame.** The first frame after the clap (section 7.2). With result `none` there is no clap cut (the earliest frame is 0), so the first segment starts at the clip's first steady frame, and the clip is listed in the report (D6).
+4. **Runs.** Each steady run of the clip, cut at the earliest frame, becomes one segment if it is at least `STABLE_MIN_RUN_SEC` (2 s) long. Decision D7: every steady scene is kept, and only the movement between scenes is dropped. A clip with several runs gives several segments in time order (A3, A4).
+5. **No steady run.** The clip is left out of the film and listed in the report (not decided by D7; this is the plan). A setting `on_no_steady_run: keep_whole` keeps the clip after the clap instead.
 6. **No `stable.json`.** The clip after the clap becomes one segment marked `unanalysed`.
 7. **Segment fields.** `id` `s001`, `s002` and so on; `label` the clip name plus the run number; `origin` `assembly`; `note` with the clap time and the run score.
 8. **Film fields.** `fps` from the sources (all must agree, rule V4). `frame` and `fit` default to 4096 x 2160 and `fit` (D5, settled); `assemble --frame 4096x2160 --fit fit` can set them. The wide clips get black bars (section 5.2). Fades and join take the starting values of section 3.2.
@@ -1066,7 +1072,7 @@ Apply the look (the default base LUT, and a creative LUT if the owner wants one)
 
 Outputs: `stills/`, `look` in `timeline.json`, `renders/film-4k.mp4`, `renders/film-master.mov` (only if ticked), `reports/render-report.json`, `film.mlt`, `audio-synced/`.
 
-Status: not built. Needs step 2 and D9 to D11 and D17. The final render is the one place where the decoder runs at full size, so this step also settles the speed of a whole film (check 3.8).
+Status: not built. Needs step 2, D9, D10 and the audio form of D11. The final render is the one place where the decoder runs at full size, so this step also settles the speed of a whole film (check 3.8).
 
 ### 8.2 The base LUT and choosing a creative LUT from stills (L1)
 
@@ -1121,7 +1127,7 @@ The film preview and the final file use the same render plan.
 
 ### 8.6 The Shotcut project (E4)
 
-**What it is for.** Rare hand work, done last. The decision says Shotcut edits do not flow back. The tool never reads the file again. A new run of `export-shotcut` writes the file anew and does not merge.
+**What it is for.** Rare hand work, done last. Decision D11, "Tool reads cuts back": after the hand work, `import-shotcut` reads the cut points and the order from the saved project back into the timeline file, and the 4K film is rendered from the `.braw` files. Effects made only in Shotcut do not come back. A new run of `export-shotcut` writes the file anew and does not merge.
 
 **Method.** The project format of Shotcut is documented as unstable: it wants annotations (`shotcut=1` on the tractor, `shotcut:filter` on filters, `shotcut:name` on playlists) and says they may change [documented, Src6]. Developers of Kdenlive say the same of their format [documented, Src7]. So the writer works from a template:
 
@@ -1142,7 +1148,16 @@ The film preview and the final file use the same render plan.
 
 **Synced audio.** MLT places clips on whole frames. The offset between camera and recorder is a fraction of a frame (0.276 s is 8.3 frames at 29.97 frames per second). To keep the sound exact, the tool writes `audio-synced/<stem>.wav` for each clip: the original WAV, at its own sample rate and bit depth, shifted by the offset in whole samples so that its time 0 is the picture's time 0. If the offset is negative, silence is added at the start. The file ends where the picture ends. A segment's picture and sound then have the same frame numbers in Shotcut and stay aligned to the sample. (D11 asks whether the owner prefers one premixed audio track instead.)
 
-**Known differences from the tool's own render.** Shotcut has no true-peak limiter step in this project and processes in 8 bit [inference]. The tool's render is the reference. A render from Shotcut will not equal the tool's render bit for bit. Shotcut cannot decode BRAW [measured], so it renders from the preview copies: a film exported from Shotcut is 2048 pixels wide, not 4K (open decision D11).
+**Known differences from the tool's own render.** Shotcut has no true-peak limiter step in this project and processes in 8 bit [inference]. The tool's render is the reference. A render from Shotcut will not equal the tool's render bit for bit. Shotcut cannot decode BRAW [measured], so it renders from the preview copies: a film exported from Shotcut is 2048 pixels wide, not 4K. That is why the cuts are read back and the 4K film is rendered by the tool (D11).
+
+**Reading back (`import-shotcut`, D11)** [design; all unverified until check 3.9]:
+
+- The writer puts the segment id into each video entry as a property (`vet:segment`), so the reader can tell which entry is which segment after the owner moved, trimmed or split it in Shotcut [inference: MLT keeps properties it does not know].
+- The reader parses the saved project and takes, for the video track, the entries in playlist order. For each entry it reads the clip (matched to a source by the preview copy's path), `in` and `out`. MLT counts `out` as the last frame used, so the segment's `out` is `out_mlt + 1`.
+- An entry with a known `vet:segment` id changes that segment's `in`, `out` and place in the order. An entry without an id (a clip split in Shotcut, or a clip added from a known preview copy) becomes a new segment with `origin: "manual"`. A segment whose id no longer appears gets `enabled: false` and stays in the file.
+- Nothing else in the timeline file changes. Filters, transitions, volume changes, titles and audio edits made in Shotcut are not read. The command lists the Shotcut filters it saw and ignored.
+- The result goes through the rules of section 4.1: validation, a snapshot before the write, and the hash check. Cut points that break a rule (V9, V11) are refused with the field path, and nothing is written.
+- The preview copy and the `.braw` file have the same frame numbers (section 3.2), so the segments can be rendered from the `.braw` files without further work.
 
 ### 8.7 The page in step 3
 
@@ -1159,8 +1174,9 @@ A tab **Look** shows the stills sheets. A tab **Export** lists the entries of `e
 | 3.5 | `python3 -m unittest tests.test_film_loudness -v` | The film's integrated loudness is within 0.5 LU of the target. The true peak is at or under the limit. Material with strong clicks goes through the limiter loop and ends under the limit, or the report says it could not. |
 | 3.6 | `python3 -m unittest tests.test_export -v` | A synthetic film at 1920 x 1080 exports to an MP4 that `ffprobe` reads as H.264, 8-bit 4:2:0, the right size and frame count, AAC at 48 kHz, BT.709 tags, with the `moov` box before `mdat`. An export of another size of the same shape works. An export of another shape fails with rule V5. A film with a source of 1920 x 800 in a 1920 x 1080 frame has black bars (luma 16) above and below and the picture untouched. `VET_SLOW=1` adds the same test at 4096 x 2160. |
 | 3.7 | `python3 -m unittest tests.test_export_shotcut -v` | The XML is well formed. It has one video and one audio entry per enabled segment with the in and out frames of section 8.6, as many `mix` transitions as joins, one LUT filter for the creative LUT with the right file (and none for the base LUT), and the profile of section 8.6. Each `audio-synced` WAV is as long as its picture in samples, and a click in it lies where the original click plus the offset puts it. |
-| 3.8 | `python3 main.py render --export film-4k`, once with `h264_videotoolbox` and once with `libx264` (D17) | On the first shoot: exit 0, the file reads as H.264 at 4096 x 2160 and about 45 Mbit/s and passes the checks of section 5.7, and the report shows the film's loudness and true peak. The speed (frames per second, real-time factor) and the load average are recorded for each encoder and compared with section 6.1 E (0.46 to 0.51 times real time for a single segment with `h264_videotoolbox`). **The owner** watches both films, a smooth-gradient scene for banding, and compares the colour with the chosen stills in QuickTime Player and in the browser the owner uses for YouTube. The owner answers D17. |
-| 3.9 | `python3 main.py export-shotcut`, then open `film.mlt` in Shotcut | **By hand.** The segments are in order. The first 10 seconds play. The wide clips show their black bars. The creative LUT shows, if there is one, and the base look is not applied twice. The fades and crossfades are there. Subtitles show. The result and the Shotcut version are written to the render report's notes. Before that, `melt film.mlt -consumer xml` reads the file without errors. |
+| 3.7b | `python3 -m unittest tests.test_import_shotcut -v` | An MLT file written by the exporter and edited as text (one entry trimmed, one entry moved, one entry split, one entry removed, one filter added) is read back: the timeline file gets the new `in`, `out` and order, one new segment with `origin: "manual"`, one segment with `enabled: false`, and nothing else changed. The added filter is listed as ignored. Cut points beyond the clip's frames are refused with rule V9 and nothing is written. |
+| 3.8 | `python3 main.py render --export film-4k`, once with `h264_videotoolbox` (the default) and once with `libx264` | On the first shoot: exit 0, the file reads as H.264 at 4096 x 2160 and about 45 Mbit/s and passes the checks of section 5.7, and the report shows the film's loudness and true peak. The speed (frames per second, real-time factor) and the load average are recorded for each encoder and compared with section 6.1 E (0.46 to 0.51 times real time for a single segment with `h264_videotoolbox`). **The owner** watches both films, a smooth-gradient scene for banding, and compares the colour with the chosen stills in QuickTime Player and in the browser the owner uses for YouTube. **The owner** confirms that the quality of the default encoder is enough, or sets `libx264` in the export entry. |
+| 3.9 | `python3 main.py export-shotcut`, then open `film.mlt` in Shotcut | **By hand.** The segments are in order. The first 10 seconds play. After a trim and a move made in Shotcut, `python3 main.py import-shotcut` shows the new cut points in `timeline summary`. The wide clips show their black bars. The creative LUT shows, if there is one, and the base look is not applied twice. The fades and crossfades are there. Subtitles show. The result and the Shotcut version are written to the render report's notes. Before that, `melt film.mlt -consumer xml` reads the file without errors. |
 | 3.10 | `python3 -m unittest tests.test_export_master -v` and, by hand, `python3 main.py render --export film-master` | The tests: with the entry `enabled: false` no file is made. With a fake free-space value below 1.1 times the estimate `render` refuses; above it, a synthetic 1920 x 1080 film exports to a `.mov` that `ffprobe` reads as `prores`, profile HQ, `yuv422p10le`, with 24-bit PCM sound. By hand, with the owner's tick: a 60-second piece of the first shoot renders, and its size and speed are recorded and compared with the estimate of section 5.6. |
 | 3.11 | `python3 -m unittest discover -s tests -v` | All earlier tests still pass. |
 
@@ -1402,7 +1418,7 @@ Appendix A describes each part as built in v1.1.0. This table says what the plan
 | `thumbnails.py` | **Changed.** | Reads the preview copy when one exists, so `.braw` clips get thumbnails. Also serves the stills and frame requests of the later steps. |
 | `server.py` | **Extended.** | Keeps the Host and Origin checks, the one-job rule and the 127.0.0.1 binding. Adds the endpoints below and range requests for video. |
 | `ui.html` | **Extended.** | Tabs Match and Clips (the old Select and Order, with the trim inputs removed, because trims move into the timeline file) stay. New tabs Film, Look and Export. The Resolve tab stays only if D4 says so. |
-| `main.py` | **Extended.** | New subcommands: `tools check`, `convert`, `analyse`, `assemble`, `timeline` (`summary`, `validate`, `frames`, `cut`, `keep`, `history`, `undo`, `migrate`), `preview`, `look` (`stills`, `set`), `render`, `export-shotcut`, `words`, `subtitles build`, `title add`, `index`, `find`, `short`. |
+| `main.py` | **Extended.** | New subcommands: `tools check`, `convert`, `analyse`, `assemble`, `timeline` (`summary`, `validate`, `frames`, `cut`, `keep`, `history`, `undo`, `migrate`), `preview`, `look` (`stills`, `set`), `render`, `export-shotcut`, `import-shotcut`, `words`, `subtitles build`, `title add`, `index`, `find`, `short`. |
 | `config.py` | **Extended.** | The settings named in sections 7 to 11. Settings for open decisions have no default value. |
 | `requirements.txt` | **Extended.** | `vapoursynth` and `vapoursynth-brawsource` (D3). |
 | `README.md`, `CHANGELOG.md` | **Not changed by this plan.** | They still describe v1.1.0. Each step updates them when it is built. |
@@ -1485,18 +1501,18 @@ The questions are set out in `PRD.md` section 14, with the owner's words. This t
 | D3 | Python and packages. **Settled 2026-10-26: 3.12 and OpenCV.** | The whole tool runs on Python 3.12 in its own environment. `numpy`, `scipy`, `tqdm`, `vapoursynth`; `opencv-python` only when code uses it. | 2 |
 | D4 | Resolve option stays or goes | Code stays and is not extended (section 12). | any |
 | D5 | Frame shape of the 4K film. **Settled 2026-10-26: DCI 4K, bars for wide.** | `film.frame` 4096 x 2160, `film.fit` `fit` (section 5.2). | 2 |
-| D6 | Clap position, guard, no-clap policy | Guard 0.5 s. A clip with no clap is not cut and is flagged. | 2 |
-| D7 | Meaning of "most stable scene"; shortest scene; no-run policy | Every steady run of at least 2 s becomes a segment. A clip with no run is left out and reported. | 2 |
-| D8 | Picture between scenes; fade lengths | Hard cut. Fade-in 1.0 s, fade-out 2.0 s, crossfade 0.5 s as starting values. | 2 |
+| D6 | Clap position, guard, no-clap policy. **Settled 2026-10-26: "Only at the start".** | One clap at the start of each clip. Guard 0.5 s (starting value). A clip with no clap is kept from its first steady frame and listed in the report. | 2 |
+| D7 | Meaning of "most stable scene"; shortest scene; no-run policy. **Settled 2026-10-26: "Every steady scene".** The no-run policy is open. | Every steady run of at least 2 s (starting value) becomes a segment; only the movement between them is dropped. A clip with no run is left out and reported (the plan; not decided). | 2 |
+| D8 | Picture between scenes; fade lengths. **Settled 2026-10-26: "Hard cut".** | Hard cut for the picture. Fade-in 1.0 s, fade-out 2.0 s, audio crossfade 0.5 s as starting values. | 2 |
 | D9 | Loudness target; per segment or per film | `target_lufs` is required when the mode is not `off`. Mode `segment_then_film` is available. | 3 |
 | D10 | LUT collection and sources. **Default settled 2026-10-26: Gen 5 Film to Video.** Creative LUT sources open. | The base LUT is the Resolve file (section 8.2). For a creative LUT, `VET_LUT_DIR` names a folder. Nothing is bundled. | 3 |
-| D11 | Audio in the Shotcut project; Shotcut works at preview size | One synced audio clip per segment. Shotcut uses the preview copies; its output is preview-sized (section 8.6). | 3 |
+| D11 | Audio in the Shotcut project; Shotcut works at preview size. **Preview size settled 2026-10-26: "Tool reads cuts back".** The audio form is open. | One synced audio clip per segment (the plan; not decided). Shotcut uses the preview copies; the tool reads the cuts back and renders the 4K film (section 8.6). | 3 |
 | D12 | Whisper model | `VET_WHISPER_MODEL`. A timing test on a two-minute sample comes first. | 4 |
 | D13 | Subtitle form; font | `mode` and `font` are required in the file when subtitles are burned. | 4 |
 | D14 | Meaning of "cut out" in prompts; scene search method | "Cut out" is read as remove. `keep` exists. Search is by Claude Code reading sheets and the transcript. | 5 |
 | D15 | Default short length | `--length` is required. | 6 |
 | D16 | Crop and importance | Crop 0.5 (centre) unless set. Weights of section 11.3 as starting values. | 6 |
-| D17 | Encoder of the default export | Starting value `h264_videotoolbox` at 45 Mbit/s; `libx264` is selectable in the export entry. Check 3.8 renders both. | 3 |
+| D17 | Encoder of the default export. **Settled 2026-10-26: "Hardware (fast)".** | `h264_videotoolbox` at 45 Mbit/s is the default; `libx264` is selectable in the export entry. Check 3.8 renders both. | 3 |
 
 ## 17. Unverified Statements and What Settles Them
 
@@ -1517,7 +1533,7 @@ Every statement tagged [unverified] above, and a few [inference] ones that the d
 | `-ss` before `-i` is frame-exact on a real preview copy, and the decoder process returns exactly the frames `in` to `out - 1`. | Check 2.11 |
 | `lut3d` keeps its precision and uses the right matrix around the RGB conversion. (The tested chain sets the `bt709` matrix explicitly and ran on 16-bit input.) | Check 3.1 |
 | The two-stage pipe design for many segments (section 5.3) keeps the speed of the tested single-process chain (13.9 to 15.2 fps at 4096 x 2160 with `h264_videotoolbox`), and the 8-bit result shows no banding. | Check 3.8 |
-| `h264_videotoolbox` and `libx264` at 45 Mbit/s differ in quality; which one the owner prefers. | Check 3.8 (D17) |
+| `h264_videotoolbox` and `libx264` at 45 Mbit/s differ in quality; whether the default encoder's quality is enough. | Check 3.8 (D17) |
 | Speed of the ProRes 422 HQ master from the RAW decode. | Check 3.10 |
 | The Shotcut template, the annotations and the filters of section 8.6 open and play as described, and MLT letterboxes the wide preview copies. | Check 3.9 |
 | The `whisper` filter's option names, voice-activity model and word times. Its speed. | Check 4.8 and the two-minute timing test |
