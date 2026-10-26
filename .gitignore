@@ -148,5 +148,10 @@ venv/
 project.json
 thumbnails/
 
+# The film (hold paths from the owner's machine)
+timeline.json
+short-*.json
+timeline.history/
+
 # macOS
 .DS_Store

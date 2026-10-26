@@ -323,6 +323,27 @@ def cmd_convert(args, decoder=None):
     sys.exit(summary.exit_code)
 
 
+def cmd_timeline(args):
+    """Work with the timeline file (SPECS 3, 4.3)."""
+    import timeline
+
+    path = args.file or "timeline.json"
+    if args.timeline_command == "validate":
+        try:
+            tl = timeline.Timeline.load(path)
+        except FileNotFoundError:
+            print(f"Error: timeline file not found: {path}", file=sys.stderr)
+            sys.exit(2)
+        except timeline.TimelineError as e:
+            print(json.dumps([{"level": "error", "rule": "V1" if isinstance(
+                e, timeline.UnknownVersion) else "V0", "path": "", "message": str(e),
+                "hint": ""}], indent=2))
+            sys.exit(1)
+        findings = tl.validate(file_checks=not args.no_file_checks)
+        print(json.dumps([f.as_dict() for f in findings], indent=2))
+        sys.exit(1 if timeline.has_errors(findings) else 0)
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         description="Dual-System Audio Video Automation (BMPCC 4K + Zoom H2N)",
@@ -413,6 +434,18 @@ def build_parser():
     p_convert.add_argument("--seconds", type=float,
         help="Length of the --test piece in seconds (default: the whole clip)")
     p_convert.set_defaults(func=cmd_convert)
+
+    # ── timeline ──
+    p_timeline = subparsers.add_parser("timeline",
+        help="Work with the timeline file")
+    tl_sub = p_timeline.add_subparsers(dest="timeline_command", required=True)
+    p_validate = tl_sub.add_parser("validate",
+        help="Check the timeline file; print the findings as JSON; exit 1 on errors")
+    p_validate.add_argument("--file", "-f",
+        help="Timeline file (default: timeline.json)")
+    p_validate.add_argument("--no-file-checks", action="store_true",
+        help="Skip the checks that read the disk (files, hashes)")
+    p_timeline.set_defaults(func=cmd_timeline)
 
     return parser
 

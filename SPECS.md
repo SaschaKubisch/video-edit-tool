@@ -133,7 +133,7 @@ Originals stay where they are. The tool opens them read-only and never writes in
 | `convert.py` | Probe, make preview copies, verify, `conversion.json` | New, built | 2 |
 | `clap.py` | Find the clap, measure drift | New | 2 |
 | `stable.py` | Find steady runs | New | 2 |
-| `timeline.py` | Load, save, validate, snapshot, hash, derived values | New | 2 |
+| `timeline.py` | Load, save, validate, snapshot, hash, derived values. Built so far: load, atomic save, validate (V0 to V22), hash, derived values; snapshots and undo are not built yet (section 4). | New, partly built | 2 |
 | `assemble.py` | Build `timeline.json` from matches and analysis | New | 2 |
 | `render.py` | Render plan, picture path, sound path, film preview, export | New | 2, 3 |
 | `look.py` | LUT hashing, comparison stills | New | 3 |
@@ -403,10 +403,11 @@ The values are an illustration. The frame rate, frame sizes, frame counts and th
 
 ### 3.5 Validation rules
 
-`timeline.py` checks these rules (V1 to V22). Errors stop the tool. Warnings are listed and do not stop it. "File checks" read the disk and can be switched off for tests.
+`timeline.py` checks these rules (V1 to V22, and V0, which the build added). Errors stop the tool. Warnings are listed and do not stop it. "File checks" read the disk and can be switched off for tests.
 
 | Rule | Check | Level |
 |------|-------|-------|
+| V0 | **Added in the build.** Structure: a required field is present and has the right type (a number is not a string; true and false are not integers); `film.fit` is `fit` or `fill`; `look.base.mode` is `lut` or `none`, and mode `lut` has `path` and `sha256`; `origin` and `priority` take their listed values; the file holds one JSON object; no key appears twice in one object. | error |
 | V1 | `version` is a version the tool knows. | error |
 | V2 | No unknown key in a known object, unless it starts with `x_`. The message names the closest known key. | error |
 | V3 | `kind` is `film` or `short`. `derived_from` exists exactly when `kind` is `short`. | error |
@@ -430,7 +431,9 @@ The values are an illustration. The frame rate, frame sizes, frame counts and th
 | V21 | In version 1 the container follows the file extension. `.mp4` needs video codec `h264_videotoolbox` or `libx264` and audio codec `aac`. `.mov` needs video codec `prores_videotoolbox` with profile `hq` and audio codec `pcm_s24le`. | error |
 | V22 | A short is not longer than 180 seconds. | warning |
 
-**Output of `python3 main.py timeline validate`.** Exit code 0 when there are no errors, else 1. Standard output is a JSON list, one object per finding:
+**Readings the build fixed** (the plan left them open): an optional number that is absent counts as 0 for rule V11 (no fade-in, no fade-out, no crossfade, so the sound cuts hard); rule V5 applies to the `size` of a source as well as to `film.frame` and the exports; rule V19 demands `language` `en`; rule V21 allows rate control `crf` only with `libx264`; the shape test of V5 passes when the width or the height is within one pixel of the value that the other dimension gives; rule V6 finds a repeated source id by reading the JSON text, because a JSON parser keeps only the last of two equal keys; a free key (`x_...`) is allowed in every object, including `fps`, `size` and `rate_control`.
+
+**Output of `python3 main.py timeline validate`.** Exit code 0 when there are no errors, else 1 (2 when the file is missing). Options: `--file FILE` (default `timeline.json`), `--no-file-checks`. A file that is not JSON, or has a version the tool does not know, gives one finding (`V0` or `V1`) and exit code 1. Standard output is a JSON list, one object per finding:
 
 ```json
 [{"level": "error", "rule": "V9", "path": "segments[1].out",
