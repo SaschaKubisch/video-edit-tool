@@ -34,6 +34,8 @@ _timeline_path = None
 _work_dir = None
 _preview_settings = None
 _wav_seconds = None                    # replaces ffprobe where the length of a WAV is read (tests)
+_decoder = None                        # the Decoder of the final render (tests); else BrawSourceDecoder
+_lut_dir = None                        # the folder of the creative LUTs (tests); else VET_LUT_DIR
 _timeline_lock = threading.Lock()      # one edit of the timeline file at a time
 
 PREVIEW_NAME = "preview"
@@ -41,10 +43,10 @@ PREVIEW_NAME = "preview"
 
 def configure(**kw):
     """Set what the film endpoints use: timeline_path, work_dir, project, preview_settings,
-    wav_seconds. Only the names given are changed; None or "" means "not set"."""
-    global _timeline_path, _work_dir, _preview_settings, _project, _wav_seconds
+    wav_seconds, decoder, lut_dir. Only the names given are changed; None or "" means "not set"."""
+    global _timeline_path, _work_dir, _preview_settings, _project, _wav_seconds, _decoder, _lut_dir
     unknown = set(kw) - {"timeline_path", "work_dir", "project", "preview_settings",
-                         "wav_seconds"}
+                         "wav_seconds", "decoder", "lut_dir"}
     if unknown:
         raise TypeError(f"unknown settings: {', '.join(sorted(unknown))}")
     if "timeline_path" in kw:
@@ -55,6 +57,10 @@ def configure(**kw):
         _preview_settings = kw["preview_settings"]
     if "wav_seconds" in kw:
         _wav_seconds = kw["wav_seconds"]
+    if "decoder" in kw:
+        _decoder = kw["decoder"]
+    if "lut_dir" in kw:
+        _lut_dir = kw["lut_dir"] or None
     if "project" in kw:
         with _project_lock:
             _project = kw["project"]
@@ -230,6 +236,12 @@ class AppHandler(BaseHTTPRequestHandler):
                 self._handle_assemble()
             elif path == "/api/preview":
                 self._handle_preview()
+            elif path == "/api/look":
+                self._handle_look()
+            elif path == "/api/loudness":
+                self._handle_loudness()
+            elif path == "/api/render":
+                self._handle_render()
             else:
                 self.send_error(404)
         except json.JSONDecodeError:
@@ -470,11 +482,7 @@ class AppHandler(BaseHTTPRequestHandler):
             return
         tl, h = loaded
         findings = tl.validate(file_checks=False, wav_seconds=_wav_reader())
-        _json_response(self, {
-            "path": timeline_file(), "name": os.path.basename(timeline_file()), "hash": h,
-            "summary": edits.summary(tl, h, _review_flags()),
-            "findings": [f.as_dict() for f in findings],
-            "preview": _preview_state(h, tl)})
+        _json_response(self, _film_answer(tl, h, findings))
 
     def _handle_timeline_edit(self):
         import edits
@@ -513,10 +521,7 @@ class AppHandler(BaseHTTPRequestHandler):
             except store.StaleHash as e:
                 _json_response(self, {"error": str(e), "hash": e.actual}, 409)
                 return
-        _json_response(self, {"hash": new_hash,
-                              "summary": edits.summary(new, new_hash, _review_flags()),
-                              "findings": [f.as_dict() for f in findings],
-                              "preview": _preview_state(new_hash, new)})
+        _json_response(self, _film_answer(new, new_hash, findings))
 
     def _serve_preview_file(self, name):
         """A file of <work>/previews, with HTTP range requests (SPECS 12). Any path that
@@ -624,6 +629,190 @@ class AppHandler(BaseHTTPRequestHandler):
 
         threading.Thread(target=do_preview, daemon=True).start()
         _json_response(self, {"status": "started"})
+
+    def _change_timeline(self, change):
+        """Read the hash the page started from and the timeline, apply `change(tl) -> new data`
+        under the lock, validate, save with a snapshot, and answer with the film as it is now.
+        Answers 400, 404, 409 and 422 as the page's edits do (SPECS 4.4)."""
+        import store
+        import timeline
+        body = _read_body(self)
+        sent_hash = body.get("hash") if isinstance(body, dict) else None
+        if not isinstance(body, dict) or not isinstance(sent_hash, str) or not sent_hash:
+            _json_response(self, {"error": "The body must be an object with 'hash' (the hash the "
+                                  "page started from)."}, 400)
+            return
+        with _timeline_lock:
+            loaded = self._load_timeline()
+            if loaded is None:
+                return
+            tl, h = loaded
+            if h != sent_hash:
+                _json_response(self, {"error": "The timeline file changed since the page read it. "
+                                      "Reload.", "hash": h}, 409)
+                return
+            try:
+                new_data = change(tl, body)
+            except ValueError as e:
+                _json_response(self, {"error": str(e)}, 400)
+                return
+            new = timeline.Timeline(new_data, tl.duplicates)
+            findings = new.validate(file_checks=False, wav_seconds=_wav_reader())
+            if timeline.has_errors(findings):
+                _json_response(self, {"error": "The change breaks a rule of the timeline file; "
+                                      "nothing was saved.",
+                                      "findings": [f.as_dict() for f in findings]}, 422)
+                return
+            try:
+                new_hash = store.save(new, timeline_file(), expected_hash=sent_hash)
+            except store.StaleHash as e:
+                _json_response(self, {"error": str(e), "hash": e.actual}, 409)
+                return
+        _json_response(self, _film_answer(new, new_hash, findings))
+
+    def _handle_look(self):
+        """The creative LUT of the film (SPECS 8.2): {hash, lut: id of a LUT in the LUT folder, or
+        null for none}. The page names an id; the server finds the file inside the folder."""
+        import look
+
+        def change(tl, body):
+            if "lut" not in body or not (body["lut"] is None or isinstance(body["lut"], str)):
+                raise ValueError("'lut' must be the id of a LUT, or null for none.")
+            if body["lut"] is None:
+                return look.with_creative_lut(tl.data, None)
+            work = work_dir()
+            if not work:
+                raise ValueError("No work folder. Start the app with --work DIR, or set work_dir in "
+                                 "the project file.")
+            try:
+                path = look.find_lut(_lut_folder(), body["lut"])
+                entry = look.install(path, work, protected=_originals_of(tl))
+            except look.LutError as e:
+                raise ValueError(str(e))
+            except Exception as e:
+                raise ValueError(str(e))
+            return look.with_creative_lut(tl.data, entry)
+
+        self._change_timeline(change)
+
+    def _handle_loudness(self):
+        """The loudness of the film (decision D9): {hash, mode, target_lufs?, true_peak_dbtp?,
+        max_gain_db?}. The mode `off`, `segment_then_film` or `film_only`."""
+        import edits
+
+        def change(tl, body):
+            nums = {}
+            for key in ("target_lufs", "true_peak_dbtp", "max_gain_db"):
+                if key in body and body[key] is not None:
+                    if not isinstance(body[key], (int, float)) or isinstance(body[key], bool):
+                        raise ValueError(f"'{key}' must be a number.")
+                    nums[key] = body[key]
+            try:
+                return edits.set_loudness(tl.data, body.get("mode"), **nums)
+            except edits.OperationError as e:
+                raise ValueError(str(e))
+
+        self._change_timeline(change)
+
+    def _handle_render(self):
+        """Start the final render of an export (SPECS 8.5). {export: name} renders an entry of the
+        timeline file; {preset, name?, width?, height?} adds an entry first (an entry of that name
+        is reused); {enable: true} switches a switched-off export on (the ProRes master). The job
+        shares the slot with the other jobs; the page cannot name a path."""
+        import export
+        import store
+        import timeline
+        body = _read_body(self)
+        body = body if isinstance(body, dict) else {}
+        work = work_dir()
+        if not work:
+            _json_response(self, {"error": "No work folder. Start the app with --work DIR, or "
+                                  "set work_dir in the project file."}, 400)
+            return
+        with _timeline_lock:
+            loaded = self._load_timeline()
+            if loaded is None:
+                return
+            tl, h = loaded
+            name = body.get("export")
+            data = tl.data
+            try:
+                if body.get("preset") is not None:
+                    entry = export.preset_entry(
+                        body["preset"], os.path.join(work, "renders"), data["film"]["frame"],
+                        name=body.get("name"), width=body.get("width"), height=body.get("height"))
+                    name = entry["name"]
+                    if not any(e.get("name") == name for e in data.get("exports") or []):
+                        data = export.with_export(data, entry)
+                if not isinstance(name, str):
+                    raise export.ExportError("Send 'export' (the name of an export) or 'preset'.")
+                found = export.find_export(data, name)
+                if body.get("enable") is True and not found.get("enabled", True):
+                    data = export.with_export_enabled(data, name, True)
+            except export.ExportError as e:
+                _json_response(self, {"error": str(e)}, 400)
+                return
+            if data is not tl.data:
+                new = timeline.Timeline(data, tl.duplicates)
+                findings = new.validate(file_checks=False)
+                if timeline.has_errors(findings):
+                    _json_response(self, {"error": "The export breaks a rule of the timeline file; "
+                                          "nothing was saved.",
+                                          "findings": [f.as_dict() for f in findings]}, 422)
+                    return
+                h = store.save(new, timeline_file(), expected_hash=h)
+                tl = new
+            findings = tl.validate(file_checks=False)
+            if timeline.has_errors(findings):
+                _json_response(self, {"error": "The timeline file is not valid; no render was "
+                                      "started.", "findings": [f.as_dict() for f in findings]}, 422)
+                return
+            if not export.find_export(tl.data, name).get("enabled", True):
+                _json_response(self, {"error": f"The export {name!r} is switched off. Tick it to "
+                                      "switch it on (send enable: true)."}, 422)
+                return
+        if not _try_start_job():
+            _json_response(self, {"error": "Another job is already running"}, 409)
+            return
+        _set_status("rendering", f"Starting the render of {name}...", 2)
+
+        def do_render():
+            try:
+                decoder = _decoder
+                if decoder is None:
+                    from decoder import BrawSourceDecoder
+                    decoder = BrawSourceDecoder()
+                decoder.check()
+                state = {"progress": 3}
+
+                def log(line):
+                    _set_status("rendering", line, state["progress"])
+
+                def progress(done, total, fps):
+                    state["progress"] = min(97, 5 + int(92 * done / max(total, 1)))
+                    rate = fps / float(tl.fps)
+                    left = (total - done) / fps if fps else 0
+                    _set_status("rendering",
+                                f"Rendering {name}: {100 * done / max(total, 1):.0f} percent, "
+                                f"{fps:.1f} fps ({rate:.2f}x real time), about {left / 60:.0f} min to go",
+                                state["progress"])
+
+                result = export.render_export(tl, name, work, decoder, timeline_hash=h,
+                                              protected=_originals_of(tl), log=log, progress=progress)
+                if result.ok:
+                    out = result.output_loudness or {}
+                    shown = "" if not out else f"; {out.get('lufs')} LUFS, true peak {out.get('true_peak_dbtp')} dBTP"
+                    _set_status("rendered", f"Export ready: {result.path}{shown}", 100)
+                else:
+                    _set_status("error", "The file failed its checks: " + "; ".join(result.problems), 0)
+            except Exception as e:
+                traceback.print_exc()
+                _set_status("error", f"Render failed: {e}", 0)
+            finally:
+                _end_job()
+
+        threading.Thread(target=do_render, daemon=True).start()
+        _json_response(self, {"status": "started", "export": name})
 
     def _handle_assemble(self):
         body = _read_body(self)
@@ -775,6 +964,77 @@ def _wav_reader():
     return _wav_seconds or timeline.wav_length_seconds
 
 
+def _lut_folder():
+    import look
+    return _lut_dir or look.lut_dir()
+
+
+def _originals_of(tl) -> list:
+    return sorted({str(Path(s[k]).parent) for s in tl.data["sources"].values()
+                   for k in ("original_video", "audio")})
+
+
+def _look_state(tl) -> dict:
+    """The creative LUT of the film and the LUTs the page may choose (SPECS 8.2)."""
+    import look
+    folder = _lut_folder()
+    lut = tl.data["look"].get("lut")
+    choices = [{k: r.get(k) for k in ("id", "name", "title", "credit", "problem")}
+               for r in look.list_luts(folder)]
+    current = None
+    if lut:
+        current = {"name": lut.get("name") or os.path.basename(lut["path"]),
+                   "credit": look.plain_credit(lut["credit"]) if lut.get("credit") else None,
+                   "id": next((c["id"] for c in choices if c["name"] == lut.get("name")), None)}
+    return {"lut": current, "luts": choices, "folder": folder or "",
+            "base": tl.data["look"]["base"].get("mode")}
+
+
+def _exports_state(tl) -> list:
+    """The exports of the timeline file with an estimate of the file and the last render."""
+    import export
+    work = work_dir()
+    out = []
+    for e in tl.data.get("exports") or []:
+        last = export.latest_render(work, e["name"]) if work else None
+        row = {"name": e["name"], "enabled": e.get("enabled", True), "width": e["width"],
+               "height": e["height"], "codec": e["video"]["codec"], "output": e["output"],
+               "estimate_bytes": export.estimate_bytes(e, tl.film_length_frames(), tl.fps),
+               "last": None}
+        if last:
+            row["last"] = {k: last.get(k) for k in ("ok", "finished_at", "speed", "bytes", "mbps",
+                                                    "warnings", "problems", "credit_file", "frames")}
+            row["last"]["output_loudness"] = (last.get("loudness") or {}).get("output_file")
+        out.append(row)
+    return out
+
+
+def _loudness_state(tl, preview: dict) -> dict:
+    import render
+    return {"settings": render.loudness_settings(tl), "preview": preview.get("loudness")}
+
+
+def _free_bytes() -> int:
+    import shutil
+    work = work_dir()
+    try:
+        return shutil.disk_usage(work if work and os.path.isdir(work) else os.path.expanduser("~")).free
+    except OSError:
+        return 0
+
+
+def _film_answer(tl, h: str, findings) -> dict:
+    """What the page needs to show the film: the summary, the findings, the state of the preview,
+    the creative LUT and the choices, the loudness, and the exports."""
+    import edits
+    preview = _preview_state(h, tl)
+    return {"path": timeline_file(), "name": os.path.basename(timeline_file()), "hash": h,
+            "summary": edits.summary(tl, h, _review_flags()),
+            "findings": [f.as_dict() for f in findings],
+            "preview": preview, "look": _look_state(tl), "loudness": _loudness_state(tl, preview),
+            "exports": _exports_state(tl), "free_bytes": _free_bytes()}
+
+
 def _preview_state(current_hash: str, tl=None) -> dict:
     """Whether a film preview exists and was made from the timeline file as it is now.
     With `tl`, also what the next preview has to do (`pending`, SPECS 7.6): the segments
@@ -801,6 +1061,7 @@ def _preview_state(current_hash: str, tl=None) -> dict:
         return state
     state.update(exists=True, file=meta["file"], frames=meta.get("frames"),
                  seconds=meta.get("seconds"), rendered_at=meta.get("rendered_at"),
+                 loudness=meta.get("loudness"),
                  up_to_date=meta.get("timeline_hash") == current_hash and not meta.get("range"))
     return state
 

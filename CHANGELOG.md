@@ -21,6 +21,11 @@
   report `reports/render-report.json`; a credit file next to a film that uses a credited LUT;
   `render --detach` for a background run with a log and a pid file; SIGTERM stops it clean.
 - `Decoder.write_frame_range`.
+- The Film tab: a *Look and sound* card (the creative LUT from the LUT folder with its credit,
+  the loudness mode, a readout of the loudness the film has) and an *Export* card (the exports
+  with size estimate and last render, a Render button, the default film and the ProRes master).
+  Endpoints `POST /api/look`, `POST /api/loudness`, `POST /api/render`; `GET /api/timeline`
+  also answers with `look`, `loudness`, `exports` and `free_bytes`.
 - The Shotcut project and its read-back (decision D11): `export-shotcut` writes `film.mlt`
   (the preview copies on V1, the sound of each clip shifted by its offset in whole samples
   on two sound tracks, crossfades and fades as filters, the creative LUT as a filter) and

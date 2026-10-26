@@ -376,6 +376,10 @@
   .film-offset.set { border-color: #ffd166; }
   .film-warn { color: #ffd166; font-size: 0.85em; margin: 8px 0; white-space: pre-wrap; }
   .film-warn:empty { display: none; }
+  .film-row2 { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 8px 0; }
+  .film-select { padding: 4px 8px; background: #0a0a2e; color: #eee; border: 1px solid #333; border-radius: 4px; min-width: 220px; }
+  .film-ok { color: #95d5b2; } .film-bad { color: #ff6b6b; }
+  .film-credit { font-size: 0.8em; color: #aaa; margin-top: 4px; word-break: break-all; }
 </style>
 </head>
 <body>
@@ -550,6 +554,40 @@
         <div class="hint" id="filmMissing"></div>
         <video id="filmPlayer" class="film-player" controls preload="metadata" style="display:none"></video>
         <div class="film-note" id="filmPlayerNote"></div>
+      </div>
+      <div class="card" id="filmLookCard" style="display:none">
+        <h2>Look and sound</h2>
+        <p>The base look (Blackmagic Gen 5 Film to Video) is always applied. A creative LUT goes on top of it,
+           for the whole film. The sound of every scene is levelled to the same loudness, then the whole film to
+           the target, with a limit for the true peak.</p>
+        <div class="film-row2">
+          <label for="filmLutSelect">Creative LUT</label>
+          <select class="film-select" id="filmLutSelect" onchange="filmSetLut(this.value)"></select>
+          <span class="hint" id="filmLutNote"></span>
+        </div>
+        <div class="film-credit" id="filmLutCredit"></div>
+        <div class="film-row2">
+          <label for="filmLoudMode">Loudness</label>
+          <select class="film-select" id="filmLoudMode" onchange="filmSetLoud(this.value)">
+            <option value="off">off (no levelling)</option>
+            <option value="segment_then_film">each scene, then the film</option>
+            <option value="film_only">the film only</option>
+          </select>
+          <span class="hint" id="filmLoudTarget"></span>
+        </div>
+        <div id="filmLoudReadout" class="film-note"></div>
+      </div>
+      <div class="card" id="filmExportCard" style="display:none">
+        <h2>Export</h2>
+        <p>The final film is rendered from the original BRAW files, not from the preview copies, so it takes a
+           while (about half real time on this machine). The job runs here; its progress is shown above.</p>
+        <table class="film-table" id="filmExportTable"></table>
+        <div class="film-row2">
+          <button class="btn btn-primary btn-small" id="filmAddFilmBtn" onclick="filmExportPreset('film-4k')">Export MP4, H.264, DCI 4K</button>
+          <button class="btn btn-secondary btn-small" id="filmAddMasterBtn" onclick="filmExportPreset('film-master')">Export ProRes 422 HQ master</button>
+          <span class="hint" id="filmFreeSpace"></span>
+        </div>
+        <div class="film-credit" id="filmCreditNote"></div>
       </div>
       <div class="card" id="filmSegmentsCard" style="display:none">
         <h2>Scenes</h2>
@@ -1111,6 +1149,8 @@ function renderFilm() {
   const badge = document.getElementById("filmPreviewBadge");
   document.getElementById("filmAssembleBtn").disabled = filmJob;
   document.getElementById("filmPreviewBtn").disabled = filmJob || !film;
+  document.getElementById("filmLookCard").style.display = film ? "block" : "none";
+  document.getElementById("filmExportCard").style.display = film ? "block" : "none";
   if (!film) {
     card.style.display = "none";
     clipsCard.style.display = "none";
@@ -1151,6 +1191,8 @@ function renderFilm() {
   }
   renderFilmTable();
   renderFilmClips();
+  renderFilmLook();
+  renderFilmExports();
 }
 
 // What the next preview has to do (SPECS 7.6): a changed offset changes sound only.
@@ -1256,9 +1298,7 @@ async function filmOp(event, ops) {
   const resp = await api("POST", "/api/timeline/edit", { hash: film.hash, operations: ops });
   filmBusy = false;
   if (resp.hash && resp.summary) {
-    film.hash = resp.hash;
-    film.summary = resp.summary;
-    film.preview = resp.preview;
+    Object.assign(film, resp);
     film.findings = resp.findings || [];
     renderFilm();
     return;
@@ -1271,6 +1311,146 @@ async function filmOp(event, ops) {
   showFilmError(resp.error || "The change was not saved.");
   if (resp.hash) await loadFilm();     // 409: the file changed; show the file as it is now
   else renderFilm();
+}
+
+// ── Look, loudness and export (step 3) ──
+const LOUD_MODES = { off: "off", segment_then_film: "each scene, then the film", film_only: "the film only" };
+
+function fmtGB(bytes) {
+  return (bytes / 1e9).toFixed(bytes < 1e10 ? 2 : 1) + " GB";
+}
+
+function renderFilmLook() {
+  const look = film.look || { luts: [], lut: null, folder: "" };
+  const sel = document.getElementById("filmLutSelect");
+  const current = look.lut ? (look.lut.id || "__current__") : "";
+  let html = '<option value="">none (the base look only)</option>';
+  look.luts.forEach(l => {
+    html += `<option value="${escapeHtml(l.id)}" ${l.problem ? "disabled" : ""}>${escapeHtml(l.title || l.name)}` +
+            ` (${escapeHtml(l.id)})${l.problem ? " - " + escapeHtml(l.problem) : ""}</option>`;
+  });
+  if (look.lut && !look.lut.id) {
+    html += `<option value="__current__">${escapeHtml(look.lut.name)} (not in the LUT folder)</option>`;
+  }
+  sel.innerHTML = html;
+  sel.value = current;
+  sel.disabled = filmJob || filmBusy;
+  document.getElementById("filmLutNote").textContent = look.luts.length ? "" :
+    "No .cube files found" + (look.folder ? " in " + look.folder : ": start the app with the environment variable VET_LUT_DIR set to the folder of your LUTs");
+  document.getElementById("filmLutCredit").textContent = look.lut && look.lut.credit
+    ? "Credit for the video description (also written next to the exported film): " + look.lut.credit : "";
+
+  const loud = film.loudness || { settings: { mode: "off" }, preview: null };
+  const s = loud.settings;
+  const mode = document.getElementById("filmLoudMode");
+  mode.value = s.mode;
+  mode.disabled = filmJob || filmBusy;
+  document.getElementById("filmLoudTarget").textContent = s.mode === "off" ? "" :
+    "target " + s.target_lufs + " LUFS, true peak at most " + s.true_peak_dbtp + " dBTP, a scene is raised by at most " + s.max_gain_db + " dB";
+  document.getElementById("filmLoudReadout").innerHTML = loudnessReadout(loud, film.exports || []);
+}
+
+function loudnessReadout(loud, exports) {
+  const rows = [];
+  const p = loud.preview;
+  if (p && p.film) {
+    const f = p.film;
+    const capped = Object.values(p.segments || {}).filter(r => r.capped).length;
+    const silent = Object.values(p.segments || {}).filter(r => r.silent).length;
+    rows.push(`<tr><td>Film preview</td><td class="film-mono">${f.after.lufs} LUFS</td><td class="film-mono">${f.after.true_peak_dbtp} dBTP</td>` +
+      `<td>${f.reached_target && f.reached_peak ? '<span class="film-ok">target and limit reached</span>' : '<span class="film-bad">' + escapeHtml((f.warnings || []).join(" ")) + "</span>"}` +
+      `${capped ? ", " + capped + " scene(s) at the largest gain" : ""}${silent ? ", " + silent + " silent" : ""}` +
+      `${film.preview && !film.preview.up_to_date ? " (the film changed since)" : ""}</td></tr>`);
+  }
+  (exports || []).forEach(e => {
+    const out = e.last && e.last.output_loudness;
+    if (out) rows.push(`<tr><td>Last export ${escapeHtml(e.name)}</td><td class="film-mono">${out.lufs} LUFS</td><td class="film-mono">${out.true_peak_dbtp} dBTP</td><td>measured on the file</td></tr>`);
+  });
+  if (!rows.length) {
+    return loud.settings.mode === "off" ? "" : "No loudness measured yet: render the preview or an export.";
+  }
+  return '<table class="film-table"><tr><th></th><th>Integrated</th><th>True peak</th><th></th></tr>' + rows.join("") + "</table>";
+}
+
+async function filmSetLut(id) {
+  if (!film || filmBusy || id === "__current__") return;
+  filmBusy = true;
+  showFilmError("");
+  const resp = await api("POST", "/api/look", { hash: film.hash, lut: id === "" ? null : id });
+  filmBusy = false;
+  if (resp.hash && resp.summary) { film = resp; renderFilm(); return; }
+  if (resp.findings) showFilmFindings(resp); else showFilmError(resp.error || "The LUT was not saved.");
+  if (resp.hash && !resp.findings) await loadFilm(); else renderFilm();
+}
+
+async function filmSetLoud(mode) {
+  if (!film || filmBusy) return;
+  filmBusy = true;
+  showFilmError("");
+  const resp = await api("POST", "/api/loudness", { hash: film.hash, mode: mode });
+  filmBusy = false;
+  if (resp.hash && resp.summary) { film = resp; renderFilm(); return; }
+  if (resp.findings) showFilmFindings(resp); else showFilmError(resp.error || "The loudness was not saved.");
+  if (resp.hash && !resp.findings) await loadFilm(); else renderFilm();
+}
+
+function renderFilmExports() {
+  const rows = film.exports || [];
+  const head = `<tr><th>Name</th><th>Size</th><th>Codec</th><th>About</th><th>In the film</th><th>Last render</th><th></th></tr>`;
+  const body = rows.map(e => {
+    const last = e.last;
+    const lastText = !last ? "none" :
+      (last.ok ? '<span class="film-ok">ok</span>' : '<span class="film-bad">failed</span>') +
+      ` ${escapeHtml((last.finished_at || "").replace("T", " ").replace("Z", ""))}, ${last.speed ? last.speed.video_fps : "?"} fps` +
+      (last.problems && last.problems.length ? '<br><span class="film-bad">' + escapeHtml(last.problems.join("; ")) + "</span>" : "");
+    const off = !e.enabled;
+    return `<tr id="filmExport_${escapeHtml(e.name)}">
+      <td class="film-mono">${escapeHtml(e.name)}</td>
+      <td class="film-mono">${e.width}x${e.height}</td>
+      <td class="film-mono">${escapeHtml(e.codec)}</td>
+      <td class="film-mono">${fmtGB(e.estimate_bytes)}</td>
+      <td>${off ? '<label><input type="checkbox" id="filmEnable_' + escapeHtml(e.name) + '"> switch on</label>' : "on"}</td>
+      <td>${lastText}</td>
+      <td><button class="btn btn-primary film-btn" ${filmJob ? "disabled" : ""}
+           onclick="filmRender('${escapeHtml(e.name)}', ${off})">Render</button></td></tr>`;
+  }).join("");
+  document.getElementById("filmExportTable").innerHTML = rows.length ? head + body :
+    "<tr><td>No export yet. Add one with the buttons below.</td></tr>";
+  document.getElementById("filmFreeSpace").textContent = film.free_bytes ? "Free space: " + fmtGB(film.free_bytes) : "";
+  const credits = rows.filter(e => e.last && e.last.credit_file).map(e => e.last.credit_file);
+  document.getElementById("filmCreditNote").textContent = credits.length
+    ? "Credit line written to: " + credits.join(", ") : "";
+  document.getElementById("filmAddFilmBtn").disabled = filmJob;
+  document.getElementById("filmAddMasterBtn").disabled = filmJob;
+}
+
+async function filmRender(name, off) {
+  showFilmError("");
+  const tick = document.getElementById("filmEnable_" + name);
+  if (off && !(tick && tick.checked)) {
+    showFilmError("This export is switched off. Tick \"switch on\" first (the ProRes master needs a lot of space).");
+    return;
+  }
+  const resp = await api("POST", "/api/render", { export: name, enable: !!off });
+  if (resp.error) { showFilmFindings(resp); return; }
+  filmJob = true;
+  renderFilm();
+  startPolling();
+}
+
+async function filmExportPreset(preset) {
+  showFilmError("");
+  if (preset === "film-master") {
+    const need = (film.exports || []).find(e => e.name === "film-master");
+    const gb = need ? fmtGB(need.estimate_bytes) : "a lot of space";
+    if (!confirm("The ProRes master takes about " + gb + " and the free space is " + fmtGB(film.free_bytes || 0) +
+                 ". Render it?")) return;
+  }
+  const resp = await api("POST", "/api/render", { preset: preset, enable: preset === "film-master" });
+  if (resp.error) { showFilmFindings(resp); return; }
+  filmJob = true;
+  renderFilm();
+  startPolling();
 }
 
 function filmSeek(i) {
@@ -1316,14 +1496,15 @@ async function filmRenderPreview() {
 // Called with every status answer: shows the progress of assemble and preview.
 function filmStatus(s) {
   const bar = document.getElementById("filmProgress");
-  if (s.step === "assembling" || s.step === "previewing") {
+  if (s.step === "assembling" || s.step === "previewing" || s.step === "rendering") {
     filmJob = true;
     bar.style.display = "block";
     document.getElementById("filmProgressFill").style.width = s.progress + "%";
     document.getElementById("filmSummaryLine").textContent = s.message;
     document.getElementById("filmAssembleBtn").disabled = true;
     document.getElementById("filmPreviewBtn").disabled = true;
-  } else if (s.step === "assembled" || s.step === "previewed" || s.step === "error") {
+    renderFilmExports();
+  } else if (s.step === "assembled" || s.step === "previewed" || s.step === "rendered" || s.step === "error") {
     if (filmJob) {
       filmJob = false;
       bar.style.display = "none";

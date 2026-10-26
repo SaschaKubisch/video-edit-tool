@@ -521,9 +521,16 @@ def _tail(path: str, n: int = 600) -> str:
 
 
 def _kill(proc) -> None:
-    if proc is not None and proc.poll() is None:
+    if proc is None:
+        return
+    if proc.poll() is None:
         proc.kill()
         proc.wait()
+    if proc.stdin is not None:
+        try:
+            proc.stdin.close()
+        except (BrokenPipeError, OSError):
+            pass
 
 
 def _remove(path) -> None:
