@@ -29,6 +29,18 @@
   `POST /api/timeline/edit`, `GET /api/preview/<file>` (range requests),
   `POST /api/assemble`, `POST /api/preview`.
 - `app --timeline FILE --work DIR --no-browser`.
+- A sync offset per clip that the owner types by hand: the Film tab has a field per
+  clip (SPECS 7.6). The value is stored in the timeline file as
+  `sources[<id>].audio_offset_hand_s`, beside the measured `audio_offset_s`, which is
+  never changed; `project.json` is not written. Rule V23 refuses a value beyond 30 s
+  and warns when the WAV then holds no sound for a scene. A changed offset marks the
+  sound of that clip's scenes for a new render and no picture. `assemble --replace`
+  keeps the typed offsets.
+- `timeline undo` and `timeline history`; `timeline validate` keeps a snapshot of a
+  valid file; `timeline frames` writes stills at film times or clip times.
+- `analyse --drift`: the clock drift between camera and recorder, measured on the
+  last minute of every clip of 120 s or more against the stored offset, with a
+  report that marks every clip over half a frame.
 
 ### Changed
 - The tool runs on Python 3.12 in its own `.venv`; packages are pinned in
