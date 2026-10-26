@@ -67,7 +67,7 @@ The tool does all automatic work on one timeline file. It renders a preview and 
 
 ## 3. Settled Decisions (Owner)
 
-These decisions are settled. This document builds on them and does not reopen them. Each is also a row in section 12 or a requirement in section 9. D1, D2, D3 and D5 were open decisions in version 2.0; the owner answered them on 2026-10-26 (section 14 lists what remains open). D6, D7, D8, D11 and D17 were answered later the same day; the last part of D7 (a clip with no steady scene) was answered after that.
+These decisions are settled. This document builds on them and does not reopen them. Each is also a row in section 12 or a requirement in section 9. D1, D2, D3 and D5 were open decisions in version 2.0; the owner answered them on 2026-10-26 (section 14 lists what remains open). D6, D7, D8, D11 and D17 were answered later the same day; the last part of D7 (a clip with no steady scene) was answered after that. D9 (loudness), D10 (creative LUT sources) and the question about the offsets of two clips were answered after that, also on 2026-10-26.
 
 | Area | Decision |
 |------|----------|
@@ -75,7 +75,7 @@ These decisions are settled. This document builds on them and does not reopen th
 | Footage | All clips are BRAW from a BMPCC 4K. Audio comes from a Zoom H2N as WAV. ffmpeg cannot decode BRAW video. |
 | Storage (D1) | **Option A.** The owner asked: "can we have it smaller", then decided: "okay lets do A". The tool keeps no full-resolution working copies. It makes only small preview copies (H.264, 2048 pixels wide) for analysis, the film preview in the tool's page and Shotcut. The final 4K render decodes the original `.braw` files directly: best quality, one encode. The ProRes working copies of version 2.0 are dropped. |
 | Decoder | Decoding goes through `vapoursynth-brawsource` (a plugin for the VapourSynth video framework, using the Apple GPU through Metal). Step 1 tested it on two real clips and it works (section 5). The Blackmagic RAW SDK stays the second decoder and is written only if the plugin fails later. |
-| Colour (D2, D10 in part) | The clips are Blackmagic colour science generation 5 and are recorded as Blackmagic Design Film (gamma and gamut) [measured]. The owner chose the Blackmagic "Gen 5 Film to Video" LUT, panel d of the step-1 comparison, as the default look. It is the base conversion from Blackmagic Film to Rec.709, applied with tetrahedral interpolation (`lut3d`, `interp=tetrahedral`) on the full-range RGB picture. The preview copies carry it baked in. The final render applies it to the RAW decode. LUT files stay on the owner's Mac (Resolve's LUT folder, `/Library/Application Support/Blackmagic Design/DaVinci Resolve/LUT/`) and are never committed. A creative LUT on top of the base conversion is optional; where such LUTs come from is open (D10). |
+| Colour (D2, D10 in part) | The clips are Blackmagic colour science generation 5 and are recorded as Blackmagic Design Film (gamma and gamut) [measured]. The owner chose the Blackmagic "Gen 5 Film to Video" LUT, panel d of the step-1 comparison, as the default look. It is the base conversion from Blackmagic Film to Rec.709, applied with tetrahedral interpolation (`lut3d`, `interp=tetrahedral`) on the full-range RGB picture. The preview copies carry it baked in. The final render applies it to the RAW decode. LUT files stay on the owner's Mac (Resolve's LUT folder, `/Library/Application Support/Blackmagic Design/DaVinci Resolve/LUT/`) and are never committed. A creative LUT on top of the base conversion is optional; where such LUTs come from is settled in the row "Creative LUT sources (D10)" below. |
 | Frame (D5) | **DCI 4K, 4096 x 2160**, as the owner decided: "DCI 4K, bars for wide". The wider clips (4096 x 1720) keep their full picture and are letterboxed: black bars above and below. Nothing is cropped from them. |
 | Python (D3) | **Python 3.12 and OpenCV allowed**, as the owner decided: "Yes, 3.12 + OpenCV". The tool moves to Python 3.12 and runs in its own environment. It may use OpenCV. |
 | Export | **Default final export:** MP4, H.264 video, DCI 4K 4096 x 2160, about 45 Mbit/s, AAC audio. YouTube's recommended range for 4K at 30 frames per second is 35 to 45 Mbit/s [documented, Src11]. **Master:** a ProRes 422 HQ `.mov` file is made only when the owner ticks it; it needs about 130 GB per 20 minutes at DCI 4K [estimate given with the decision; `SPECS.md` section 5.6 gives the arithmetic], so the free space is checked first. **Vertical shorts:** MP4, H.264, 1080 x 1920. The owner first said: "for the final export we can do quick time movie or another best practice format", then chose this. |
@@ -84,6 +84,9 @@ These decisions are settled. This document builds on them and does not reopen th
 | Transitions (D8) | **"Hard cut"** for the picture. The sound crossfades for 0.5 s at every join. The film fades in over 1 s and out over 2 s (starting values, changeable). |
 | Shotcut read-back (D11) | **"Tool reads cuts back".** After hand work in Shotcut, the tool reads the cut points and the order from the Shotcut project back into its timeline and renders the 4K film from the `.braw` files. Effects made only in Shotcut do not come back. Built in step 3. This answers the part of D11 about the preview size. The part about the audio form is still open (section 14). |
 | Encoder (D17) | **"Hardware (fast)".** The default encoder of the final export is `h264_videotoolbox` (Apple's hardware encoder) at 45 Mbit/s. `libx264` (software) stays selectable. |
+| Offsets of two clips | The clap report lines up the claps of two clips whose stored offsets have no shared sound: `A002_01011851_C047` (stored -5.027 s; a sync of +0.02 s would line up its claps) and `A002_01060813_C101` (stored 1.282 s; +0.18 s would) [inference from the clap report, not checked by ear]. The owner was asked whether to use the lined-up offsets or leave the stored ones and set them by hand, and answered **"Leave them, I set them"**. The stored offsets stay as they are. The owner types an offset per clip in the Film tab (`SPECS.md` section 7.6). |
+| Loudness (D9) | **"Each scene, then film".** Each scene is levelled to the same loudness, then the whole film is levelled to -14 LUFS integrated, with a true peak of at most -1 dBTP. These two numbers are the ones shown to the owner with the question. In the timeline file this is the loudness mode `segment_then_film`. Built in step 3. |
+| Creative LUT sources (D10) | **"Research free packs".** A research step finds free LUT packs whose licence allows use in the owner's videos, and shows stills of the owner's footage with each look. The owner picks which packs to install. The base look stays Gen 5 Film to Video. Built in step 3. |
 | Delivery | 4K films. Vertical 9:16 shorts are cut from the 4K source. |
 | Speech | English. This covers subtitles and transcript search. |
 | Installs allowed | `ffmpeg-full` (Homebrew, GPL, keg-only, installed beside the existing ffmpeg), VapourSynth with the BRAW plugin in the tool's own Python 3.12 environment, OpenCV, and Shotcut (installed on 2026-10-26, version 26.9.28 [measured]). |
@@ -149,12 +152,12 @@ Each step is usable on its own. A later step starts only when the step before it
 |------|------|---------------------------------------|-------------------------|
 | 1 | Conversion test. **Done** on 2026-10-26: the conversion test, and its addendum, the preview-copy check. Results in section 5.1. | The owner knows how long one real clip takes to convert, how large the copies are and that the colour is right. Two preview copies exist and open in QuickTime-compatible players and in Shotcut's `melt`. | - |
 | 2 | Preview copies, timeline file and assembly. **Built** on the branch `editor-step2` (the owner has not yet watched a preview). | Get preview copies of all clips (the `convert` command, requirements C1 to C7), then a rough film in recording order, without clap and camera movement, with audio crossfades and film fades. Watch it in the page and trim it. | Step 1 result; D6, D7 and D8 are settled (section 3) |
-| 3 | Look and sound | Get a levelled, graded DCI 4K film in MP4 (H.264, about 45 Mbit/s), rendered from the `.braw` files. Choose a creative LUT from stills if wanted. Get the Shotcut project and read its cuts back, and the ProRes master if ticked. | D9 (loudness), D10 (creative LUT sources), D11 (audio form in the Shotcut project) |
+| 3 | Look and sound | Get a levelled, graded DCI 4K film in MP4 (H.264, about 45 Mbit/s), rendered from the `.braw` files. Choose a creative LUT from stills if wanted. Get the Shotcut project and read its cuts back, and the ProRes master if ticked. | D11 (audio form in the Shotcut project); D9 and D10 are settled (section 3) |
 | 4 | Words | Get English subtitles and titles, burned in or as a file. | D12 (Whisper model), D13 (subtitle form and fonts) |
 | 5 | Prompt edits | Change the film by describing scenes to Claude Code. | D14 (meaning of "cut out", search method) |
 | 6 | Vertical shorts | Get a 9:16 short of a chosen length from the 16:9 film. | D15 (default length), D16 (crop and importance) |
 
-D4 (the Resolve option) can be answered at any time. The open decisions are in section 14. D1, D2, D3, D5, D6, D7, D8, D17 and the preview-size part of D11 are answered (section 3).
+D4 (the Resolve option) can be answered at any time. The open decisions are in section 14. D1, D2, D3, D5, D6, D7, D8, D9, D10, D17 and the preview-size part of D11 are answered (section 3).
 
 ## 8. Scope
 
@@ -267,10 +270,10 @@ Step 1 tested this method on two clips (section 5.1). These requirements describ
 
 | ID | Requirement | Priority |
 |----|-------------|----------|
-| L1 | Make side-by-side stills of the same frames of several real clips with several candidate creative LUTs, to choose one (D10). The default look needs no choice: it is the Gen 5 Film to Video LUT. | Must |
+| L1 | Make side-by-side stills of the same frames of several real clips with several candidate creative LUTs, to choose one (D10). The candidates come from the research step of D10: free packs whose licence allows use in the owner's videos. The default look needs no choice: it is the Gen 5 Film to Video LUT. | Must |
 | L2 | Apply the LUTs of the whole film with tetrahedral interpolation. | Must |
 | L3 | Apply the base LUT (default: Blackmagic Gen 5 Film to Video) in the final render to the RAW decode, before any creative LUT. The preview copies already carry the base LUT. | Must |
-| L4 | Bring every segment to the same loudness, then bring the film to the target loudness. | Must |
+| L4 | Bring every segment to the same loudness, then bring the film to the target loudness: -14 LUFS integrated (D9, "Each scene, then film"). | Must |
 | L5 | Keep the true peak of the film under the limit. | Must |
 
 **E - Preview and export (steps 2 and 3)**
@@ -348,7 +351,7 @@ Step 1 tested this method on two clips (section 5.1). These requirements describ
 - Every clip of the owner's first shoot has a preview copy that passes check C5.
 - Matching stays correct: all pairs of a typical shoot are matched as in v1.1.
 - The sha256 hashes of all originals are the same before and after any run of the tool.
-- The film's integrated loudness is within 0.5 LU of the target, and its true peak is at or under -1 dBTP [starting values, to be confirmed by the owner].
+- The film's integrated loudness is within 0.5 LU of the target of -14 LUFS, and its true peak is at or under -1 dBTP (D9, settled; the 0.5 LU tolerance is a starting value).
 - In a test film with a known marker, picture and sound stay within 1 ms (`SPECS.md`, check 2.10).
 - Times for conversion, assembly and render are measured and recorded in steps 1 to 3. Step 1 is done (section 5.1). No limit is set before step 3.
 - **Goal check by the owner:** the next film is finished without opening DaVinci Resolve.
@@ -374,6 +377,9 @@ Step 1 tested this method on two clips (section 5.1). These requirements describ
 | Hard cut for the picture. Sound crossfade 0.5 s. Film fade-in 1 s, fade-out 2 s. (D8) | Owner | A dissolve between scenes. | The owner answered "Hard cut" for the picture. The lengths are starting values that the owner can change. |
 | The default encoder of the final export is `h264_videotoolbox` at 45 Mbit/s; `libx264` stays selectable. (D17) | Owner | `libx264` preset slow as the default. | The owner answered "Hardware (fast)". Measured on 5 s of a `brlt` clip at 4096 x 2160 (section 5.1): `h264_videotoolbox` ran at 13.9 to 15.2 fps and gave 45.7 Mbit/s; `libx264` preset slow ran at 4.1 to 4.4 fps and gave 49.1 Mbit/s with the same 45 Mbit/s setting. A 20-minute film takes about 40 minutes against about 2.4 hours at the loads of that test [arithmetic]. Picture quality was compared on one frame only (PSNR against the step-1 still: 39.1 dB and 39.3 dB). Check 3.8 compares both on the whole first shoot. |
 | One LUT for the whole film, chosen from side-by-side stills; tetrahedral interpolation. | Owner | Per-clip grading. | Fits static ambient films; one choice, easy to repeat. |
+| The stored offsets of `A002_01011851_C047` and `A002_01060813_C101` stay; the owner types offsets per clip in the Film tab. | Owner | Use the lined-up offsets +0.02 s and +0.18 s from the clap report. | The owner answered "Leave them, I set them". The lined-up values are an inference from two sounds that the camera and the recorder each heard once; they were not checked by ear [inference]. A hand offset is stored in the timeline file next to the offset from matching, so the original stays visible and can be restored (`SPECS.md` section 3.2, `audio_offset_hand_s`). |
+| Loudness: level each scene to the same loudness, then the whole film to -14 LUFS integrated with a true peak of at most -1 dBTP. (D9) | Owner | Level the film as a whole only (mode `film_only`, which keeps the differences between scenes). | The owner answered "Each scene, then film". The numbers are those shown with the question; YouTube is described as targeting about -14 LUFS with a -1 dBTP peak, from secondary sources only [documented, secondary, Src12]. |
+| Creative LUTs come from free packs found by a research step, and the owner picks which to install. (D10) | Owner | Name one LUT collection now; bundle a pack with the tool. | The owner answered "Research free packs". The licences of free packs were not read before this answer [documented, secondary]; the research step reads them, and a pack whose licence does not allow use in the owner's videos is not offered. |
 | 4K films; shorts cut from the 4K source. | Owner | 1080p. | A 9:16 window of a 1080p frame is 608 pixels wide and would be enlarged to 1080 [arithmetic]. |
 | English speech only. | Owner | Several languages. | Fixes the Whisper model class and the subtitle rules. |
 | Duration-first matching with an order-preserving alignment. | Kept | Pure audio correlation of all pairs. | Camera microphone against H2N gave weak scores (8 to 18 percent) and many extractions; durations are cheap and near-identical for pairs [reported in the v1.1 PRD]. |
@@ -407,7 +413,7 @@ Step 1 tested this method on two clips (section 5.1). These requirements describ
 
 Nothing here is decided. Where the owner has said something, it is quoted. The current plan in `SPECS.md` is a technical default, not a decision. Each question is needed before the step named.
 
-Answered on 2026-10-26 and moved to section 3 (settled decisions) and section 12 (rationale): **D1** storage (option A), **D2** colour, **D3** Python and packages, **D5** frame shape, the default LUT of **D10**, **D6** the clap, **D7** steady scenes (including the clip with no steady scene: "Leave it out, list it"), **D8** transitions and fades, **D17** the encoder, and the preview-size part of **D11**. These numbers are not reused. **D17** came from the speed measurements of step 1.
+Answered on 2026-10-26 and moved to section 3 (settled decisions) and section 12 (rationale): **D1** storage (option A), **D2** colour, **D3** Python and packages, **D5** frame shape, the default LUT of **D10**, **D6** the clap, **D7** steady scenes (including the clip with no steady scene: "Leave it out, list it"), **D8** transitions and fades, **D9** loudness ("Each scene, then film"), the rest of **D10** ("Research free packs"), **D17** the encoder, and the preview-size part of **D11**. The question about the offsets of `A002_01011851_C047` and `A002_01060813_C101` ("Leave them, I set them") was also answered; it has no number. These numbers are not reused. **D17** came from the speed measurements of step 1.
 
 **Any time**
 
@@ -415,8 +421,6 @@ Answered on 2026-10-26 and moved to section 3 (settled decisions) and section 12
 
 **Before step 3**
 
-- **D9. Loudness target.** The owner said: "levelise all audio loudness". Open: the number. YouTube is described as targeting about -14 LUFS integrated with a -1 dBTP peak; the sources are secondary and the official upload page gives no loudness number [documented, secondary, Src12]. Open: is every segment levelled to the same loudness (the plan), or only the film as a whole?
-- **D10. Creative LUT sources (the open part).** The owner asked for "state-of-the-art LUTs". Settled: the default look is the Blackmagic Gen 5 Film to Video LUT. Open: which LUT collection the owner trusts for a creative LUT on top of it, and where it lives on the machine. Free packs exist; their licences were not read [documented, secondary; found in the research report, not in Appendix B].
 - **D11. Shotcut project, the part not answered.** The owner answered the question about the preview size: "Tool reads cuts back" (section 3). Open: in the Shotcut project, separate audio clips per segment, already shifted by the offset (the plan), or one premixed audio track.
 
 **Before step 4**
@@ -450,6 +454,7 @@ Answered on 2026-10-26 and moved to section 3 (settled decisions) and section 12
 - Reading cut points and order back from Shotcut is now in scope (new requirement E7, step 3). It was out of scope in version 2.1. E4 no longer says "one-way".
 - Not answered and still open: the audio form in the Shotcut project (D11).
 - Step 2 is built on the branch `editor-step2`. Where the build found the plan wrong, `SPECS.md` says "changed in the build": OpenCV measures blocks of the picture and fits one camera motion (so people who move in a still shot are not camera movement); a film fade that does not fit the first or last scene is shortened and reported; a linear sound crossfade keeps the level of two parts of the same sound, not of two different sounds; the page does not start a preview job by itself after a change.
+- Added later on 2026-10-26: the owner answered D9 (loudness, "Each scene, then film", -14 LUFS integrated, true peak at most -1 dBTP), the open part of D10 (creative LUT sources, "Research free packs") and the question about the offsets of `A002_01011851_C047` and `A002_01060813_C101` ("Leave them, I set them"). Section 3 has new rows, section 12 new rows, section 14 loses D9 and D10.
 - Added later on 2026-10-26: the owner answered the last open part of D7, what to do with a clip that has no steady scene: **"Leave it out, list it"**. The clip is not put on the timeline, the report names it, and the owner can add it back by hand. The plan's setting that would keep the whole clip instead is dropped.
 
 **Changed in version 2.1 against version 2.0**

@@ -6,7 +6,7 @@ Companion to `PRD.md`. Sections 1 to 17 specify the planned editor. Appendix A d
 
 Of sections 1 to 17, step 2 is built on the branch `editor-step2`, except the drift measurement (7.3) and the contact sheets of 7.4: the Python 3.12 move, the `convert` command (section 6, with `decoder.py`, `safety.py`, `tools.py`), the timeline file's loader, validator and saver with `timeline validate` and `timeline summary` (section 3, rules V0 to V22), the clap finder with `analyse --clap` (section 7.2), the steady-scene finder with `analyse --scenes` (7.4), the assembly with `assemble` (7.5), the film preview with `preview` (5.5; the render plan of 5.1 and the sound path of 5.4 are built, the final film of 5.3 is not), saving with snapshots and the hash check (4.1), the page's operations (4.4) and the Film tab with its endpoints (7.6, section 12). The module table in section 2.3 says which module is built. Where the build found the plan wrong, the text says "changed in the build". The test of step 1 was run by hand with scripts that are not in the repository (section 6.1). Every other interface named here (commands, endpoints, file names, module names) is planned, and names may change when the code is written.
 
-Version 2.2 adds the owner's decisions on the clap (D6), steady scenes (D7, with the clip that has no steady scene: "Leave it out, list it"), transitions (D8), reading Shotcut cuts back (D11) and the encoder (D17). Step 2 is being built on the branch `editor-step2`; where the build found the plan wrong, the text is changed and marked "changed in the build".
+Version 2.2 adds the owner's decisions on the clap (D6), steady scenes (D7, with the clip that has no steady scene: "Leave it out, list it"), transitions (D8), reading Shotcut cuts back (D11), the encoder (D17), loudness (D9, "Each scene, then film"), the sources of creative LUTs (D10, "Research free packs") and the offsets of two clips ("Leave them, I set them"). Step 2 is being built on the branch `editor-step2`; where the build found the plan wrong, the text is changed and marked "changed in the build".
 
 Version 2.1 records the owner's decisions of 2026-10-26 (storage option A, colour, DCI 4K frame, Python 3.12 with OpenCV, the export format) and the results of step 1. The ProRes working copies of version 2.0 are replaced by H.264 preview copies, and the final render reads the `.braw` files.
 
@@ -268,7 +268,7 @@ Types: `int` integer, `num` decimal number, `str` string, `bool` true or false. 
 |-------|------|-----|---------|
 | `sample_rate` | int | yes | Mix rate. 48000. |
 | `loudness.mode` | str | yes | `off` (no levelling; used by the rough film of step 2 and by tests), `segment_then_film` (level every segment, then the film) or `film_only`. |
-| `loudness.target_lufs` | num | unless mode is `off` | Target integrated loudness. **No default.** D9. |
+| `loudness.target_lufs` | num | unless mode is `off` | Target integrated loudness. Settled with D9 (2026-10-26, "Each scene, then film"): -14 for the owner's films, with `true_peak_dbtp` -1. The code has no built-in default; the file carries the value when step 3 sets the mode. |
 | `loudness.true_peak_dbtp` | num | no | Limit. Default -1.0. |
 | `loudness.max_gain_db` | num | no | Largest gain levelling may add to a quiet segment. Starting value 12. |
 
@@ -307,7 +307,7 @@ Types: `int` integer, `num` decimal number, `str` string, `bool` true or false. 
 
 ### 3.3 Example
 
-The values are an illustration. The frame rate, frame sizes, frame counts and the base LUT's file name are those of the owner's clips and decision (the clips `A002_01011540_C002` and `A002_01060615_C083` of `Recordings_261003`); the paths, hashes, offsets, the creative LUT and the settings are made up. `mode: both` in `subtitles` and `-14.0` as target are examples of open decisions D13 and D9, not choices. `h264_videotoolbox` is the default encoder (decision D17).
+The values are an illustration. The frame rate, frame sizes, frame counts and the base LUT's file name are those of the owner's clips and decision (the clips `A002_01011540_C002` and `A002_01060615_C083` of `Recordings_261003`); the paths, hashes, offsets, the creative LUT and the settings are made up. `mode: both` in `subtitles` is an example of open decision D13, not a choice. `-14.0` as target and `segment_then_film` as mode are the settled values of D9. `h264_videotoolbox` is the default encoder (decision D17).
 
 ```json
 {
@@ -972,7 +972,7 @@ Decision D6: "Only at the start". Each clip has one clap at its beginning, so th
 
 Reasons that mark a clip for review: a result of `single` or `none`; a clap later than `CLAP_LATE_SEC` (10 s), because a clap at the start is expected; a confidence under `CLAP_WEAK_CONFIDENCE` (0.5); an offset outside `USUAL_OFFSET_RANGE_SEC`. The last one is the owner's list of nine odd offsets of the first shoot: 96 of the 105 offsets lie between 0.085 and 0.37 s (`PRD.md` section 5 says 0.09; the lowest of the 96 is 0.0851 s), and the nine outside are -5.03, -1.70, 0.63, 0.64, 0.66, 0.83, 0.89, 1.28 and 1.94 s.
 
-**Result on the first shoot** [measured, 2026-10-26, report `clap-report-all.txt` in the work folder]: 98 of 105 clips `agree` (the difference of the claps from the stored offset is at most 2 ms); 7 `single`; none `none`. The times of the 98 claps: median 0.26 s, 90 percent under 5.1 s. 30 clips are marked for review. Of the nine odd offsets, six are confirmed by shared sounds at that offset (0.63, 0.64, 0.66, 0.83, 0.89 and 1.94 s): the offsets are correct. Three have no shared sound at the stored offset: **-5.03 s (A002_01011851_C047), -1.70 s (A002_01060614_C082) and 1.28 s (A002_01060813_C101)**. Their offsets stay unconfirmed [unverified]; the report lists them. Whether the claps found are the claps the owner made is [unverified] until the owner listens (check 2.14). The first 10 clips all `agree`, with claps between 0.10 and 1.45 s, except A002_01011540_C002, whose only shared sound is at 15.9 s and weak (marked for review).
+**Result on the first shoot** [measured, 2026-10-26, report `clap-report-all.txt` in the work folder]: 98 of 105 clips `agree` (the difference of the claps from the stored offset is at most 2 ms); 7 `single`; none `none`. The times of the 98 claps: median 0.26 s, 90 percent under 5.1 s. 30 clips are marked for review. Of the nine odd offsets, six are confirmed by shared sounds at that offset (0.63, 0.64, 0.66, 0.83, 0.89 and 1.94 s): the offsets are correct. Three have no shared sound at the stored offset: **-5.03 s (A002_01011851_C047), -1.70 s (A002_01060614_C082) and 1.28 s (A002_01060813_C101)**. Their offsets stay unconfirmed [unverified]; the report lists them. The owner decided on two of them, C047 and C101 (the clap report lines their claps up at +0.021 s and +0.179 s [inference, not checked by ear]): **"Leave them, I set them"** (`PRD.md` section 3). The stored offsets stay, and the owner types an offset per clip in the Film tab (7.6). The owner has not decided on C082 (only the recorder heard a clap, so the camera audio cannot check its offset). Whether the claps found are the claps the owner made is [unverified] until the owner listens (check 2.14). The first 10 clips all `agree`, with claps between 0.10 and 1.45 s, except A002_01011540_C002, whose only shared sound is at 15.9 s and weak (marked for review).
 
 `peak_db` uses the median power of the searched span as its reference; a clip with a busy kitchen has a higher median and so lower values, which is why the band is relative to the loudest event of the same clip.
 
@@ -1143,7 +1143,7 @@ Apply the look (the default base LUT, and a creative LUT if the owner wants one)
 
 Outputs: `stills/`, `look` in `timeline.json`, `renders/film-4k.mp4`, `renders/film-master.mov` (only if ticked), `reports/render-report.json`, `film.mlt`, `audio-synced/`.
 
-Status: not built. Needs step 2, D9, D10 and the audio form of D11. The final render is the one place where the decoder runs at full size, so this step also settles the speed of a whole film (check 3.8).
+Status: not built. Needs step 2 and the audio form of D11. D9 and D10 are settled. The final render is the one place where the decoder runs at full size, so this step also settles the speed of a whole film (check 3.8).
 
 ### 8.2 The base LUT and choosing a creative LUT from stills (L1)
 
@@ -1151,12 +1151,14 @@ Status: not built. Needs step 2, D9, D10 and the audio form of D11. The final re
 
 **A creative LUT is optional.** `python3 main.py look stills --clips 6 --luts "$VET_LUT_DIR"` makes the comparison for it.
 
-1. **Candidates.** Every `.cube` file in the folder named by `VET_LUT_DIR`, plus one entry "base only" (no creative LUT). The folder is on the owner's machine and is never committed. Where creative LUTs come from is D10.
+1. **Candidates.** Every `.cube` file in the folder named by `VET_LUT_DIR`, plus one entry "base only" (no creative LUT). The folder is on the owner's machine and is never committed. Where creative LUTs come from is settled by D10 ("Research free packs"): see the research step below.
 2. **Clips.** Six clips spread evenly over the shoot, or the clips named with `--clips A002_..._C002,...`.
 3. **Frame.** The middle frame of the clip's first steady run (step 2), or the frame at 10 s if the clip was not analysed.
 4. **Picture.** The frame is read from the clip's preview copy, which already carries the base LUT. It is placed in the film frame (section 5.2), scaled to 640 pixels wide, and passed through the candidate LUT. This is the chain of the film preview, and the same LUT chain as the final render.
 5. **Sheets.** One sheet per clip: a grid of 4 x 3 tiles, "base only" first, each tile labelled with the LUT's file name; more LUTs make more pages. One sheet per LUT: the same LUT on the six clips, in a grid of 3 x 2. Sheets are PNG files in `stills/lut-by-clip/` and `stills/lut-by-lut/`. They are composed with `xstack` and `drawtext` of `ffmpeg-full`.
 6. The owner (or Claude Code, on request) looks at the sheets. `python3 main.py look set --lut <file>` copies the file to `<work_dir>/luts/<sha256>.cube`, writes `look.lut` with its hash and `interp: tetrahedral`, and validates the result.
+
+**The research step (D10, settled 2026-10-26: "Research free packs"; not built).** Before the first `look stills` run, a research step finds free LUT packs and reads the licence of each. It offers only packs whose licence allows use in the owner's videos, and it records for each pack its name, where it comes from, its licence and what the licence allows. It makes the stills of this section from the owner's footage with each look, using LUT files that are downloaded for the stills only. The owner looks at the stills and picks which packs to install; only those go into the folder named by `VET_LUT_DIR`. No pack is bundled with the tool or committed to the repository.
 
 A creative LUT must expect Rec.709 input, not log, and goes after the base LUT [inference]. The tool cannot tell from a `.cube` file which input it expects; the stills show it.
 
@@ -1186,7 +1188,7 @@ Speed: the first pass of `loudnorm` took 15.5 s for 20 minutes of synthetic ster
 
 The method is a measured fixed gain followed by a limiter. `loudnorm` in dynamic mode is not used, because it can change the loudness over time in material with a wide range [inference, research B5]. `pyloudnorm` would do the same measurement in Python; it would be a new package (D3).
 
-The target is `audio.loudness.target_lufs` of the timeline file. There is no built-in default (D9).
+The target is `audio.loudness.target_lufs` of the timeline file. The owner's decision D9 ("Each scene, then film") is mode `segment_then_film` with a target of -14 LUFS integrated and a true peak of at most -1 dBTP (the numbers shown to the owner). The code has no built-in default; step 3 writes the values into the file.
 
 ### 8.5 Export (E2, E3, E6)
 
@@ -1577,8 +1579,8 @@ The questions are set out in `PRD.md` section 14, with the owner's words. This t
 | D6 | Clap position, guard, no-clap policy. **Settled 2026-10-26: "Only at the start".** | One clap at the start of each clip. Guard 0.5 s (starting value). A clip with no clap is kept from its first steady frame and listed in the report. | 2 |
 | D7 | Meaning of "most stable scene"; shortest scene; no-run policy. **Settled 2026-10-26: "Every steady scene".** No-run policy, settled the same day: **"Leave it out, list it"**. | Every steady run of at least 2 s (starting value) becomes a segment; only the movement between them is dropped. A clip with no run is not put on the timeline and is named in the report; the owner can add it back by hand. | 2 |
 | D8 | Picture between scenes; fade lengths. **Settled 2026-10-26: "Hard cut".** | Hard cut for the picture. Fade-in 1.0 s, fade-out 2.0 s, audio crossfade 0.5 s as starting values. | 2 |
-| D9 | Loudness target; per segment or per film | `target_lufs` is required when the mode is not `off`. Mode `segment_then_film` is available. | 3 |
-| D10 | LUT collection and sources. **Default settled 2026-10-26: Gen 5 Film to Video.** Creative LUT sources open. | The base LUT is the Resolve file (section 8.2). For a creative LUT, `VET_LUT_DIR` names a folder. Nothing is bundled. | 3 |
+| D9 | Loudness target; per segment or per film. **Settled 2026-10-26: "Each scene, then film".** | Mode `segment_then_film`: every segment is levelled to the same loudness, then the film to -14 LUFS integrated with a true peak of at most -1 dBTP (the values shown to the owner). `target_lufs` is still required when the mode is not `off`. | 3 |
+| D10 | LUT collection and sources. **Default settled 2026-10-26: Gen 5 Film to Video. Creative LUT sources settled the same day: "Research free packs".** | The base LUT is the Resolve file (section 8.2). A research step finds free LUT packs whose licence allows use in the owner's videos and shows stills of the owner's footage with each look; the owner picks which to install, into the folder that `VET_LUT_DIR` names. Nothing is bundled. | 3 |
 | D11 | Audio in the Shotcut project; Shotcut works at preview size. **Preview size settled 2026-10-26: "Tool reads cuts back".** The audio form is open. | One synced audio clip per segment (the plan; not decided). Shotcut uses the preview copies; the tool reads the cuts back and renders the 4K film (section 8.6). | 3 |
 | D12 | Whisper model | `VET_WHISPER_MODEL`. A timing test on a two-minute sample comes first. | 4 |
 | D13 | Subtitle form; font | `mode` and `font` are required in the file when subtitles are burned. | 4 |
