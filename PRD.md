@@ -3,7 +3,7 @@
 **Version:** 2.2 (draft for the owner's review)
 **Date:** 2026-10-26
 **Owner:** Sascha Kubisch
-**Status:** Matching and sync (requirements M1 to M6) are built and released as v1.1.0. Step 1, the conversion test, is done: its results are in section 5 and in `SPECS.md` section 6. Of the rest, the first part of step 2 is built on the branch `editor-step2` (the `convert` command, the timeline file's loader and validator, the clap finder); everything else in this document is planned and not built. Section 3 records the owner's decisions of 2026-10-26 on storage, colour, frame, Python and export. Section 2 replaces the goal of v1.1. Version 2.2 records the owner's decisions of 2026-10-26 on the clap (D6), steady scenes (D7, including the clip with no steady scene), transitions (D8), reading cuts back from Shotcut (D11) and the encoder (D17); step 2 is being built.
+**Status:** Matching and sync (requirements M1 to M6) are built and released as v1.1.0. Step 1, the conversion test, is done: its results are in section 5 and in `SPECS.md` section 6. Of the rest, step 2 is built on the branch `editor-step2` (the `convert` command, the timeline file's loader and validator, the clap finder, the steady-scene finder, the assembly, the film preview and the Film tab with trim controls); the drift measurement and everything in steps 3 to 6 are planned and not built. Section 3 records the owner's decisions of 2026-10-26 on storage, colour, frame, Python and export. Section 2 replaces the goal of v1.1. Version 2.2 records the owner's decisions of 2026-10-26 on the clap (D6), steady scenes (D7, including the clip with no steady scene), transitions (D8), reading cuts back from Shotcut (D11) and the encoder (D17); step 2 is being built.
 
 Companion document: `SPECS.md` (how it is built, the timeline file format, the tests).
 
@@ -148,7 +148,7 @@ Each step is usable on its own. A later step starts only when the step before it
 | Step | Name | What the owner can do when it is done | Needed before it starts |
 |------|------|---------------------------------------|-------------------------|
 | 1 | Conversion test. **Done** on 2026-10-26: the conversion test, and its addendum, the preview-copy check. Results in section 5.1. | The owner knows how long one real clip takes to convert, how large the copies are and that the colour is right. Two preview copies exist and open in QuickTime-compatible players and in Shotcut's `melt`. | - |
-| 2 | Preview copies, timeline file and assembly | Get preview copies of all clips (the `convert` command, requirements C1 to C7), then a rough film in recording order, without clap and camera movement, with audio crossfades and film fades. Watch it in the page and trim it. | Step 1 result; D6, D7 and D8 are settled (section 3) |
+| 2 | Preview copies, timeline file and assembly. **Built** on the branch `editor-step2` (the owner has not yet watched a preview). | Get preview copies of all clips (the `convert` command, requirements C1 to C7), then a rough film in recording order, without clap and camera movement, with audio crossfades and film fades. Watch it in the page and trim it. | Step 1 result; D6, D7 and D8 are settled (section 3) |
 | 3 | Look and sound | Get a levelled, graded DCI 4K film in MP4 (H.264, about 45 Mbit/s), rendered from the `.braw` files. Choose a creative LUT from stills if wanted. Get the Shotcut project and read its cuts back, and the ProRes master if ticked. | D9 (loudness), D10 (creative LUT sources), D11 (audio form in the Shotcut project) |
 | 4 | Words | Get English subtitles and titles, burned in or as a file. | D12 (Whisper model), D13 (subtitle form and fonts) |
 | 5 | Prompt edits | Change the film by describing scenes to Claude Code. | D14 (meaning of "cut out", search method) |
@@ -208,6 +208,8 @@ The wording is the owner's, as recorded.
 ### 9.2 Requirements
 
 Priority: Must, Should, Could. "Built" means released in v1.1.0.
+
+**Built on the branch `editor-step2`** [measured by the tests of the branch, 2026-10-26; `SPECS.md` section 7 says how]: C1 to C6 and the interface of C7; T1 to T3; T4 (atomic saves and numbered snapshots; the `undo` command is not built); T5 (`timeline validate` and `timeline summary`; `timeline frames` is not built); T6 (hash check on every page edit); A1 to A7 (the drift is not in the report); E1; U1 to U3; M7 and M9. **Not built:** M8 (thumbnails from the preview copies), the drift measurement (7.3), E2 to E7, and the requirements of steps 3 to 6.
 
 **M - Match and sync (kept from v1.1)**
 
@@ -447,6 +449,7 @@ Answered on 2026-10-26 and moved to section 3 (settled decisions) and section 12
 - Decisions moved from open to settled: D6 ("Only at the start"), D7 ("Every steady scene"), D8 ("Hard cut"), D17 ("Hardware (fast)") and the preview-size part of D11 ("Tool reads cuts back"). Section 3 has new rows, section 12 new rows, section 14 shrinks.
 - Reading cut points and order back from Shotcut is now in scope (new requirement E7, step 3). It was out of scope in version 2.1. E4 no longer says "one-way".
 - Not answered and still open: the audio form in the Shotcut project (D11).
+- Step 2 is built on the branch `editor-step2`. Where the build found the plan wrong, `SPECS.md` says "changed in the build": OpenCV measures blocks of the picture and fits one camera motion (so people who move in a still shot are not camera movement); a film fade that does not fit the first or last scene is shortened and reported; a linear sound crossfade keeps the level of two parts of the same sound, not of two different sounds; the page does not start a preview job by itself after a change.
 - Added later on 2026-10-26: the owner answered the last open part of D7, what to do with a clip that has no steady scene: **"Leave it out, list it"**. The clip is not put on the timeline, the report names it, and the owner can add it back by hand. The plan's setting that would keep the whole clip instead is dropped.
 
 **Changed in version 2.1 against version 2.0**

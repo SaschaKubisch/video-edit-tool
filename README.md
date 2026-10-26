@@ -19,6 +19,21 @@ brew install ffmpeg        # provides ffmpeg and ffprobe
 
 Requires Python 3.12 (in the `.venv` folder next to the tool), the packages in `requirements.txt` (numpy, scipy, tqdm, vapoursynth with vapoursynth-brawsource, opencv-python-headless) and ffmpeg/ffprobe on the PATH. The tests run with `.venv/bin/python -m unittest discover -s tests -v`; 60 tests of version 1.1.0 pass on Python 3.12 without code changes.
 
+## Editing the film (work in progress, branch `editor-step2`)
+
+After `match` and `convert` (preview copies on the SSD), these commands build and show a rough film:
+
+```bash
+.venv/bin/python main.py analyse --clap --scenes --work /Volumes/SSD/work   # sync clap, steady scenes
+.venv/bin/python main.py assemble --work /Volumes/SSD/work                   # timeline.json next to project.json
+.venv/bin/python main.py timeline validate                                   # check it, with the files
+.venv/bin/python main.py timeline summary                                    # the film as a table
+.venv/bin/python main.py preview --work /Volumes/SSD/work                    # small film from the preview copies
+.venv/bin/python main.py app --work /Volumes/SSD/work                        # the page: tab 4, Film
+```
+
+The film is the clips in recording order with the clap and the camera movement cut out, a hard cut between scenes, the sound crossfaded over 0.5 s, and a fade in (1 s) and out (2 s). A clip with no steady scene of 2 s is left out and listed in `reports/assembly-report.txt`. The originals are never written. `PRD.md` and `SPECS.md` describe the plan and say which parts are built.
+
 ## UI workflow
 
 1. **Match** - pick the video folder and the audio folder, click Match. The result list shows each pair, its offset and a confidence value (green high, red low - check red ones by hand).

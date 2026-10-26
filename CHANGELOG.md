@@ -12,6 +12,23 @@
   load, validate (rules V0 to V22), atomic save, derived values.
 - `analyse --clap`: finds the sync clap at the start of each clip from the
   camera audio and the WAV together, and writes a report with review flags.
+- `analyse --scenes`: finds the steady scenes of each clip in its preview copy
+  (OpenCV phase correlation on a grid of blocks, one camera motion fitted to the
+  blocks that agree, so people moving in a still shot are not camera movement) and
+  writes `analysis/<clip>/scenes.json` and a report.
+- `assemble`: builds `timeline.json` from the clips in recording order: the clap
+  cut (0.5 s after the clap), every steady scene of 2 s or longer as a segment, a
+  clip with no steady scene left out and listed, a sound crossfade of 0.5 s, film
+  fades of 1 s and 2 s. Saving keeps numbered snapshots of the old file.
+- `preview`: renders the film preview from the preview copies (frame-exact cuts,
+  the sound mixed from the WAV files at the stored offset, crossfades and fades),
+  with a cache per segment. `timeline summary` prints the film as a table.
+- The page has a fourth tab, Film: a player and trim controls per scene (move the
+  start or end by 1 s or 1 frame, remove, restore, reorder, rename), saved to the
+  timeline file through the validator. Endpoints: `GET /api/timeline`,
+  `POST /api/timeline/edit`, `GET /api/preview/<file>` (range requests),
+  `POST /api/assemble`, `POST /api/preview`.
+- `app --timeline FILE --work DIR --no-browser`.
 
 ### Changed
 - The tool runs on Python 3.12 in its own `.venv`; packages are pinned in

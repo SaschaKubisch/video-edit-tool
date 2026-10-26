@@ -133,7 +133,8 @@ def build(clips, base_lut: dict, settings: AssembleSettings = None) -> Assembly:
         entry = {"clip": c.stem, "status": "left_out", "reason": "", "seconds": None,
                  "kept_seconds": 0.0, "segments": [], "clap": None, "earliest_frame": None,
                  "scenes_found": 0, "scenes_dropped": [], "review": False,
-                 "review_reasons": []}
+                 "review_reasons": [], "original_video": c.original_video,
+                 "preview_copy": c.preview_copy, "frames": c.frames}
         entries.append(entry)
         if not c.copy_ok or not c.preview_copy:
             entry["reason"] = c.no_copy_reason or "no finished preview copy (run convert)"

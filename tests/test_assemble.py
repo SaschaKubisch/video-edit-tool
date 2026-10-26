@@ -102,6 +102,10 @@ class OrderAndScenesTests(unittest.TestCase):
         self.assertEqual([c["clip"] for c in left], ["C002"])
         self.assertIn("steady scene", left[0]["reason"])
         self.assertEqual(a.report["film"]["left_out"], ["C002"])
+        # the owner can add the clip back by hand: the report names its preview copy and frame count
+        self.assertEqual(left[0]["preview_copy"], "/W/copies/C002.mp4")
+        self.assertEqual(left[0]["frames"], 900)
+        self.assertEqual(left[0]["original_video"], "/O/C002.braw")
 
     def test_a_clip_without_a_finished_preview_copy_is_left_out(self):
         a = build([clip("C001"), clip("C002", copy_ok=False)])

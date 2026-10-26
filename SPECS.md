@@ -4,7 +4,7 @@
 **Date:** 2026-10-26
 Companion to `PRD.md`. Sections 1 to 17 specify the planned editor. Appendix A describes the system built as v1.1.0, which the plan reuses. Appendix B lists the sources.
 
-Of sections 1 to 17, only the first part of step 2 is built, on the branch `editor-step2`: the Python 3.12 move, the `convert` command (section 6, with `decoder.py`, `safety.py`, `tools.py`), the timeline file's loader, validator and saver with `timeline validate` (section 3, rules V0 to V22), and the clap finder with `analyse --clap` (section 7.2). The module table in section 2.3 says which module is built. Where the build found the plan wrong, the text says "changed in the build". The test of step 1 was run by hand with scripts that are not in the repository (section 6.1). Every other interface named here (commands, endpoints, file names, module names) is planned, and names may change when the code is written.
+Of sections 1 to 17, step 2 is built on the branch `editor-step2`, except the drift measurement (7.3) and the contact sheets of 7.4: the Python 3.12 move, the `convert` command (section 6, with `decoder.py`, `safety.py`, `tools.py`), the timeline file's loader, validator and saver with `timeline validate` and `timeline summary` (section 3, rules V0 to V22), the clap finder with `analyse --clap` (section 7.2), the steady-scene finder with `analyse --scenes` (7.4), the assembly with `assemble` (7.5), the film preview with `preview` (5.5; the render plan of 5.1 and the sound path of 5.4 are built, the final film of 5.3 is not), saving with snapshots and the hash check (4.1), the page's operations (4.4) and the Film tab with its endpoints (7.6, section 12). The module table in section 2.3 says which module is built. Where the build found the plan wrong, the text says "changed in the build". The test of step 1 was run by hand with scripts that are not in the repository (section 6.1). Every other interface named here (commands, endpoints, file names, module names) is planned, and names may change when the code is written.
 
 Version 2.2 adds the owner's decisions on the clap (D6), steady scenes (D7, with the clip that has no steady scene: "Leave it out, list it"), transitions (D8), reading Shotcut cuts back (D11) and the encoder (D17). Step 2 is being built on the branch `editor-step2`; where the build found the plan wrong, the text is changed and marked "changed in the build".
 
@@ -70,7 +70,7 @@ The timeline file is the centre. Every step reads it or writes it. Every output 
    +----------------> | convert.py        | --> copies/<stem>.mp4 (preview copies), conversion.json
    |                  +-------------------+
    |                  +-------------------+
- preview copies, WAV  | clap.py stable.py | --> analysis/<stem>/clap.json, stable.json
+ preview copies, WAV  | clap.py stable.py | --> analysis/<stem>/clap.json, scenes.json
  ------------------>  | words.py index.py | --> transcript.json, contact sheets, index.md
                       +-------------------+
                       +-------------------+
@@ -104,7 +104,7 @@ Originals stay where they are. The tool opens them read-only and never writes in
   copies/<stem>.mp4                   preview copy (while written: <stem>.mp4.partial)
   audio-synced/<stem>.wav             WAV with the offset applied, made for the Shotcut export
   analysis/<stem>/clap.json           clap position in the camera's scratch audio and in the WAV
-  analysis/<stem>/stable.json         steady runs and movement
+  analysis/<stem>/scenes.json         steady scenes and movement (named stable.json in the plan; changed in the build)
   analysis/<stem>/transcript.json     English transcript with times
   analysis/<stem>/sheets/*.jpg        contact sheets
   analysis/index.md                   text index for Claude Code
@@ -132,10 +132,13 @@ Originals stay where they are. The tool opens them read-only and never writes in
 | `decoder.py` | The decoder interface (section 6.2): probe a `.braw` clip, give frames and camera audio. Used by `convert.py` and `render.py`. Built: the interface and decoder 1 (`BrawSourceDecoder`). | New, built | 2 |
 | `convert.py` | Probe, make preview copies, verify, `conversion.json` | New, built | 2 |
 | `clap.py` | Find the clap, measure drift. Built so far: the clap (`find_clap`, `analyse_clip`, `analyse_project`); the drift is not built. | New, partly built | 2 |
-| `stable.py` | Find steady runs | New | 2 |
-| `timeline.py` | Load, save, validate, snapshot, hash, derived values. Built so far: load, atomic save, validate (V0 to V22), hash, derived values; snapshots and undo are not built yet (section 4). | New, partly built | 2 |
-| `assemble.py` | Build `timeline.json` from matches and analysis | New | 2 |
-| `render.py` | Render plan, picture path, sound path, film preview, export | New | 2, 3 |
+| `stable.py` | Find steady runs. Built (changed in the build: the result file is `scenes.json`, and OpenCV does the correlation, see 7.4). | New, built | 2 |
+| `timeline.py` | Load, save, validate, hash, derived values. Built: load, atomic save, validate (V0 to V22), hash, derived values. Snapshots and the hash check are in `store.py`. | New, built | 2 |
+| `store.py` | Save the timeline file with a numbered snapshot of the old file and a hash check (4.1). Not in the plan before the build (changed in the build). `timeline undo` and `timeline history` are not built. | New, partly built | 2 |
+| `edits.py` | The operations the page may send (4.4) and the summary of the film (4.3). Not in the plan before the build. | New, built | 2 |
+| `fsutil.py` | Atomic writes of JSON and text files, shared by the analysis, assembly and render modules. | New, built | 2 |
+| `assemble.py` | Build `timeline.json` from matches and analysis. Built. | New, built | 2 |
+| `render.py` | Render plan, picture path, sound path, film preview, export. Built: the plan, the sound path (`build_mix`) and the film preview. Not built: the final film and the exports. | New, partly built | 2, 3 |
 | `look.py` | LUT hashing, comparison stills | New | 3 |
 | `loudness.py` | Measure and level | New | 3 |
 | `export_shotcut.py` | Write `film.mlt` and `audio-synced/` | New | 3 |
@@ -144,7 +147,7 @@ Originals stay where they are. The tool opens them read-only and never writes in
 | `index.py` | Contact sheets and `index.md` | New | 5 |
 | `shorts.py` | Build a vertical timeline | New | 6 |
 | `thumbnails.py` | Frame grabs | Kept, reads preview copies | 2 |
-| `server.py`, `ui.html`, `main.py`, `config.py` | Page, API, commands, constants | Kept, extended | 2 to 6 |
+| `server.py`, `ui.html`, `main.py`, `config.py` | Page, API, commands, constants. Built for step 2: the Film tab and its endpoints (section 12), `analyse --scenes`, `assemble`, `preview`, `timeline summary`, `app --timeline --work --no-browser`. | Kept, extended | 2 to 6 |
 | `syncer.py`, `resolve_integration.py` | Audio copy, Resolve push | Kept only if D4 says so | - |
 | `renamer.py` | Legacy rename | Kept, untouched | - |
 
@@ -508,6 +511,8 @@ The page does not send whole files. It sends a list of operations with the hash 
 
 The server applies the operations in memory, validates, saves a snapshot and the new file, and answers with the new hash and the summary. Findings give HTTP 422 with the list of section 3.5. A stale hash gives 409. An unknown operation gives 400.
 
+**As built** (the plan named the operations and fields but not the JSON; chosen in the build). The body is `{"hash": "<sha256 of the file the page read>", "operations": [...]}`. An operation is an object with the field `op` and the fields of the table: `{"op": "trim_in", "segment": "s001", "frames": 30}`, `trim_out` the same, `{"op": "set_enabled", "segment": "s001", "enabled": false}`, `{"op": "move", "segment": "s001", "to_index": 0}` (an index into the whole `segments` list, from 0), `{"op": "set_label", "segment": "s001", "label": "text"}`. All operations of one request are applied or none: a malformed one (400) or a result that breaks a rule (422) saves nothing. Answers: 200 `{hash, summary, findings, preview}` (findings are warnings only); 400 `{error}`; 404 when there is no timeline file; 409 `{error, hash}` with the hash of the file as it is; 422 `{error, findings}`. The check of a page edit skips the file checks of rule V7 and V16: an edit cannot change a file name, a frame count or a LUT, and `assemble` has already made those checks. The file is read, compared, changed and saved under one lock, so two requests with the same hash give one 200 and one 409.
+
 ---
 
 ## 5. Rendering and Export (used by steps 2 to 6)
@@ -604,8 +609,8 @@ The sound is built in `numpy`, not in an ffmpeg filter graph [Design]. This make
    - This is the same rule as `build_timeline_plan` of v1.1: a positive offset advances the audio in-point, a negative offset delays the audio and clamps at the file's start (Appendix A.7). The tests of that function are ported (check 2.8).
 3. **Handles and joins.** At a join of duration `d` the picture cuts at the film frame `f`. The sound of the segment before is extended by `d/2` after its end, and the sound of the segment after is extended by `d/2` before its start. Both come from the WAV files, so the handle may reach into material that the edit cut out. Over the interval `[f - d/2, f + d/2]` the gain of the earlier segment falls and the gain of the later one rises:
    - `equal_power`: falling `cos(pi/2 * x)`, rising `sin(pi/2 * x)`, with `x` from 0 to 1. The squares sum to 1, so the power stays constant for sound that does not correlate (ambience) [inference].
-   - `linear`: falling `1 - x`, rising `x`. The amplitudes sum to 1, which suits two parts of the same continuous sound [inference].
-   - If a handle is longer than the WAV allows, the crossfade is shortened to what exists, and the render report says so.
+   - `linear`: falling `1 - x`, rising `x`. The amplitudes sum to 1, which suits two parts of the same continuous sound [inference]. **Changed in the build:** for two sounds that do not correlate, a linear crossfade lowers the power by 3 dB in the middle of the join (the squares `x^2 + (1-x)^2` fall to 0.5) [arithmetic, and measured in the tests]. Check 2.8 therefore tests `equal_power` on uncorrelated noise and `linear` on two parts of the same sound; the plan's wording "both curves" on uncorrelated noise cannot hold.
+   - If a handle is longer than the WAV allows, the crossfade is shortened to what exists, and the render report says so. **As built:** the join is as long as the shorter of the two handles allows, down to a hard cut when one side has none (a clip whose segment starts at the first sample of its WAV). `build_mix` returns the wanted and the used length of every join and a warning for each shortened one.
 4. **Film fades.** The first segment rises from silence over `fade_in_s`, with the `sin` curve. The last segment falls to silence over `fade_out_s`, with the `cos` curve. Picture fades are made by `fade` in the encoder process (section 5.3) over the same frames.
 5. **Level each segment** (mode `segment_then_film`). Measure the integrated loudness `L` of the core span with `ebur128` (section 8.4). The gain is `min(target - L, max_gain_db) + gain_db_adjust`. A segment with no sound above the absolute gate (-70 LUFS) gets gain 0 and a warning. Mode `film_only` skips this step.
 6. **Mix.** Add the windowed, gained segments into one float buffer for the film.
@@ -624,6 +629,7 @@ The film preview is a small copy of the film that a browser plays. The preview c
 - **Sound.** The full mix of section 5.4 is made each time (sound is quick to build) and encoded as AAC. The film preview has the final loudness and joins.
 - **Text.** Titles and subtitles are not burned into the film preview. The page shows them from a WebVTT file made from the cues and titles [Design]. Their style in the preview differs from the final film.
 - **Range.** `preview --range A:B` renders only the segments that touch film seconds A to B.
+- **As built** (changed in the build). `render_preview(tl, work_dir, name)` writes `previews/<name>.mp4` and `previews/<name>.json` (file name, timeline hash, frames, seconds, segment ids, settings, time). The page calls a preview up to date when the hash in that file equals the hash of the timeline file. A segment file is `previews/seg-<key>.mp4`, the key being a hash of what is listed above. The segment is cut with `-ss` half a frame before its first frame, `-frames:v` for its length and a filter `setpts=N/(30000/1001)/TB`, so that its frames are exactly `in` to `out - 1` and its time stamps start at 0 (checked in `tests/test_seek_exact.py`, with and without B-frames in the source). The fades are the `fade` filter by frame count, inside the first and the last segment file. Encoder `h264_videotoolbox` with `-q:v 60`, key frame every 12 frames, no B-frames; `libx264` (`-preset veryfast`) can be chosen. The sound is the mix of 5.4, written as raw 32-bit float next to the file, encoded as AAC (160 kbit/s) and muxed with the joined picture. The checks of 5.7 run on the file before it is renamed: as many video frames as the film, a sound track, sound and picture within one frame of each other.
 - **Served** at `GET /api/preview/<file>` with HTTP range requests (section 12, server).
 
 The film preview uses the same render plan as the final film. Its colour comes from the base LUT baked into the preview copies and from the same creative LUT, so colour and timing agree [inference]. Its detail does not: it is half size, and it is an H.264 copy of a half-size decode. The browser's own colour handling can still differ from the final file's player [inference].
@@ -933,9 +939,9 @@ Checks 1.8 and 1.9 write files to the SSD. They run on the work directory named 
 
 From the matched pairs and the preview copies, make a rough film: clips in recording order, the clap and the camera movement cut out, scenes split, sound crossfaded, the film faded in and out. Write it to `timeline.json`, render a film preview, and show it in the page with trim controls. The first work of step 2 is the `convert` command (section 6), because every later part reads the preview copies.
 
-Outputs: `copies/`, `conversion.json`, `analysis/<stem>/clap.json`, `analysis/<stem>/stable.json`, `timeline.json`, `reports/assembly-report.json`, `previews/`. A rough film without loudness work can be rendered with the renderer of section 5 (`loudness.mode: off`).
+Outputs: `copies/`, `conversion.json`, `analysis/<stem>/clap.json`, `analysis/<stem>/scenes.json`, `timeline.json`, `reports/assembly-report.json`, `previews/`. A rough film without loudness work can be rendered with the renderer of section 5 (`loudness.mode: off`).
 
-Status: not built. Needs the result of step 1 (done). D5 to D8 are settled (`PRD.md` section 3).
+Status: built, except the drift measurement (7.3). Needs the result of step 1 (done). D5 to D8 are settled (`PRD.md` section 3).
 
 ### 7.2 Finding the clap
 
@@ -997,7 +1003,7 @@ The matcher measures the offset on the first 60 seconds [Appendix A.3]. A camera
 
 ### 7.4 Finding the steady runs
 
-`stable.py` finds the stretches in which the camera does not move. The owner films static [owner statement], so the method looks for a shift of the whole picture. It uses `numpy` and `scipy` only (D3).
+`stable.py` finds the stretches in which the camera does not move. The owner films static [owner statement], so the method looks for a shift of the whole picture. **Changed in the build:** it uses OpenCV (D3 allows it) for the correlation, and it measures blocks of the picture and fits one camera motion to them (below), so that a person who moves in a still shot is not taken for camera movement. The plan's text follows; the section "As built" after the settings table says what the code does.
 
 **Method** (all numbers are [inference] starting values taken from the research note; the method is a design):
 
@@ -1010,7 +1016,7 @@ The matcher measures the offset on the first 60 seconds [Appendix A.3]. A camera
 7. The score of a run is `1 / (1 + rms_shift / STABLE_MOVE_PX)` over its steps. "Most stable" means the highest score; the length breaks ties.
 8. Run times convert to frame numbers at the film frame rate.
 
-**Output** `stable.json`: the settings used, the runs (`in`, `out`, `score`, `low_confidence`), the moving stretches, and the path of a contact sheet that shows the first, middle and last frame of each run and one frame inside each moving stretch.
+**Output** `stable.json`: the settings used, the runs (`in`, `out`, `score`, `low_confidence`), the moving stretches, and the path of a contact sheet that shows the first, middle and last frame of each run and one frame inside each moving stretch. **Changed in the build:** the file is `analysis/<stem>/scenes.json`, and the contact sheet is not built (the stills of check 2.14 are made by hand).
 
 | Setting | Starting value |
 |---------|----------------|
@@ -1025,7 +1031,31 @@ The matcher measures the offset on the first 60 seconds [Appendix A.3]. A camera
 
 **What was tested.** A prototype with `numpy` only, on a synthetic clip of a static texture (made as ProRes for that test), gave a shift of 0 pixels with a peak of 1.00 in the still intervals, and 11 pixels per step in the interval in which the window moved at 150 pixels per second [measured, synthetic, scratch test not in the repository]. A second synthetic clip with a bright 300-pixel block moving over the static texture gave a shift of 0 in every step, with peaks between 0.67 and 0.89 [measured, synthetic]. Real footage has noise, a moving subject of any size and changing light. Whether the settings above separate camera movement from subject movement on the owner's clips is [unverified] until check 2.14.
 
-**Limits by design.** A subject that fills most of the frame can dominate the correlation. The method reports the peak quality and the report lists every cut, so the owner can see what was decided.
+**As built (changed in the build).** `analyse --scenes [--limit N] [--only A,B] [--work DIR] [--report-name NAME]` reads the preview copy of every matched clip whose status in `conversion.json` is `done` (the other clips get the result `no_copy` in the report), writes `analysis/<stem>/scenes.json` and `reports/<report-name>.json` and `.txt` (default name `scenes-report`), and never writes `conversion.json`. The steps:
+
+1. `ffmpeg` decodes the copy once and passes every 6th frame (`select='not(mod(n,6))'`, 29.97 / 6 = 4.995 sampled frames per second) as grey, 480 pixels wide (`scale=480:H:flags=area`) through a pipe. Frame numbers are those of the file.
+2. Each sampled frame is blurred (sigma 1), turned into its gradient magnitude (Sobel) and cut into a grid of 4 x 3 blocks (`STABLE_GRID`). Each block is normalised (mean 0, standard deviation 1) and multiplied by a Hann window. OpenCV's `phaseCorrelate` multiplies its input by a window in place, so the window is applied once in the preparation and `phaseCorrelate` gets none.
+3. For two sampled frames every block pair gives a shift (dx, dy) and a peak height. Blocks with a peak under `STABLE_MIN_PEAK` (0.15) are not used. One camera motion is fitted to the others: a similarity transform (shift, zoom, roll). The candidates are the shift of each single block and the transform through each pair of blocks; the winner is the one with the most blocks within `STABLE_INLIER_PX` (0.75 px) of it, and among equals the one with the least motion. It is refined by least squares on its blocks. At least `STABLE_MIN_INLIERS` (3) blocks must agree, else the step cannot be measured. Blocks that do not agree, such as those that a person moves in, are ignored. The motion of a step is the largest displacement of a frame corner under the fitted transform, so a zoom or a roll counts as movement like a shift does.
+4. A step that cannot be measured is a **cut** (movement) when the picture changed by at least `STABLE_CUT_DIFF` (0.12 of the full scale, mean absolute difference of 64 x 36 copies), else it is not movement and the run that holds it is marked `low_confidence` (a dark or flat picture).
+5. A step is **moving** when its motion is at least `STABLE_MOVE_PX` or it is a cut. Every third sample the shift against the first sample of the run is measured; at `STABLE_DRIFT_PX` the run ends and a new one starts (a slow creep). When a movement ends, the stretch is ignored (the scene goes on) only if it was shorter than `STABLE_MERGE_GAP_SEC`, the camera is back within `STABLE_DRIFT_PX` of the start of the run and the change is not a cut: a bump that moves the framing splits the scene.
+6. Each run loses `STABLE_GUARD_SEC` at both ends, in frames: `in = first sampled frame + 9`, `out = last sampled frame + 1 - 9`. A run shorter than `STABLE_MIN_RUN_SEC` goes to `dropped` with its length (only those of 0.5 s or more are listed). The score is `1 / (1 + rms / STABLE_MOVE_PX)` over the measured steps of the run.
+
+`scenes.json` holds `fps`, `frames`, `seconds`, the `settings`, `runs` (`in`, `out`, `score`, `low_confidence`, `seconds`), `dropped`, `moving` (frame ranges between runs), `kept_seconds`, `dropped_seconds`, `moving_seconds` and, for tuning, `samples` (the frame, the motion into it, the shift against the run's start and the kind of every step).
+
+| Setting added in the build | Value |
+|----------------------------|-------|
+| `STABLE_GRID` | 4 columns, 3 rows of blocks |
+| `STABLE_MIN_INLIERS` | 3 blocks |
+| `STABLE_INLIER_PX` | 0.75 |
+| `STABLE_CUT_DIFF` | 0.12 |
+
+The other settings keep the starting values of the table above. OpenCV's sub-pixel estimate lies below the true shift for shifts under 0.5 px (0.1 px is read as 0.05, 0.3 px as 0.2) and is accurate above [measured, synthetic].
+
+**Tests** (`tests/test_stable.py`, `tests/test_stable_video.py`; synthetic video made with numpy and OpenCV, so nothing is stored): a still camera gives one scene that loses only the guard; a pan, a shaking camera and a zoom give none; still-pan-still gives two scenes whose edges lie 0.1 to 0.8 s from the movement; a bump that moves the framing, a cut to another picture and a slow creep each split the scene; a small wobble that returns does not; flicker and sensor noise do not move a scene. **People who move in a still shot do not count as camera movement:** a person a quarter and a third of the picture wide who walks through the shot, a person who moves in place, and two people at once give one scene and no movement; a camera pan with a person in the shot is still found. The same checks run through `ffmpeg` on H.264 files, and `analyse --scenes` is tested over a project with preview copies.
+
+**Result on the first 10 clips of the first shoot** [measured, 2026-10-26, report `scenes-first10.txt` in the work folder]: 10 clips of 484.0 s together give 16 scenes of 403.0 s; the assembly (7.5) uses 15 of them, 392.4 s, after the clap cut. 5 clips hold 5 to 23 s of movement each (a camera tilting and panning by hand between takes), 5 clips hold less than 1 s. The analysis took 38.6 s for the 484 s of video, one clip after the other, at a load average of 10 to 16 (12.5 times real time); at a load of 100 or more one 97 s clip took 63 s. The steps that count as steady lie at a median of 0.02 to 0.18 px per clip, their 99th percentile at 0.26 to 0.47 px; of 2,383 measured steps, 2,071 are under 0.5 px and 44 lie between 0.5 and 0.8 px, so the limit of 0.5 px sits at the upper end of the steady noise. No starting value was changed. For all 15 scenes the shift between the first and the last frame is 0.08 to 1.30 px (limit of a split 3 px); 9 of the 15 still sheets and two sheets of the flagged movement of the first clip were looked at by hand: scene starts and ends sit on steady frames, and rain, ripples and people moving in a still shot did not split a scene. One clip (`A002_01011548_C006`, a dark scene) has steps that could not be measured and is marked `low_confidence`.
+
+**Limits by design.** A subject that fills most of the frame can dominate the correlation. The method reports the peak quality and the report lists every cut, so the owner can see what was decided. When blocks of the background carry too little detail (a flat wall, a dark picture) fewer than three blocks agree, the step cannot be measured and the camera movement in it is found only if the picture changes by `STABLE_CUT_DIFF`; the clip is marked `low_confidence`.
 
 **Decode cost.** The analysis reads the preview copy, which is H.264 at 2048 pixels wide, so reading 5 frames per second out of 29.97 is cheap compared with the 4K ProRes copy of version 2.0 [inference; not measured]. Check 2.14 measures it. OpenCV is allowed (D3) and may replace the hand-written phase correlation (`cv2.phaseCorrelate`) if it is faster or simpler [inference]; the test in check 2.6 stays the same.
 
@@ -1040,13 +1070,16 @@ The matcher measures the offset on the first 60 seconds [Appendix A.3]. A camera
 3. **Earliest frame.** The first frame after the clap (section 7.2). With result `none` there is no clap cut (the earliest frame is 0), so the first segment starts at the clip's first steady frame, and the clip is listed in the report (D6).
 4. **Runs.** Each steady run of the clip, cut at the earliest frame, becomes one segment if it is at least `STABLE_MIN_RUN_SEC` (2 s) long. Decision D7: every steady scene is kept, and only the movement between scenes is dropped. A clip with several runs gives several segments in time order (A3, A4).
 5. **No steady run.** The clip is not put on the timeline. The report names it, with the reason. Decision D7, the owner's answer: "Leave it out, list it". The report gives the clip's name, its preview copy and its frame count, so the owner can add the clip back by hand as a segment with `origin: "manual"`. The setting `on_no_steady_run: keep_whole` of the earlier plan is not built.
-6. **No `stable.json`.** The clip after the clap becomes one segment marked `unanalysed`.
-7. **Segment fields.** `id` `s001`, `s002` and so on; `label` the clip name plus the run number; `origin` `assembly`; `note` with the clap time and the run score.
+6. **No `scenes.json`** (named `stable.json` in the plan; changed in the build). The clip after the clap becomes one segment marked `unanalysed` (if it is at least `STABLE_MIN_RUN_SEC` long) and flagged for review. **No `clap.json`:** there is no clap cut and the clip is flagged for review.
+7. **Segment fields.** `id` `s001`, `s002` and so on, running on over all clips; `label` the clip name plus the number of the scene in the clip (`<clip> scene 2`, the number the detector gave it, so a scene dropped before it leaves a gap); `origin` `assembly`; `note` with the clap guard and the clap time (when the clap cut set the start) and the scene score.
+   A scene is cut at the earliest frame (rule 3). If it ends before it, it is dropped ("ends before the clap cut"); if less than `STABLE_MIN_RUN_SEC` is left, it is dropped ("shorter than 2 s after the clap cut"). Both go to `scenes_dropped` in the report. **Added in the build:** a clip whose clap result is `single` or `none`, or whose clap the clap report marks for review, or whose scenes are `low_confidence`, is flagged `review` in the report with the reasons.
 8. **Film fields.** `fps` from the sources (all must agree, rule V4). `frame` and `fit` default to 4096 x 2160 and `fit` (D5, settled); `assemble --frame 4096x2160 --fit fit` can set them. The wide clips get black bars (section 5.2). Fades and join take the starting values of section 3.2.
 9. **Loudness and look.** Step 2 writes `loudness.mode: off`, and `look.base` from the base LUT recorded in `conversion.json` (the LUT baked into the copies). Step 3 sets a loudness mode and a target, and a creative LUT if the owner wants one.
-10. **Overwrite.** If `timeline.json` exists, `assemble` refuses unless `--replace` is given, and then snapshots the old file first. Trim work by hand is not lost by running assembly again.
+10. **Overwrite.** If `timeline.json` exists, `assemble` refuses unless `--replace` is given, and then snapshots the old file first (`timeline.history/NNNN.json`). Trim work by hand is not lost by running assembly again.
+11. **Fades that do not fit (added in the build).** Rule V11 demands that the first scene is at least the fade-in plus half the join, and the last scene at least the fade-out plus half its join (a film of one scene: both fades). With the starting values (fade-out 2 s, join 0.5 s) a last scene of 2.0 to 2.25 s would break the rule. Assembly then shortens the film fade to what fits (rounded down to a millisecond), writes the shortened value into `film.fade_in_s` or `film.fade_out_s`, and says so in the report (`fades_shortened`, `warnings`). The alternative, dropping the scene, was not chosen.
+12. **Order of work (as built).** `assemble [--work DIR] [--output FILE] [--replace] [--limit N] [--only A,B] [--frame WxH] [--fit fit|fill] [--fade-in S] [--fade-out S] [--join S] [--min-scene S] [--clap-guard S] [--title T] [--report-name NAME] [--no-file-checks]`. It reads `conversion.json` (never writes it), the `clap.json` and `scenes.json` of each clip and the project; it validates the timeline **with the file checks** (rule V7 reads every preview copy) before it writes, so an invalid timeline is never written; it refuses a work folder or an output file inside a folder that holds originals. The timeline file is `timeline.json` next to the project file unless `--output` says otherwise. `--limit` and `--only` choose clips after the order is set.
 
-Everything `assemble` decides is also written to `reports/assembly-report.json`: per clip the clap result and time, the drift, the runs found with their scores, the segments made, and for each clip left out or marked for review the reason (A7).
+Everything `assemble` decides is also written to `reports/assembly-report.json` and `.txt` (name set by `--report-name`): per clip the clap result and time, the earliest frame, the scenes found and the scenes dropped with the reason, the segments made, the seconds of the clip and the seconds kept, and for each clip left out or marked for review the reason (A7). A clip that is left out also has its original, its preview copy and its frame count, so the owner can add it back by hand. The drift is not in the report (7.3 is not built).
 
 ### 7.6 The page: preview and trim controls
 
@@ -1069,12 +1102,14 @@ A new tab **Film** shows the preview and a table of segments (U1 to U3). Wirefra
 - A segment marked for review in the assembly report carries a flag.
 - The page keeps no state of its own about the film. Closing it loses nothing.
 
+**As built (changed in the build).** The tab is the fourth, **Film**. It has the buttons Assemble the film (with a question first when a timeline file exists, then `replace` is sent) and Render preview, a badge (no preview, preview is up to date, preview is out of date), the player (the file is served by `GET /api/preview/<file>` with range requests, so the player can seek), and a table with one row per segment: number, label (a text field), film time, length, start and end (frame number, source time and the buttons -1 s, -1 f, +1 f, +1 s), a checkbox that removes and restores the segment, and the buttons up and down. A click on a row jumps the player to the segment; the row of the segment that plays is marked. A refusal of the server (422, 409, 400) is shown as text with the field path, and the table goes back to the saved values. **A change does not start a preview job by itself**: the badge says the preview is out of date and the owner presses Render preview (changed in the build; the plan started the job by itself). The page script is checked by running it in Node against a real server with a stub for the page (`tests/ui_harness.js`, `tests/test_server_timeline.py`); **the page was not opened in a browser** while it was built.
+
 ### 7.7 Other changes in step 2
 
 - `.gitignore` gets `timeline.json`, `short-*.json` and `timeline.history/`.
-- `CLAUDE.md` of the repository gets the section of section 4.3.
+- `CLAUDE.md` of the repository gets the section of section 4.3. (Not done in the build.)
 - `config.py` gets the settings of this section and of section 5.
-- `matcher._extract_audio_raw` gets the optional start time. Nothing else in `matcher.py` changes.
+- `matcher._extract_audio_raw` gets the optional start time. Nothing else in `matcher.py` changes. (Not done: it belongs to the drift measurement, 7.3, which is not built.)
 
 ### 7.8 Checks for step 2
 
@@ -1084,18 +1119,18 @@ Synthetic fixtures are made inside the tests with `ffmpeg` and `numpy`, so no me
 |-------|---------|-------------|
 | 2.1 | `python3 -m unittest tests.test_timeline_format -v` | The example of section 3.3 parses and validates with file checks off. It saves and loads to the same bytes. The derived values equal: film length 2542 frames, segment film starts 0, 862 and 1922. |
 | 2.2 | `python3 -m unittest tests.test_timeline_rules -v` | For each rule V1 to V22 there is a broken copy of the example. The validator reports that rule at the expected field path, and the valid example reports nothing. |
-| 2.3 | `python3 -m unittest tests.test_timeline_store -v` | A save makes a snapshot. `undo` restores the previous one. A validate after a direct edit makes a snapshot. A stale hash is refused. A write interrupted halfway leaves the old file whole. |
+| 2.3 | `python3 -m unittest tests.test_timeline_store -v` | A save makes a snapshot. `undo` restores the previous one. A validate after a direct edit makes a snapshot. A stale hash is refused. A write interrupted halfway leaves the old file whole. **Built:** the snapshots (numbered, the newest 200 kept), the stale hash and the interrupted write. **Not built:** `undo`, `history` and the snapshot after a validate. |
 | 2.4 | `python3 -m unittest tests.test_clap -v` | On tracks made with `make_track` of `tests/test_matcher.py` (claps at known times, with and without loud ambience, and with a wind-like low-frequency step): the clap time is found within 5 ms; the step is not taken as a clap; a track with no clap gives `none`; a disagreeing pair gives `single`. |
 | 2.5 | `python3 -m unittest tests.test_drift -v` | A WAV made by resampling a track by +50 ppm gives a measured drift within 15 ppm of 50. A 100-second clip is skipped. |
-| 2.6 | `python3 -m unittest tests.test_stable -v` | On the synthetic clip of section 7.4 (still 0 to 4 s, moving 4 to 6 s, still 6 to 10 s) the runs lie inside 0 to 4 s and 6 to 10 s, each run's edge next to the moving part is between 0.1 s and 0.8 s away from it (the guard of 0.3 s plus the 0.2 s sample step), and the moving part is outside every run. On the clip with a moving block over a static texture, no movement is found. A clip that moves throughout gives no run. |
-| 2.7 | `python3 -m unittest tests.test_assemble -v` | With analysis results given as data: clips in recording order; a clip with two runs gives two segments; the clap cut raises the first segment's `in`; a clip with no run is left out and reported; an existing timeline is not overwritten without `--replace`; the assembled file validates. |
-| 2.8 | `python3 -m unittest tests.test_audio_place -v` | The cases of `PlanTests` in `tests/test_resolve_integration.py` (back-to-back, trims, positive offset, negative offset, clamped length), restated for the audio span function, give the same sample positions. A crossfade of two uncorrelated noise segments keeps the power within 1 dB at the join, both curves. A shortened handle shortens the crossfade and is reported. The first and last 10 ms of the film are silent when the fades are on. |
+| 2.6 | `python3 -m unittest tests.test_stable tests.test_stable_video -v` | On the synthetic clip of section 7.4 (still 0 to 4 s, moving 4 to 6 s, still 6 to 10 s) the runs lie inside 0 to 4 s and 6 to 10 s, each run's edge next to the moving part is between 0.1 s and 0.8 s away from it (the guard of 0.3 s plus the 0.2 s sample step), and the moving part is outside every run. On the clip with a moving block over a static texture, no movement is found. A clip that moves throughout gives no run. **As built:** the tests listed in 7.4, with people moving in a still shot, a zoom, a bump, a cut, a slow creep and a flat picture as well; real clips in `tests/test_steady_real.py`. |
+| 2.7 | `python3 -m unittest tests.test_assemble tests.test_assemble_project -v` | With analysis results given as data: clips in recording order; a clip with two runs gives two segments; the clap cut raises the first segment's `in`; a clip with no run is left out and reported; an existing timeline is not overwritten without `--replace`; the assembled file validates. **As built:** also the order from the project's selection, the film fields, the fades shortened when they do not fit, the report, the originals and `conversion.json` unchanged, and the command line. |
+| 2.8 | `python3 -m unittest tests.test_audio_place -v` | The cases of `PlanTests` in `tests/test_resolve_integration.py` (back-to-back, trims, positive offset, negative offset, clamped length), restated for the audio span function, give the same sample positions. A crossfade of two uncorrelated noise segments keeps the power within 1 dB at the join (`equal_power`; for `linear` the same holds for two parts of the same sound, see 5.4: changed in the build). A shortened handle shortens the crossfade and is reported. The first and last 10 ms of the film are silent when the fades are on. |
 | 2.9 | `python3 -m unittest tests.test_render_plan -v` | The placements of the table in section 5.2 come out: no bars for a 4096 x 2160 source in a 4096 x 2160 frame, bars of 220 pixels for a 4096 x 1720 source, and the windows 1216 x 2160 and 968 x 1720 with the positions of section 5.2 for a 1080 x 1920 `fill` frame. The film start frames and sample positions follow section 3.4, with no drift over 150 segments at 24000/1001 frames per second. |
 | 2.10 | `python3 -m unittest tests.test_sync_marker -v` | A fixture clip has a white frame at frame 100 and a WAV with a click at `100/fps + offset`. After building a timeline for the fixture and rendering it, the first bright frame and the click in the output lie within 1 ms of each other. |
-| 2.11 | `python3 -m unittest tests.test_seek_exact -v` | On a synthetic H.264 file made like a preview copy (`-g 30`, each frame a different grey value) and, when `VET_WORK_DIR` has a preview copy, on a real one: the frames the film preview reads for `in` and `out` equal the frames selected by number. With `VET_REAL_BRAW` set: the decoder process of section 5.3 returns for a segment exactly the frames `in` to `out - 1` (the first and last frame equal the frames the decoder gives when it reads the whole clip). |
-| 2.12 | `python3 -m unittest tests.test_preview -v` | A second preview of an unchanged film renders no segment. A trim of one segment renders exactly that segment. The joined preview has as many frames as the film. |
-| 2.13 | `python3 -m unittest tests.test_server_timeline -v` | A server on an ephemeral port answers: `GET /api/timeline` with the hash; an edit with the right hash is saved; a stale hash gives 409; an invalid result gives 422 with the field path; a request with a wrong Host gives 403; a preview request with a path outside the work directory gives 404; a range request returns the bytes asked for. |
-| 2.14 | `python3 main.py analyse --work "$VET_WORK_DIR" && python3 main.py assemble && python3 main.py timeline validate` | On the first shoot: exit 0, a report with a clap result for every clip, drift for the longest clips, and the runs. The tool prints the times each stage took. **The owner** listens to a sample of claps, looks at the contact sheets of the clips the report marks, and watches the preview. The owner sets the starting values from what they saw. |
+| 2.11 | `python3 -m unittest tests.test_seek_exact -v` | On a synthetic H.264 file made like a preview copy (`-g 30`, each frame a different grey value) and, when `VET_WORK_DIR` has a preview copy, on a real one: the frames the film preview reads for `in` and `out` equal the frames selected by number. With `VET_REAL_BRAW` set: the decoder process of section 5.3 returns for a segment exactly the frames `in` to `out - 1` (the first and last frame equal the frames the decoder gives when it reads the whole clip). **As built:** the synthetic part with and without B-frames (`tests/test_seek_exact.py`), and the real part in `tests/test_steady_real.py` (needs `VET_REAL_PROJECT` and `VET_WORK_DIR`): a 24-frame segment of a real preview copy is compared with the copy's own frames, each frame matches its own number better than its neighbours. **Not built:** the part with the decoder process, which belongs to the final render (step 3). |
+| 2.12 | `python3 -m unittest tests.test_preview tests.test_preview_cli -v` | A second preview of an unchanged film renders no segment. A trim of one segment renders exactly that segment. The joined preview has as many frames as the film. **As built:** also the duration within one frame of the timeline, the sound as long as the picture within one frame, the picture and sound fades at the start and the end (measured), the letterbox bars, the frame of every film frame, the range, the refusals, and the default encoder `h264_videotoolbox`. |
+| 2.13 | `python3 -m unittest tests.test_server_timeline -v` | A server on an ephemeral port answers: `GET /api/timeline` with the hash; an edit with the right hash is saved; a stale hash gives 409; an invalid result gives 422 with the field path; a request with a wrong Host gives 403; a preview request with a path outside the work directory gives 404; a range request returns the bytes asked for. **As built:** every endpoint of section 12 that is built (`tests/test_server_timeline.py`, 49 tests), also the two jobs and the job slot, and the page's script run in Node against the server. |
+| 2.14 | `python3 main.py analyse --work "$VET_WORK_DIR" && python3 main.py assemble && python3 main.py timeline validate` | On the first shoot: exit 0, a report with a clap result for every clip, drift for the longest clips, and the runs. The tool prints the times each stage took. **The owner** listens to a sample of claps, looks at the contact sheets of the clips the report marks, and watches the preview. The owner sets the starting values from what they saw. **As built, first 10 clips** [measured, 2026-10-26]: `analyse --scenes`, `assemble --only <10 clips>`, `timeline validate` (exit 0, no findings) and `preview` ran; the report is `scenes-first10.txt` in the work folder (15 scenes, 392.4 s, no clip left out), the preview film is `previews/preview-first10.mp4` (11760 frames, 392.392 s, `ffprobe` duration equal to the timeline), the stills are in `reports/stills/`. The whole shoot (105 clips) was not assembled. The drift is not built. The owner has not yet listened, looked or watched. |
 | 2.15 | `python3 -m unittest discover -s tests -v` | All earlier tests still pass. |
 
 ---
@@ -1464,12 +1499,14 @@ Appendix A describes each part as built in v1.1.0. This table says what the plan
 
 | Method | Path | Effect |
 |--------|------|--------|
-| GET | `/api/timeline` | The timeline file, its hash, and the derived film times of each segment. |
-| POST | `/api/timeline/edit` | Operations of section 4.4 with the starting hash. Answers 409, 422 or 400 as described there. |
-| GET | `/api/preview/<file>` | A file from `<work_dir>/previews/`, with HTTP range requests (`Accept-Ranges`, `206`). Any other path gives 404. |
+| GET | `/api/timeline` | The timeline file's summary (`edits.summary`: totals and one row per segment with film times, length, source frames, label, review reasons), its hash, the validation findings and the state of the preview. Built. |
+| POST | `/api/timeline/edit` | Operations of section 4.4 with the starting hash. Answers 409, 422 or 400 as described there. Built. |
+| GET | `/api/preview/<file>` | A file from `<work_dir>/previews/`, with HTTP range requests (`Accept-Ranges`, `206`; `416` for a range past the end). Any other path gives 404. Built. |
 | GET | `/api/stills/<path>` | A file from `<work_dir>/stills/`, same rule. |
-| POST | `/api/convert`, `/api/assemble`, `/api/preview`, `/api/render` | Start the job. Share the job slot (409 if busy). |
-| GET | `/api/status` | As today. New `step` values: `converting`, `analysing`, `assembling`, `previewing`, `rendering`, `transcribing`, `indexing`. |
+| POST | `/api/convert`, `/api/assemble`, `/api/preview`, `/api/render` | Start the job. Share the job slot (409 if busy). Built: `/api/assemble` (body `{replace?, limit?, only?}`; 409 when the timeline file exists and `replace` is not true; 400 without matched clips or without a work folder) and `/api/preview` (404 without a timeline file, 422 for an invalid one). Not built: `/api/convert` and `/api/render`. The page cannot name a path in any of them. |
+| GET | `/api/status` | As today. New `step` values: `converting`, `analysing`, `assembling`, `previewing`, `rendering`, `transcribing`, `indexing`. Built: `assembling` and `assembled`, `previewing` and `previewed`; the job ends at progress 100. |
+
+The server is configured by `app --timeline FILE --work DIR --no-browser`; without them the timeline file is `timeline.json` next to the project file and the work folder is `work_dir` of the project file.
 
 ---
 
