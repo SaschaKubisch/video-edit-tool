@@ -356,8 +356,9 @@ def cmd_analyse(args):
         print(f"Error: {message}")
         sys.exit(2)
 
-    if not (args.clap or args.scenes):
-        fail("Say what to analyse: --clap (the sync clap) or --scenes (the steady scenes).")
+    if not (args.clap or args.scenes or args.drift):
+        fail("Say what to analyse: --clap (the sync clap), --scenes (the steady scenes) or "
+             "--drift (the clock drift of camera and recorder).")
     project_file = args.project or config.PROJECT_FILE
     if not Path(project_file).exists():
         fail(f"Project file not found: {project_file}\nRun 'python main.py match' first.")
@@ -389,6 +390,19 @@ def cmd_analyse(args):
             fail(str(e))
         print()
         print(stable.format_report(rows))
+        print(f"Report: {os.path.join(work_dir, 'reports', name)}.json / .txt")
+    if args.drift:
+        import clap
+        name = args.report_name or "drift-report"
+        if (args.clap or args.scenes) and args.report_name:
+            name = f"{args.report_name}-drift"
+        try:
+            rows = clap.analyse_drift_project(project, work_dir, limit=args.limit, only=only,
+                                              report_name=name)
+        except safety.OriginalsProtectedError as e:
+            fail(str(e))
+        print()
+        print(clap.format_drift_report(rows))
         print(f"Report: {os.path.join(work_dir, 'reports', name)}.json / .txt")
 
 
@@ -759,16 +773,19 @@ def build_parser():
     p_analyse.add_argument("--scenes", action="store_true",
         help="Find the steady scenes of each clip in its preview copy "
              "(only copies whose status in conversion.json is done)")
+    p_analyse.add_argument("--drift", action="store_true",
+        help="Measure the clock drift of camera and recorder: the offset again on the last "
+             "minute of every clip of 120 s or more, against the stored offset (SPECS 7.3)")
     p_analyse.add_argument("--work", "-w",
         help="Work folder on the SSD (default: work_dir of the project file)")
     p_analyse.add_argument("--limit", type=int,
         help="Analyse only the first N matched clips")
     p_analyse.add_argument("--only",
-        help="With --scenes: analyse only the clips with these names (comma separated, "
-             "no extension)")
+        help="With --scenes or --drift: analyse only the clips with these names (comma "
+             "separated, no extension)")
     p_analyse.add_argument("--report-name",
         help="Name of the report files in <work>/reports (default: clap-report, "
-             "scenes-report)")
+             "scenes-report, drift-report)")
     p_analyse.set_defaults(func=cmd_analyse)
 
     # ── assemble ──

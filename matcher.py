@@ -65,13 +65,16 @@ def _get_duration(file_path: str) -> float:
         raise RuntimeError(f"ffprobe returned no duration for {file_path}")
 
 
-def _extract_audio_raw(file_path: str, max_duration: float = None) -> np.ndarray:
-    """Extract audio as mono numpy array for offset detection."""
+def _extract_audio_raw(file_path: str, max_duration: float = None, start: float = None) -> np.ndarray:
+    """Extract audio as mono numpy array for offset detection. `start` (seconds) skips the
+    front of the file: the drift measurement reads the last minute of a clip (SPECS 7.3)."""
     max_dur = max_duration or config.MATCH_MAX_DURATION_SEC
     sr = config.MATCH_SAMPLE_RATE
 
-    cmd = [
-        "ffmpeg", "-y",
+    cmd = ["ffmpeg", "-y"]
+    if start:
+        cmd += ["-ss", f"{start:.6f}"]      # before the input: the file is seeked, not decoded
+    cmd += [
         "-i", str(file_path),
         "-t", str(max_dur),      # output option: limits decoded audio length
         "-vn",

@@ -90,6 +90,15 @@ CLAP_LATE_SEC = 10.0          # a clap later than this is flagged for review
 # outside it is flagged for review.
 USUAL_OFFSET_RANGE_SEC = (0.085, 0.37)
 
+# ── Drift (`analyse --drift`, SPECS 7.3) ──
+# The matcher measures the offset on the first 60 s. The drift measures it again on the
+# last 60 s of every clip of at least 120 s (shorter clips would have overlapping windows).
+DRIFT_WINDOW_SEC = 60         # the length of the head window (the matcher's) and of the tail window
+DRIFT_MIN_CLIP_SEC = 120      # shorter clips are skipped
+DRIFT_LIMIT_FRAMES = 0.5      # a clip whose drift exceeds half a frame is marked (SPECS 7.3)
+DRIFT_PLAUSIBLE_SEC = 0.25    # a change of the offset beyond this is no clock drift: no common sound was found
+DRIFT_DEFAULT_FPS = (30000, 1001)   # when conversion.json has no frame rate for the clip (first shoot: 29.97)
+
 # ── Steady scenes (`analyse --scenes`, SPECS 7.4, decision D7: every steady scene) ──
 # All values are starting values; the owner corrects them from the report.
 STABLE_SAMPLE_FPS = 5         # the analysis looks at about 5 frames per second

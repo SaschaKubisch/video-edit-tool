@@ -3,7 +3,7 @@
 **Version:** 2.2 (draft for the owner's review)
 **Date:** 2026-10-26
 **Owner:** Sascha Kubisch
-**Status:** Matching and sync (requirements M1 to M6) are built and released as v1.1.0. Step 1, the conversion test, is done: its results are in section 5 and in `SPECS.md` section 6. Of the rest, step 2 is built on the branch `editor-step2` (the `convert` command, the timeline file's loader and validator, the clap finder, the steady-scene finder, the assembly, the film preview and the Film tab with trim controls); the drift measurement and everything in steps 3 to 6 are planned and not built. Section 3 records the owner's decisions of 2026-10-26 on storage, colour, frame, Python and export. Section 2 replaces the goal of v1.1. Version 2.2 records the owner's decisions of 2026-10-26 on the clap (D6), steady scenes (D7, including the clip with no steady scene), transitions (D8), reading cuts back from Shotcut (D11) and the encoder (D17); step 2 is being built.
+**Status:** Matching and sync (requirements M1 to M6) are built and released as v1.1.0. Step 1, the conversion test, is done: its results are in section 5 and in `SPECS.md` section 6. Of the rest, step 2 is built on the branch `editor-step2` (the `convert` command, the timeline file's loader and validator, the clap finder, the steady-scene finder, the assembly, the film preview and the Film tab with trim controls); the drift measurement (`analyse --drift`) is built too; everything in steps 3 to 6 is planned and not built. Section 3 records the owner's decisions of 2026-10-26 on storage, colour, frame, Python and export. Section 2 replaces the goal of v1.1. Version 2.2 records the owner's decisions of 2026-10-26 on the clap (D6), steady scenes (D7, including the clip with no steady scene), transitions (D8), reading cuts back from Shotcut (D11) and the encoder (D17); step 2 is being built.
 
 Companion document: `SPECS.md` (how it is built, the timeline file format, the tests).
 
@@ -213,7 +213,7 @@ The wording is the owner's, as recorded.
 
 Priority: Must, Should, Could. "Built" means released in v1.1.0.
 
-**Built on the branch `editor-step2`** [measured by the tests of the branch, 2026-10-26; `SPECS.md` section 7 says how]: C1 to C6 and the interface of C7; T1 to T3; T4 (atomic saves, numbered snapshots, `timeline undo` and `timeline history`); T5 (`timeline validate`, `timeline summary` and `timeline frames`); T6 (hash check on every page edit); A1 to A8 (the drift is not in the report); E1; U1 to U3; M7 and M9. **Not built:** M8 (thumbnails from the preview copies), the drift measurement (7.3), E2 to E7, and the requirements of steps 3 to 6.
+**Built on the branch `editor-step2`** [measured by the tests of the branch, 2026-10-26; `SPECS.md` section 7 says how]: C1 to C6 and the interface of C7; T1 to T3; T4 (atomic saves, numbered snapshots, `timeline undo` and `timeline history`); T5 (`timeline validate`, `timeline summary` and `timeline frames`); T6 (hash check on every page edit); A1 to A8 (the drift has a report of its own, `analyse --drift`); E1; U1 to U3; M7 and M9. **Not built:** M8 (thumbnails from the preview copies), E2 to E7, and the requirements of steps 3 to 6.
 
 **M - Match and sync (kept from v1.1)**
 

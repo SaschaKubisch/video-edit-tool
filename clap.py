@@ -22,6 +22,11 @@ channel (`find_clap`):
 6. the passing candidates are listed in time order; `find_clap` returns the first,
    and names the strongest.
 
+Drift (SPECS 7.3): a camera and a recorder run on different clocks, so the offset could
+change along a clip. `measure_drift` measures it again on the last minute of a clip, with
+the matcher's own method, and compares it with the stored offset (the first minute).
+`analyse_drift_project` runs it over a project and writes the report.
+
 Then `analyse_clip` combines the two channels. The plan took the first clap of
 each and compared them. On the first shoot that disagreed for 47 of 105 clips,
 because one channel often had an earlier sound that the other did not hear. So
@@ -277,6 +282,177 @@ def analyse_clip(camera_samples, wav_samples, rate: int, offset_s: float,
                        f"{lo} to {hi} s")
     return ClipClap(result, t, chosen_cam, chosen_wav, offset_s, delta, len(pairs),
                     confidence, bool(reasons), reasons)
+
+
+# ── Drift (SPECS 7.3) ────────────────────────────────────────────
+
+@dataclass
+class DriftResult:
+    """The drift of one clip. `status` is measured, skipped (too short), not_measurable (the
+    last minute holds no sound that both heard) or error (the audio could not be read)."""
+    status: str
+    seconds: float                  # length of the clip
+    head_offset_s: float            # the stored offset, from the first minute
+    tail_offset_s: float = None     # the offset measured on the last minute
+    drift_s: float = None           # tail - head
+    ppm: float = None               # the drift over the T - 60 s between the middles of the windows
+    limit_s: float = None           # half a frame
+    exceeds: bool = False
+    reason: str = ""
+
+    def as_dict(self) -> dict:
+        r = lambda v, n: None if v is None else round(v, n)
+        return {"status": self.status, "seconds": r(self.seconds, 3),
+                "head_offset_s": r(self.head_offset_s, 6), "tail_offset_s": r(self.tail_offset_s, 6),
+                "drift_s": r(self.drift_s, 6), "ppm": r(self.ppm, 2), "limit_s": r(self.limit_s, 6),
+                "exceeds": self.exceeds, "reason": self.reason}
+
+
+def measure_drift(extract, seconds: float, head_offset_s: float, fps=None) -> DriftResult:
+    """Measure the drift of a clip of `seconds` seconds whose stored offset is `head_offset_s`.
+
+    `extract(which, seconds, start)` returns mono audio at config.MATCH_SAMPLE_RATE, `which`
+    being "cam" (the clip's scratch audio) or "wav" (the recorder's file). The camera window
+    is the last DRIFT_WINDOW_SEC seconds. The recorder window starts the stored offset later,
+    so that the sound that both heard sits at about the same place in both and the lag that
+    the matcher's method finds is the change of the offset. The drift is
+    `offset_tail - offset_head`; it is `exceeds` when it is more than half a frame
+    (DRIFT_LIMIT_FRAMES) of the clip's frame rate `fps` = (num, den).
+    """
+    import matcher
+    fps = fps or config.DRIFT_DEFAULT_FPS
+    window = config.DRIFT_WINDOW_SEC
+    limit = config.DRIFT_LIMIT_FRAMES * fps[1] / fps[0]
+    base = dict(seconds=seconds, head_offset_s=head_offset_s, limit_s=limit)
+    if seconds < config.DRIFT_MIN_CLIP_SEC:
+        return DriftResult("skipped", reason=f"shorter than {config.DRIFT_MIN_CLIP_SEC:g} s",
+                           **base)
+    cam_start = seconds - window
+    wav_start = max(0.0, cam_start + head_offset_s)
+    try:
+        cam = np.asarray(extract("cam", window, cam_start))
+        wav = np.asarray(extract("wav", window, wav_start))
+        lag = matcher._find_offset(cam, wav)
+    except Exception as e:      # ffmpeg may fail in many ways; one clip must not stop the run
+        return DriftResult("error", reason=str(e) or type(e).__name__, **base)
+    tail = (wav_start - cam_start) + float(lag)
+    drift = tail - head_offset_s
+    if abs(drift) > config.DRIFT_PLAUSIBLE_SEC:
+        return DriftResult(
+            "not_measurable", tail_offset_s=tail,
+            reason=f"no sound in common was found in the last {window:g} s: the offset found there, "
+                   f"{tail:.3f} s, is {abs(drift):.3f} s away from the stored one, more than a "
+                   f"clock can drift ({config.DRIFT_PLAUSIBLE_SEC:g} s)", **base)
+    return DriftResult("measured", tail_offset_s=tail, drift_s=drift,
+                       ppm=drift / (seconds - window) * 1e6, exceeds=abs(drift) > limit, **base)
+
+
+def _conversion_fps(work_dir: str) -> dict:
+    """The frame rate of every clip that conversion.json knows: {stem: (num, den)}."""
+    try:
+        with open(os.path.join(work_dir, config.CONVERSION_FILE), encoding="utf-8") as f:
+            clips = json.load(f).get("clips", {})
+    except (OSError, ValueError, AttributeError):
+        return {}
+    out = {}
+    for stem, c in clips.items():
+        fps = c.get("fps") if isinstance(c, dict) else None
+        if isinstance(fps, dict) and isinstance(fps.get("num"), int) and isinstance(fps.get("den"), int):
+            out[stem] = (fps["num"], fps["den"])
+    return out
+
+
+def analyse_drift_project(project, work_dir: str, limit: int = None, only=None,
+                          report_name: str = "drift-report", extract=None, log=print) -> list:
+    """Measure the drift of every matched clip (or the first `limit`, or those named in
+    `only`) and write work_dir/analysis/<stem>/drift.json for each clip that was measured or
+    tried, and work_dir/reports/<report_name>.json and .txt for all. Returns the rows.
+
+    `extract(path, seconds, start)` returns mono audio at config.MATCH_SAMPLE_RATE from
+    `start` seconds on; the default is matcher._extract_audio_raw (ffmpeg, read-only on the
+    originals). The frame rate of a clip is the one in conversion.json, else 29.97.
+    """
+    if extract is None:
+        import matcher
+        extract = lambda path, seconds, start: matcher._extract_audio_raw(path, seconds, start)
+    safety.assert_not_inside(work_dir, safety.originals_folders(project))
+    fps_of = _conversion_fps(work_dir)
+    matches = list(project.matches)
+    if only:
+        wanted = set(only)
+        matches = [m for m in matches
+                   if Path((m if isinstance(m, dict) else m.__dict__)["video_path"]).stem in wanted]
+    if limit:
+        matches = matches[:limit]
+    rows = []
+    for i, m in enumerate(matches, start=1):
+        d = m if isinstance(m, dict) else m.__dict__
+        stem = Path(d["video_path"]).stem
+        paths = {"cam": d["video_path"], "wav": d["audio_path"]}
+        res = measure_drift(lambda which, seconds, start: extract(paths[which], seconds, start),
+                            float(d["video_duration"]), float(d["offset"]), fps_of.get(stem))
+        row = {"index": d["index"], "clip": stem, **res.as_dict()}
+        if res.status != "skipped":
+            _write_json_atomic(os.path.join(work_dir, "analysis", stem, "drift.json"),
+                               {"clip": stem, "video": d["video_path"], "audio": d["audio_path"],
+                                **res.as_dict(), "settings": drift_settings()})
+        rows.append(row)
+        if res.status == "measured":
+            note = f"drift {res.drift_s * 1000:+.1f} ms ({res.ppm:+.1f} ppm)" + \
+                ("  OVER THE LIMIT" if res.exceeds else "")
+        else:
+            note = f"{res.status}: {res.reason}"
+        log(f"[{i}/{len(matches)}] {stem}  {note}")
+    reports = os.path.join(work_dir, "reports")
+    _write_json_atomic(os.path.join(reports, f"{report_name}.json"), {
+        "settings": drift_settings(), "clips": rows,
+        "over_limit": [r["clip"] for r in rows if r["exceeds"]],
+        "not_measurable": [r["clip"] for r in rows if r["status"] == "not_measurable"],
+        "errors": [r["clip"] for r in rows if r["status"] == "error"]})
+    with open(os.path.join(reports, f"{report_name}.txt"), "w", encoding="utf-8") as f:
+        f.write(format_drift_report(rows))
+    return rows
+
+
+def drift_settings() -> dict:
+    return {"window_s": config.DRIFT_WINDOW_SEC, "min_clip_s": config.DRIFT_MIN_CLIP_SEC,
+            "limit_frames": config.DRIFT_LIMIT_FRAMES, "plausible_s": config.DRIFT_PLAUSIBLE_SEC,
+            "default_fps": list(config.DRIFT_DEFAULT_FPS)}
+
+
+def format_drift_report(rows: list) -> str:
+    """The report as text: one line per clip, then the counts and the clips over the limit."""
+    head = f"{'clip':22} {'length':>7} {'head s':>8} {'tail s':>8} {'drift ms':>9} {'ppm':>7} " \
+           f"{'limit ms':>8}  result"
+    lines = [head, "-" * len(head)]
+    num = lambda v, w, p=3, k=1.0: f"{'-':>{w}}" if v is None else f"{v * k:>{w}.{p}f}"
+    for r in rows:
+        if r["status"] == "measured":
+            result = "OVER THE LIMIT" if r["exceeds"] else "ok"
+        else:
+            result = f"{r['status'].replace('_', ' ')}: {r['reason']}"
+        lines.append(f"{r['clip']:22} {r['seconds']:>6.1f}s {num(r['head_offset_s'], 8)} "
+                     f"{num(r['tail_offset_s'], 8)} {num(r['drift_s'], 9, 1, 1000)} "
+                     f"{num(r['ppm'], 7, 1)} {num(r['limit_s'], 8, 1, 1000)}  {result}")
+    count = lambda status: sum(1 for r in rows if r["status"] == status)
+    lines.append("")
+    summary = (f"{len(rows)} clips: measured {count('measured')}, skipped {count('skipped')} "
+               f"(shorter than {config.DRIFT_MIN_CLIP_SEC:g} s), not measurable "
+               f"{count('not_measurable')}")
+    if count("error"):
+        summary += f", could not be read {count('error')}"
+    lines.append(summary + ".")
+    measured = [r for r in rows if r["status"] == "measured"]
+    if measured:
+        worst = max(measured, key=lambda r: abs(r["drift_s"]))
+        ppms = sorted(abs(r["ppm"]) for r in measured)
+        lines.append(f"Measured clips: largest drift {worst['drift_s'] * 1000:+.1f} ms "
+                     f"({worst['clip']}), median {ppms[len(ppms) // 2]:.1f} ppm, largest "
+                     f"{ppms[-1]:.1f} ppm.")
+    over = [r["clip"] for r in rows if r["exceeds"]]
+    lines.append("Clips with a drift over the limit of half a frame: " + ", ".join(over) + "."
+                 if over else "No clip has a drift over the limit of half a frame.")
+    return "\n".join(lines) + "\n"
 
 
 # ── Over a project ───────────────────────────────────────────────
