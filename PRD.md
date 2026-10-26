@@ -3,7 +3,7 @@
 **Version:** 2.2 (draft for the owner's review)
 **Date:** 2026-10-26
 **Owner:** Sascha Kubisch
-**Status:** Matching and sync (requirements M1 to M6) are built and released as v1.1.0. Step 1, the conversion test, is done: its results are in section 5 and in `SPECS.md` section 6. Everything else in this document is planned and not built. Section 3 records the owner's decisions of 2026-10-26 on storage, colour, frame, Python and export. Section 2 replaces the goal of v1.1. Version 2.2 records the owner's decisions of 2026-10-26 on the clap (D6), steady scenes (D7), transitions (D8), reading cuts back from Shotcut (D11) and the encoder (D17); step 2 is being built.
+**Status:** Matching and sync (requirements M1 to M6) are built and released as v1.1.0. Step 1, the conversion test, is done: its results are in section 5 and in `SPECS.md` section 6. Of the rest, the first part of step 2 is built on the branch `editor-step2` (the `convert` command, the timeline file's loader and validator, the clap finder); everything else in this document is planned and not built. Section 3 records the owner's decisions of 2026-10-26 on storage, colour, frame, Python and export. Section 2 replaces the goal of v1.1. Version 2.2 records the owner's decisions of 2026-10-26 on the clap (D6), steady scenes (D7), transitions (D8), reading cuts back from Shotcut (D11) and the encoder (D17); step 2 is being built.
 
 Companion document: `SPECS.md` (how it is built, the timeline file format, the tests).
 

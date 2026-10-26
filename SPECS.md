@@ -4,7 +4,7 @@
 **Date:** 2026-10-26
 Companion to `PRD.md`. Sections 1 to 17 specify the planned editor. Appendix A describes the system built as v1.1.0, which the plan reuses. Appendix B lists the sources.
 
-Nothing in sections 1 to 17 is built. The one exception is the test of step 1, which was run by hand with scripts that are not in the repository (section 6.1). Each interface named here (commands, endpoints, file names, module names) is a planned interface. Names may change when the code is written.
+Of sections 1 to 17, only the first part of step 2 is built, on the branch `editor-step2`: the Python 3.12 move, the `convert` command (section 6, with `decoder.py`, `safety.py`, `tools.py`), the timeline file's loader, validator and saver with `timeline validate` (section 3, rules V0 to V22), and the clap finder with `analyse --clap` (section 7.2). The module table in section 2.3 says which module is built. Where the build found the plan wrong, the text says "changed in the build". The test of step 1 was run by hand with scripts that are not in the repository (section 6.1). Every other interface named here (commands, endpoints, file names, module names) is planned, and names may change when the code is written.
 
 Version 2.2 adds the owner's decisions on the clap (D6), steady scenes (D7), transitions (D8), reading Shotcut cuts back (D11) and the encoder (D17). Step 2 is being built on the branch `editor-step2`; where the build found the plan wrong, the text is changed and marked "changed in the build".
 
