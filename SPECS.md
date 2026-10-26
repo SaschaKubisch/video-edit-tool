@@ -923,6 +923,8 @@ The `convert` command is planned and not built. These checks belong to it; they 
 
 Checks 1.8 and 1.9 write files to the SSD. They run on the work directory named in `VET_WORK_DIR`.
 
+**Results of the build** [measured, 2026-10-26, load average 100 to 140 from other jobs]: (a) The copy of `A002_01011826_C040` made by `convert` has the same size in bytes (74,282,904), the same codec facts, frame count (3635) and timecode as the copy made by hand in step 1, and `ffmpeg`'s `psnr` filter reports infinity for all 3635 frames: the decoded pictures are identical. (b) The first 3 s of `A002_01060615_C083` pass the check against the RAW decode (section above, check 1.7). (c) Speeds of the clips converted so far under that load: 8.6 to 27 fps (0.29 to 0.91 times real time), against 1.8 to 2.1 times real time in step 1 at a load of 16 to 19. (d) One clip (`A002_01011735_C021`) has 4.000 s of audio and 4.87 s of picture in the source file (section 6.6). The full run over the first shoot was started in the background; its result is not recorded here.
+
 ---
 
 ## 7. Step 2: Timeline File and Assembly
