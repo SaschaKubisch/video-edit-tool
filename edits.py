@@ -118,6 +118,33 @@ def apply_operations(data: dict, operations) -> dict:
     return out
 
 
+# ── Settings written by commands (not page operations) ──────────
+
+LOUDNESS_MODES = ("off", "segment_then_film", "film_only")
+
+
+def set_loudness(data: dict, mode: str, target_lufs=None, true_peak_dbtp=None, max_gain_db=None) -> dict:
+    """A copy of `data` with `audio.loudness` set. For the modes that level, the values the
+    owner decided on (config.LOUDNESS_*) fill what is not given; for `off` only the mode is
+    written. The caller validates and saves."""
+    import config
+    if mode not in LOUDNESS_MODES:
+        raise OperationError(f"mode must be one of {', '.join(LOUDNESS_MODES)}, not {mode!r}")
+    out = copy.deepcopy(data)
+    old = out.setdefault("audio", {}).get("loudness") or {}
+    block = {k: v for k, v in old.items() if k.startswith("x_")}
+    block["mode"] = mode
+    if mode != "off":
+        block["target_lufs"] = target_lufs if target_lufs is not None else \
+            old.get("target_lufs", config.LOUDNESS_TARGET_LUFS)
+        block["true_peak_dbtp"] = true_peak_dbtp if true_peak_dbtp is not None else \
+            old.get("true_peak_dbtp", config.LOUDNESS_TRUE_PEAK_DBTP)
+        block["max_gain_db"] = max_gain_db if max_gain_db is not None else \
+            old.get("max_gain_db", config.LOUDNESS_MAX_GAIN_DB)
+    out["audio"]["loudness"] = block
+    return out
+
+
 # ── The summary ─────────────────────────────────────────────────
 
 def clock(seconds: float) -> str:

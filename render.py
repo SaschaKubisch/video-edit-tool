@@ -24,6 +24,7 @@ from fractions import Fraction
 import numpy as np
 
 import config
+import loudness
 
 
 # ── Picture placement (SPECS 5.2) ───────────────────────────────
@@ -175,6 +176,28 @@ class MixResult:
     samples: np.ndarray                 # (film samples, 2) float32
     warnings: list = field(default_factory=list)
     joins: list = field(default_factory=list)       # {"before", "after", "wanted_s", "used_s"}
+    levels: dict = None                 # the loudness report (SPECS 5.8); None when the mode is off
+
+
+def loudness_settings(tl) -> dict:
+    """The loudness block of the timeline file with its defaults: `mode`, `target_lufs`,
+    `true_peak_dbtp` (-1.0) and `max_gain_db` (12)."""
+    block = dict((tl.data.get("audio") or {}).get("loudness") or {})
+    block.setdefault("mode", "off")
+    block.setdefault("true_peak_dbtp", -1.0)
+    block.setdefault("max_gain_db", 12.0)
+    return block
+
+
+def _measure_key(wav_path, wav_len, s0, n, rate) -> str:
+    """The name under which the loudness of a segment's own sound is kept: the WAV (path,
+    size, modification time, decoded length), where the sound starts, its length, the rate."""
+    try:
+        st = os.stat(wav_path)
+        ident = f"{st.st_size}:{st.st_mtime_ns}"
+    except OSError:
+        ident = "-"
+    return f"{wav_path}|{ident}|{wav_len}|{s0}|{n}|{rate}"
 
 
 def _slice_with_silence(wav: np.ndarray, lo: int, hi: int) -> np.ndarray:
@@ -198,7 +221,7 @@ def _fall(x: np.ndarray, curve: str) -> np.ndarray:
     return np.cos(0.5 * np.pi * x) if curve == "equal_power" else 1.0 - x
 
 
-def build_mix(tl, plan: RenderPlan, loader) -> MixResult:
+def build_mix(tl, plan: RenderPlan, loader, measure=None, cache=None) -> MixResult:
     """The sound of the film: float32 stereo at the mix rate, `plan.film_samples` long.
 
     `loader(path)` returns a WAV as a float32 array (samples, 2) at the mix rate. Each
@@ -208,12 +231,24 @@ def build_mix(tl, plan: RenderPlan, loader) -> MixResult:
     duration d the picture cuts at film sample F; the earlier sound falls and the later
     sound rises over [F - d/2, F + d/2). A handle the WAV cannot give shortens the
     crossfade (down to a hard cut) and is reported.
+
+    Loudness (decision D9): with `audio.loudness.mode` `segment_then_film` every segment is
+    measured over its own span and gets the gain that brings it to the target, at most
+    `max_gain_db`; with `film_only` this step is skipped. In both modes the finished mix then
+    gets one gain so that its integrated loudness equals the target, and a limiter if the
+    true peak is over the limit (loudness.level_film). `measure(samples, rate)` measures
+    (ffmpeg's ebur128 by default); `cache` is a dict that keeps the loudness of a segment
+    between runs. The report is `result.levels`.
     """
     rate = plan.sample_rate
     segs = plan.segments
     N = plan.film_samples
     result = MixResult(np.zeros((N, 2), np.float32))
     warn = result.warnings.append
+    settings = loudness_settings(tl)
+    mode = settings["mode"]
+    measure = measure or (lambda x, r: loudness.measure(x, r))
+    cores, keys = {}, {}
 
     # Pass 1: load each WAV once and cut out every segment's nominal region.
     by_path = {}
@@ -227,6 +262,9 @@ def build_mix(tl, plan: RenderPlan, loader) -> MixResult:
             h_in, h_out = s.join_in_samples // 2, s.join_out_samples // 2
             s0, n = s.source_audio_start, s.sample_length
             regions[s.id] = _slice_with_silence(wav, s0 - h_in, s0 + n + h_out)
+            if mode == "segment_then_film":
+                cores[s.id] = regions[s.id][h_in:h_in + n]
+                keys[s.id] = _measure_key(path, length, s0, n, rate)
             avail_before[s.id] = _real(s0 - h_in, s0, length)
             avail_after[s.id] = _real(s0 + n, s0 + n + h_out, length)
             lead = max(0, min(-s0, n))
@@ -239,6 +277,29 @@ def build_mix(tl, plan: RenderPlan, loader) -> MixResult:
                      "ends (silence after the end of the WAV)")
             if s0 >= length:
                 warn(f"segment {s.id}: the WAV holds no sound for this segment (silence)")
+
+    # Loudness of each segment (decision D9): one gain per segment, from its own span.
+    seg_levels, seg_gain = {}, {}
+    if mode != "off":
+        result.levels = {"mode": mode, "target_lufs": settings["target_lufs"],
+                         "true_peak_dbtp": settings["true_peak_dbtp"],
+                         "max_gain_db": settings["max_gain_db"], "segments": seg_levels}
+    if mode == "segment_then_film":
+        lufs = _measure_segments(cores, keys, rate, measure, cache)
+        for s in segs:
+            level = loudness.Level(lufs[s.id], 0.0)
+            g = loudness.segment_gain(level, settings["target_lufs"], settings["max_gain_db"])
+            seg_gain[s.id] = g.gain_db
+            row = g.as_dict()
+            row["adjust_db"] = s.gain_db
+            seg_levels[s.id] = row
+            if g.silent:
+                warn(f"segment {s.id}: no sound above the gate (-70 LUFS) or shorter than "
+                     f"0.4 s, so it is not levelled (gain stays 0)")
+            elif g.capped:
+                warn(f"segment {s.id}: the gain is capped at {settings['max_gain_db']:g} dB "
+                     f"(it would need {g.wanted_db:.1f} dB to reach {settings['target_lufs']:g} LUFS)")
+        cores.clear()
 
     # Joins: the crossfade is as long as both sides can give.
     used_half = {}
@@ -279,14 +340,48 @@ def build_mix(tl, plan: RenderPlan, loader) -> MixResult:
             g[h_in + n + h:] = 0.0
             if h:
                 g[h_in + n - h:h_in + n + h] *= _fall(np.arange(2 * h) / (2 * h), s.curve_out)
-        if s.gain_db:
-            g *= 10.0 ** (s.gain_db / 20.0)
+        total_db = s.gain_db + seg_gain.get(s.id, 0.0)
+        if total_db:
+            g *= 10.0 ** (total_db / 20.0)
         pos = s.film_start_sample - h_in
         lo, hi = max(0, pos), min(N, pos + len(region))
         if hi > lo:
             result.samples[lo:hi] += (region[lo - pos:hi - pos] * g[lo - pos:hi - pos, None]
                                       ).astype(np.float32)
+
+    # The film: one gain to the target, a limiter if the true peak is over the limit.
+    if mode != "off":
+        out, film = loudness.level_film(result.samples, settings["target_lufs"],
+                                        settings["true_peak_dbtp"], rate,
+                                        measure_fn=lambda x: measure(x, rate))
+        result.samples = out
+        result.levels["film"] = film.as_dict()
+        for w in film.warnings:
+            warn(w)
+        if film.gain_db > settings["max_gain_db"]:
+            warn(f"the film needed a gain of {film.gain_db:.1f} dB to reach the target "
+                 f"(more than max_gain_db, {settings['max_gain_db']:g} dB)")
     return result
+
+
+def _measure_segments(cores: dict, keys: dict, rate: int, measure, cache) -> dict:
+    """The integrated loudness of every segment's own span (None when silent): from the
+    cache where the key is known, else measured, four at a time."""
+    from concurrent.futures import ThreadPoolExecutor
+    found, todo = {}, []
+    for sid, core in cores.items():
+        key = keys[sid]
+        if cache is not None and key in cache:
+            found[sid] = cache[key]
+        else:
+            todo.append(sid)
+    if todo:
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            for sid, level in zip(todo, pool.map(lambda i: measure(cores[i], rate), todo)):
+                found[sid] = level.lufs
+                if cache is not None:
+                    cache[keys[sid]] = level.lufs
+    return found
 
 
 # ── The film preview (SPECS 5.5) ────────────────────────────────
@@ -323,13 +418,14 @@ class PreviewResult:
     timeline_hash: str = None
     elapsed_s: float = 0.0
     problems_fatal: bool = False
+    loudness: dict = None               # the loudness report of the mix (None when the mode is off)
 
     def as_dict(self) -> dict:
         return {"file": os.path.basename(self.path), "frames": self.frames,
                 "seconds": round(self.seconds, 3), "segments": self.segments,
                 "rendered": self.rendered, "cached": self.cached,
                 "sound_changed": self.sound_changed, "warnings": self.warnings,
-                "joins": self.joins, "problems": self.problems,
+                "joins": self.joins, "problems": self.problems, "loudness": self.loudness,
                 "timeline_hash": self.timeline_hash, "elapsed_s": round(self.elapsed_s, 2)}
 
 
@@ -463,7 +559,8 @@ def sound_keys(tl, plan: RenderPlan) -> dict:
             "v": 1, "wav": tl.data["sources"][s.source]["audio"], "rate": plan.sample_rate,
             "start": s.source_audio_start, "samples": s.sample_length,
             "join_in": [s.join_in_samples, s.curve_in], "join_out": [s.join_out_samples, s.curve_out],
-            "fade_in": s.fade_in_samples, "fade_out": s.fade_out_samples, "gain_db": s.gain_db}
+            "fade_in": s.fade_in_samples, "fade_out": s.fade_out_samples, "gain_db": s.gain_db,
+            "loudness": loudness_settings(tl)}
         keys[s.id] = hashlib.sha256(json.dumps(material, sort_keys=True).encode()).hexdigest()[:20]
     return keys
 
@@ -476,6 +573,21 @@ def _read_record(work_dir: str, name: str) -> dict:
         return record if isinstance(record, dict) else {}
     except (OSError, ValueError):
         return {}
+
+
+def _read_cache(path: str) -> dict:
+    import json
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _write_cache(path: str, cache: dict) -> None:
+    import fsutil
+    fsutil.write_json_atomic(path, cache)
 
 
 def pending_work(tl, work_dir: str, settings: PreviewSettings = None, name: str = "preview") -> dict:
@@ -630,8 +742,11 @@ def render_preview(tl, work_dir: str, name: str = "preview", settings: PreviewSe
     before = _read_record(work_dir, name).get("sound_keys") or {}
     result.sound_changed = [s.id for s in segs if keys[s.id] != before.get(s.id)]
     loader = loader or (lambda path: load_wav(path, plan.sample_rate))
-    mix = build_mix(tl, plan, loader)
-    result.warnings, result.joins = mix.warnings, mix.joins
+    cache_path = os.path.join(folder, "loudness-cache.json")
+    cache = _read_cache(cache_path)
+    mix = build_mix(tl, plan, loader, cache=cache)
+    _write_cache(cache_path, cache)
+    result.warnings, result.joins, result.loudness = mix.warnings, mix.joins, mix.levels
     first, last = segs[0], segs[-1]
     lo = first.film_start_sample
     hi = last.film_start_sample + last.sample_length

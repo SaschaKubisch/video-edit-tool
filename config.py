@@ -135,3 +135,12 @@ FILM_PREVIEW_ENCODER = "h264_videotoolbox"
 FILM_PREVIEW_Q = 60                  # h264_videotoolbox quality, -q:v
 FILM_PREVIEW_GOP = 12                # short groups of pictures, so seeking is quick
 FILM_PREVIEW_AUDIO_KBPS = 160
+
+# ── Loudness (decision D9, "Each scene, then film"; SPECS 5.4, 8.4) ──
+# The code has no built-in loudness mode: the timeline file carries it. `loudness set` writes
+# these values (the numbers shown to the owner with the question) when the mode is turned on.
+LOUDNESS_MODE = "segment_then_film"
+LOUDNESS_TARGET_LUFS = -14.0       # integrated loudness of the film
+LOUDNESS_TRUE_PEAK_DBTP = -1.0     # the true peak stays at or under this
+LOUDNESS_MAX_GAIN_DB = 12.0        # most that levelling adds to a quiet segment (starting value)
+

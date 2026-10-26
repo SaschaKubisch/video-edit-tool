@@ -18,6 +18,10 @@ Commands:
   preview  render the film preview from the preview copies
   timeline validate or summarise the timeline file, list its versions (history), go back (undo),
            write stills at film times (frames)
+  loudness set or show the loudness of the film (each scene, then the film)
+  look     list creative LUTs, choose the creative or the base LUT
+  export   list, add, switch on and off the exports (presets) of the timeline file
+  render   render the final film from the .braw files (levelled sound, LUTs, DCI 4K)
 
 Usage:
   python main.py
@@ -30,6 +34,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 import config
@@ -668,6 +673,61 @@ def cmd_preview(args):
         print(f"  warning: {w}")
 
 
+def change_timeline(args, change, file_checks=False):
+    """Load the timeline file, apply `change(data) -> new data`, validate, and save it with a
+    snapshot of the old file (SPECS 4.1). Exits with 2 when the file is missing, 1 when it or the
+    result breaks a rule. Returns the Timeline that was written."""
+    import store
+    import timeline
+
+    path = default_timeline_path(args)
+    try:
+        tl = timeline.Timeline.load(path)
+    except FileNotFoundError:
+        print(f"Error: timeline file not found: {path}", file=sys.stderr)
+        sys.exit(2)
+    except timeline.TimelineError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+    try:
+        new = timeline.Timeline(change(tl.data), tl.duplicates)
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+    findings = new.validate(file_checks=file_checks)
+    if timeline.has_errors(findings):
+        print(json.dumps([f.as_dict() for f in findings], indent=2))
+        print("The change breaks a rule of the timeline file; nothing was saved.", file=sys.stderr)
+        sys.exit(1)
+    store.save(new, path)
+    return new
+
+
+def cmd_loudness(args):
+    """Set or show the loudness of the film (decision D9; SPECS 8.4)."""
+    import edits
+    import timeline
+
+    if args.loudness_command == "show":
+        path = default_timeline_path(args)
+        try:
+            tl = timeline.Timeline.load(path)
+        except FileNotFoundError:
+            print(f"Error: timeline file not found: {path}", file=sys.stderr)
+            sys.exit(2)
+        except timeline.TimelineError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            sys.exit(1)
+        block = (tl.data.get("audio") or {}).get("loudness") or {}
+        print(json.dumps(block, indent=2))
+        return
+    change_timeline(args, lambda d: edits.set_loudness(
+        d, args.mode, target_lufs=args.target, true_peak_dbtp=args.peak, max_gain_db=args.max_gain),
+        file_checks=not args.no_file_checks)
+    print(f"Loudness set: mode {args.mode}"
+          + ("" if args.mode == "off" else f", target {args.target if args.target is not None else config.LOUDNESS_TARGET_LUFS:g} LUFS"))
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         description="Dual-System Audio Video Automation (BMPCC 4K + Zoom H2N)",
@@ -880,6 +940,30 @@ def build_parser():
     p_preview.add_argument("--no-file-checks", action="store_true",
         help="Do not read the files while validating the timeline")
     p_preview.set_defaults(func=cmd_preview)
+
+    # ── loudness ──
+    p_loud = subparsers.add_parser("loudness",
+        help="Set or show the loudness of the film (each scene, then the film)")
+    ld_sub = p_loud.add_subparsers(dest="loudness_command", required=True)
+    p_ld_set = ld_sub.add_parser("set",
+        help="Write the loudness mode and numbers into the timeline file")
+    p_ld_set.add_argument("--file", "-f",
+        help=f"Timeline file (default: {config.TIMELINE_FILE} next to the project file)")
+    p_ld_set.add_argument("--mode", required=True, choices=["off", "segment_then_film", "film_only"],
+        help="off: no levelling; segment_then_film: every scene to the same loudness, then the "
+             "film to the target (decision D9); film_only: only the film")
+    p_ld_set.add_argument("--target", type=float,
+        help=f"Integrated loudness of the film in LUFS (default {config.LOUDNESS_TARGET_LUFS:g})")
+    p_ld_set.add_argument("--peak", type=float,
+        help=f"True-peak limit in dBTP (default {config.LOUDNESS_TRUE_PEAK_DBTP:g})")
+    p_ld_set.add_argument("--max-gain", type=float,
+        help=f"Most a quiet scene may be raised, in dB (default {config.LOUDNESS_MAX_GAIN_DB:g})")
+    p_ld_set.add_argument("--no-file-checks", action="store_true",
+        help="Do not read the files while validating (tests)")
+    p_ld_show = ld_sub.add_parser("show", help="Print the loudness settings of the timeline file")
+    p_ld_show.add_argument("--file", "-f",
+        help=f"Timeline file (default: {config.TIMELINE_FILE} next to the project file)")
+    p_loud.set_defaults(func=cmd_loudness)
 
     return parser
 
