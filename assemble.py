@@ -300,6 +300,15 @@ def format_report(report: dict) -> str:
     if no_clap:
         lines.append("Clips without a clap (they start at their first steady frame): "
                      + ", ".join(no_clap))
+    kept = report.get("hand_offsets_kept") or {}
+    if kept:
+        lines.append("Offsets set by hand were kept: " + "; ".join(
+            f"{sid} {value:.3f} s" for sid, value in kept.items()))
+    dropped = report.get("hand_offsets_dropped") or {}
+    if dropped:
+        lines.append("Offsets set by hand were dropped because the clip is not in the film any "
+                     "more (the old file is in the history): " + "; ".join(
+                         f"{sid} {value:.3f} s" for sid, value in dropped.items()))
     for w in film["warnings"]:
         lines.append(f"Warning: {w}")
     return "\n".join(lines) + "\n"
@@ -317,6 +326,31 @@ def _load_json(path):
         return None
     with open(path, encoding="utf-8") as f:
         return json.load(f)
+
+
+def carry_over_hand_offsets(result: "Assembly", old_path: str) -> None:
+    """Copy the offsets the owner typed (`audio_offset_hand_s`) from the timeline file at
+    `old_path` into the new assembly, for the clips that are in it. The report names the
+    offsets kept and the offsets dropped (a clip that is not in the new film). An old file
+    that cannot be read is a warning in the report, not an error."""
+    kept, dropped, hand = {}, {}, {}
+    try:
+        old = timeline.Timeline.load(old_path).data.get("sources")
+        for sid, src in (old.items() if isinstance(old, dict) else []):
+            value = src.get("audio_offset_hand_s") if isinstance(src, dict) else None
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                hand[sid] = value
+    except (timeline.TimelineError, OSError, ValueError):
+        result.report["film"]["warnings"].append(
+            "the old timeline file could not be read; offsets typed by hand were not carried over")
+    for sid, value in hand.items():
+        if sid in result.data["sources"]:
+            result.data["sources"][sid]["audio_offset_hand_s"] = value
+            kept[sid] = value
+        else:
+            dropped[sid] = value
+    result.report["hand_offsets_kept"] = kept
+    result.report["hand_offsets_dropped"] = dropped
 
 
 def clip_inputs(project, work_dir: str, store_, limit=None, only=None) -> list:
@@ -384,6 +418,11 @@ def assemble_project(project, work_dir: str, output: str, replace: bool = False,
                             "without a record of the LUT. Run convert.")
     clips = clip_inputs(project, work_dir, conv, limit=limit, only=only)
     result = build(clips, base_lut, settings)
+    if os.path.exists(output):                  # replace was given: keep the owner's offsets
+        carry_over_hand_offsets(result, output)
+    else:
+        result.report["hand_offsets_kept"] = {}
+        result.report["hand_offsets_dropped"] = {}
     findings = timeline.validate(result.data, file_checks=file_checks)
     errors = [f for f in findings if f.level == timeline.ERROR]
     if errors:

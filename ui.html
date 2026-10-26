@@ -371,6 +371,11 @@
   .film-mono { font-family: monospace; color: #aaa; white-space: nowrap; }
   .film-flag { color: #ffd166; font-weight: 600; cursor: help; }
   .film-note { font-size: 0.8em; color: #888; margin-top: 6px; }
+  .film-offset { width: 96px; padding: 3px 6px; background: #0a0a2e; border: 1px solid #333;
+                 color: #e0e0e0; border-radius: 3px; font-size: 0.95em; font-family: monospace; }
+  .film-offset.set { border-color: #ffd166; }
+  .film-warn { color: #ffd166; font-size: 0.85em; margin: 8px 0; white-space: pre-wrap; }
+  .film-warn:empty { display: none; }
 </style>
 </head>
 <body>
@@ -553,6 +558,16 @@
            the old file is kept. Click a row to jump to it in the preview. After a change, render the
            preview again.</p>
         <table class="film-table" id="filmTable"></table>
+      </div>
+      <div class="card" id="filmClipsCard" style="display:none">
+        <h2>Sync offset per clip</h2>
+        <p>The offset is how many seconds later a sound comes in the recorder's file than in the
+           camera's. The tool measured one for every clip when it matched the files. If one is wrong,
+           type the right one in seconds (a minus sign is allowed). Only the sound of that clip's
+           scenes changes; the pictures stay as they are. Empty the field, or press Original, to
+           use the measured offset again. The measured offset is never overwritten.</p>
+        <div class="film-warn" id="filmOffsetNotes"></div>
+        <table class="film-table" id="filmClipsTable"></table>
       </div>
     </div>
   </main>
@@ -1091,12 +1106,14 @@ async function loadFilm() {
 
 function renderFilm() {
   const card = document.getElementById("filmSegmentsCard");
+  const clipsCard = document.getElementById("filmClipsCard");
   const player = document.getElementById("filmPlayer");
   const badge = document.getElementById("filmPreviewBadge");
   document.getElementById("filmAssembleBtn").disabled = filmJob;
   document.getElementById("filmPreviewBtn").disabled = filmJob || !film;
   if (!film) {
     card.style.display = "none";
+    clipsCard.style.display = "none";
     player.style.display = "none";
     badge.className = "film-badge none";
     badge.textContent = "no preview";
@@ -1106,6 +1123,7 @@ function renderFilm() {
   }
   const s = film.summary;
   card.style.display = "block";
+  clipsCard.style.display = "block";
   document.getElementById("filmSummaryLine").textContent =
     film.name + " (hash " + film.hash.slice(0, 8) + "): " + s.enabled + " of " + s.segments +
     " scenes in the film, " + fmtFilm(s.film_seconds) + " long";
@@ -1124,7 +1142,7 @@ function renderFilm() {
     }
     player.style.display = "block";
     document.getElementById("filmPlayerNote").textContent = p.up_to_date ? "" :
-      "The film changed after this preview was made. Press Render preview.";
+      "The film changed after this preview was made. Press Render preview." + pendingText(p);
   } else {
     badge.className = "film-badge none";
     badge.textContent = "no preview";
@@ -1132,6 +1150,63 @@ function renderFilm() {
     document.getElementById("filmPlayerNote").textContent = "No preview yet. Press Render preview.";
   }
   renderFilmTable();
+  renderFilmClips();
+}
+
+// What the next preview has to do (SPECS 7.6): a changed offset changes sound only.
+function pendingText(p) {
+  const w = p && p.pending;
+  if (!w) return "";
+  const n = w.sound.length;
+  return " (" + (w.picture.length ? w.picture.length + " scene picture(s) to render" : "all pictures kept") +
+    "; " + (n ? "sound of " + n + " scene" + (n === 1 ? "" : "s") + " to render again" : "sound unchanged") + ")";
+}
+
+function fmtOffset(x) {
+  return (x >= 0 ? "+" : "") + x.toFixed(3) + " s";
+}
+
+function renderFilmClips() {
+  const clips = film.summary.clips || [];
+  const review = {};
+  film.summary.rows.forEach(r => { if (r.review) review[r.source] = r.review; });
+  const head = `<tr><th>Clip</th><th>Scenes</th><th>Measured</th><th>Your offset (seconds)</th>
+    <th>Used</th><th></th><th></th></tr>`;
+  const body = clips.map(c => {
+    const id = escapeHtml(c.source);
+    const typed = c.offset_hand_s !== null && c.offset_hand_s !== undefined;
+    const flag = review[c.source]
+      ? `<span class="film-flag" title="${escapeHtml(review[c.source].join('; '))}">check</span>` : "";
+    return `<tr class="film-row" id="filmClip_${id}">
+      <td class="film-mono">${id}</td>
+      <td class="film-mono">${c.segments.length}</td>
+      <td class="film-mono">${fmtOffset(c.offset_original_s)}</td>
+      <td><input class="film-offset ${typed ? "set" : ""}" id="filmOffset_${id}" inputmode="decimal"
+           value="${typed ? c.offset_hand_s : ""}" placeholder="${c.offset_original_s.toFixed(3)}"
+           title="Seconds. Empty: use the measured offset."
+           onchange="filmOffset(this, '${id}')"></td>
+      <td class="film-mono">${fmtOffset(c.offset_s)}${typed ? " (yours)" : ""}</td>
+      <td><button class="btn btn-secondary film-btn" ${typed ? "" : "disabled"}
+           onclick="filmOp(event, [{op:'reset_offset', source:'${id}'}])">Original</button></td>
+      <td>${flag}</td>
+    </tr>`;
+  }).join("");
+  document.getElementById("filmClipsTable").innerHTML = head + body;
+  document.getElementById("filmOffsetNotes").textContent = (film.findings || [])
+    .filter(f => f.rule === "V23" && f.level === "warning").map(f => f.message).join("\n");
+}
+
+// The owner typed an offset for a clip. Empty: back to the measured one.
+async function filmOffset(input, source) {
+  const text = String(input.value).trim().replace(",", ".");
+  if (text === "") return filmOp(null, [{ op: "reset_offset", source: source }]);
+  const value = Number(text);
+  if (!Number.isFinite(value)) {
+    showFilmError("The offset must be a number of seconds, for example 0.25 or -1.5.");
+    renderFilm();
+    return;
+  }
+  return filmOp(null, [{ op: "set_offset", source: source, offset_s: value }]);
 }
 
 function renderFilmTable() {
@@ -1184,6 +1259,7 @@ async function filmOp(event, ops) {
     film.hash = resp.hash;
     film.summary = resp.summary;
     film.preview = resp.preview;
+    film.findings = resp.findings || [];
     renderFilm();
     return;
   }

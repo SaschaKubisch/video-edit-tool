@@ -316,6 +316,7 @@ class PreviewResult:
     segments: list                      # ids of the segments in the file
     rendered: list = field(default_factory=list)
     cached: list = field(default_factory=list)
+    sound_changed: list = field(default_factory=list)   # segments whose sound differs from the last preview
     warnings: list = field(default_factory=list)
     joins: list = field(default_factory=list)
     problems: list = field(default_factory=list)
@@ -326,7 +327,8 @@ class PreviewResult:
     def as_dict(self) -> dict:
         return {"file": os.path.basename(self.path), "frames": self.frames,
                 "seconds": round(self.seconds, 3), "segments": self.segments,
-                "rendered": self.rendered, "cached": self.cached, "warnings": self.warnings,
+                "rendered": self.rendered, "cached": self.cached,
+                "sound_changed": self.sound_changed, "warnings": self.warnings,
                 "joins": self.joins, "problems": self.problems,
                 "timeline_hash": self.timeline_hash, "elapsed_s": round(self.elapsed_s, 2)}
 
@@ -445,6 +447,57 @@ def segment_key(tl, plan: RenderPlan, seg: SegmentPlan, settings: PreviewSetting
         "fps": tl.data["film"]["fps"], "settings": settings.as_dict()}
     digest = hashlib.sha256(json.dumps(material, sort_keys=True).encode()).hexdigest()[:20]
     return f"seg-{digest}.mp4"
+
+
+def sound_keys(tl, plan: RenderPlan) -> dict:
+    """A short key per segment that changes when anything that shapes the segment's own
+    sound changes: the WAV, where in it the sound starts (so the clip's offset, the hand
+    offset and the drift), its length, the handles and curves of both joins, the film
+    fades and the gain. It does not depend on where the segment stands in the film: a
+    move changes the keys of the neighbours' joins, not the sound of the segment."""
+    import hashlib
+    import json
+    keys = {}
+    for s in plan.segments:
+        material = {
+            "v": 1, "wav": tl.data["sources"][s.source]["audio"], "rate": plan.sample_rate,
+            "start": s.source_audio_start, "samples": s.sample_length,
+            "join_in": [s.join_in_samples, s.curve_in], "join_out": [s.join_out_samples, s.curve_out],
+            "fade_in": s.fade_in_samples, "fade_out": s.fade_out_samples, "gain_db": s.gain_db}
+        keys[s.id] = hashlib.sha256(json.dumps(material, sort_keys=True).encode()).hexdigest()[:20]
+    return keys
+
+
+def _read_record(work_dir: str, name: str) -> dict:
+    import json
+    try:
+        with open(os.path.join(work_dir, "previews", f"{name}.json"), encoding="utf-8") as f:
+            record = json.load(f)
+        return record if isinstance(record, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def pending_work(tl, work_dir: str, settings: PreviewSettings = None, name: str = "preview") -> dict:
+    """What the next film preview has to do for the film as it is now: the segments whose
+    picture file does not exist yet (`picture`) and the segments whose sound differs from
+    the sound of the last preview (`sound`). A changed offset changes the sound only. Reads
+    no media and starts no program."""
+    settings = settings or PreviewSettings()
+    plan = make_plan(tl, preview_width=settings.width)
+    old = _read_record(work_dir, name).get("sound_keys") or {}
+    new = sound_keys(tl, plan)
+    folder = os.path.join(work_dir, "previews")
+    picture = []
+    for s in plan.segments:
+        try:
+            target = os.path.join(folder, segment_key(tl, plan, s, settings))
+        except OSError:                     # the preview copy is missing: nothing can be reused
+            picture.append(s.id)
+            continue
+        if not (os.path.isfile(target) and os.path.getsize(target) > 0):
+            picture.append(s.id)
+    return {"picture": picture, "sound": [s.id for s in plan.segments if new[s.id] != old.get(s.id)]}
 
 
 def load_wav(path: str, rate: int) -> np.ndarray:
@@ -572,6 +625,10 @@ def render_preview(tl, work_dir: str, name: str = "preview", settings: PreviewSe
             progress(i + 1, len(segs))
 
     # Sound: the whole mix, then the part that belongs to the segments in the file.
+    all_keys = sound_keys(tl, plan)
+    keys = {s.id: all_keys[s.id] for s in segs}
+    before = _read_record(work_dir, name).get("sound_keys") or {}
+    result.sound_changed = [s.id for s in segs if keys[s.id] != before.get(s.id)]
     loader = loader or (lambda path: load_wav(path, plan.sample_rate))
     mix = build_mix(tl, plan, loader)
     result.warnings, result.joins = mix.warnings, mix.joins
@@ -610,6 +667,6 @@ def render_preview(tl, work_dir: str, name: str = "preview", settings: PreviewSe
     result.elapsed_s = time.time() - started
     fsutil.write_json_atomic(os.path.join(folder, f"{name}.json"), {
         **result.as_dict(), "range": list(film_range) if film_range else None,
-        "settings": settings.as_dict(),
+        "settings": settings.as_dict(), "sound_keys": keys,
         "rendered_at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")})
     return result

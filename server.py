@@ -33,16 +33,18 @@ _job_lock = threading.Lock()
 _timeline_path = None
 _work_dir = None
 _preview_settings = None
+_wav_seconds = None                    # replaces ffprobe where the length of a WAV is read (tests)
 _timeline_lock = threading.Lock()      # one edit of the timeline file at a time
 
 PREVIEW_NAME = "preview"
 
 
 def configure(**kw):
-    """Set what the film endpoints use: timeline_path, work_dir, project, preview_settings.
-    Only the names given are changed; None or "" means "not set"."""
-    global _timeline_path, _work_dir, _preview_settings, _project
-    unknown = set(kw) - {"timeline_path", "work_dir", "project", "preview_settings"}
+    """Set what the film endpoints use: timeline_path, work_dir, project, preview_settings,
+    wav_seconds. Only the names given are changed; None or "" means "not set"."""
+    global _timeline_path, _work_dir, _preview_settings, _project, _wav_seconds
+    unknown = set(kw) - {"timeline_path", "work_dir", "project", "preview_settings",
+                         "wav_seconds"}
     if unknown:
         raise TypeError(f"unknown settings: {', '.join(sorted(unknown))}")
     if "timeline_path" in kw:
@@ -51,6 +53,8 @@ def configure(**kw):
         _work_dir = kw["work_dir"] or None
     if "preview_settings" in kw:
         _preview_settings = kw["preview_settings"]
+    if "wav_seconds" in kw:
+        _wav_seconds = kw["wav_seconds"]
     if "project" in kw:
         with _project_lock:
             _project = kw["project"]
@@ -465,12 +469,12 @@ class AppHandler(BaseHTTPRequestHandler):
         if loaded is None:
             return
         tl, h = loaded
-        findings = tl.validate(file_checks=False)
+        findings = tl.validate(file_checks=False, wav_seconds=_wav_reader())
         _json_response(self, {
             "path": timeline_file(), "name": os.path.basename(timeline_file()), "hash": h,
             "summary": edits.summary(tl, h, _review_flags()),
             "findings": [f.as_dict() for f in findings],
-            "preview": _preview_state(h)})
+            "preview": _preview_state(h, tl)})
 
     def _handle_timeline_edit(self):
         import edits
@@ -498,7 +502,7 @@ class AppHandler(BaseHTTPRequestHandler):
                 _json_response(self, {"error": str(e)}, 400)
                 return
             new = timeline.Timeline(new_data, tl.duplicates)
-            findings = new.validate(file_checks=False)
+            findings = new.validate(file_checks=False, wav_seconds=_wav_reader())
             if timeline.has_errors(findings):
                 _json_response(self, {"error": "The change breaks a rule of the timeline file; "
                                       "nothing was saved.",
@@ -512,7 +516,7 @@ class AppHandler(BaseHTTPRequestHandler):
         _json_response(self, {"hash": new_hash,
                               "summary": edits.summary(new, new_hash, _review_flags()),
                               "findings": [f.as_dict() for f in findings],
-                              "preview": _preview_state(new_hash)})
+                              "preview": _preview_state(new_hash, new)})
 
     def _serve_preview_file(self, name):
         """A file of <work>/previews, with HTTP range requests (SPECS 12). Any path that
@@ -765,12 +769,27 @@ def _review_flags() -> dict:
     return flags
 
 
-def _preview_state(current_hash: str) -> dict:
-    """Whether a film preview exists and was made from the timeline file as it is now."""
+def _wav_reader():
+    """How the length of a WAV is read for rule V23: ffprobe, or what a test set."""
+    import timeline
+    return _wav_seconds or timeline.wav_length_seconds
+
+
+def _preview_state(current_hash: str, tl=None) -> dict:
+    """Whether a film preview exists and was made from the timeline file as it is now.
+    With `tl`, also what the next preview has to do (`pending`, SPECS 7.6): the segments
+    whose picture is not in the cache and the segments whose sound is not the sound of
+    the last preview. A changed sync offset changes the sound only."""
     state = {"exists": False, "up_to_date": False, "file": None, "frames": None}
     work = work_dir()
     if not work:
         return state
+    if tl is not None:
+        import render
+        try:
+            state["pending"] = render.pending_work(tl, work, _preview_settings, PREVIEW_NAME)
+        except Exception:               # a broken file must not stop the page from loading
+            traceback.print_exc()
     folder = os.path.join(work, "previews")
     meta_path = os.path.join(folder, f"{PREVIEW_NAME}.json")
     try:

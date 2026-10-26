@@ -205,6 +205,7 @@ The wording is the owner's, as recorded.
 | Prompt-driven edits via Claude Code that find scenes by description ("please cut out the scene where I am frying a sausage") | P1 to P4 | 5 |
 | Fade in video and audio at the start and fade out at the end of the film | A6 | 2 |
 | Save the project | T4 | 2 |
+| Set the sync offset of a clip by hand (the owner's answer "Leave them, I set them") | A8 | 2 |
 | Export to the most common video format at a custom resolution | E3, E6 | 3 |
 | Automatically convert a 16:9 film with subtitles into a vertical short of a desired length, shortening scenes while keeping the most important moments, and scaling subtitles to fit | S1 to S5 | 6 |
 
@@ -212,7 +213,7 @@ The wording is the owner's, as recorded.
 
 Priority: Must, Should, Could. "Built" means released in v1.1.0.
 
-**Built on the branch `editor-step2`** [measured by the tests of the branch, 2026-10-26; `SPECS.md` section 7 says how]: C1 to C6 and the interface of C7; T1 to T3; T4 (atomic saves and numbered snapshots; the `undo` command is not built); T5 (`timeline validate` and `timeline summary`; `timeline frames` is not built); T6 (hash check on every page edit); A1 to A7 (the drift is not in the report); E1; U1 to U3; M7 and M9. **Not built:** M8 (thumbnails from the preview copies), the drift measurement (7.3), E2 to E7, and the requirements of steps 3 to 6.
+**Built on the branch `editor-step2`** [measured by the tests of the branch, 2026-10-26; `SPECS.md` section 7 says how]: C1 to C6 and the interface of C7; T1 to T3; T4 (atomic saves and numbered snapshots; the `undo` command is not built); T5 (`timeline validate` and `timeline summary`; `timeline frames` is not built); T6 (hash check on every page edit); A1 to A8 (the drift is not in the report); E1; U1 to U3; M7 and M9. **Not built:** M8 (thumbnails from the preview copies), the drift measurement (7.3), E2 to E7, and the requirements of steps 3 to 6.
 
 **M - Match and sync (kept from v1.1)**
 
@@ -265,6 +266,7 @@ Step 1 tested this method on two clips (section 5.1). These requirements describ
 | A5 | Between segments, the sound fades out and in with a crossfade of settable length. | Must |
 | A6 | The film starts with a fade-in of picture and sound and ends with a fade-out of both. | Must |
 | A7 | Write a report per clip: clap found or not, scenes found, what was left out and why. A clip needing the owner's attention is marked. | Must |
+| A8 | The owner can type a sync offset per clip in the Film tab ("Leave them, I set them", section 3). The offset from matching stays in the file and stays visible beside it, and the owner can go back to it. A changed offset changes the sound of that clip's scenes only: no picture is rendered again. A value that cannot be right is refused; a WAV that then holds no sound for a scene gives a warning, not a failure. | Must |
 
 **L - Look and sound (step 3)**
 

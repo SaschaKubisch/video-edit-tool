@@ -48,7 +48,7 @@ class ServerCase(unittest.TestCase):
             self.httpd.shutdown()
             self.httpd.server_close()
             server.configure(timeline_path=None, work_dir=None, project=Project(),
-                             preview_settings=None)
+                             preview_settings=None, wav_seconds=None)
             server.reset_state()
         self.addCleanup(stop)
 
@@ -276,6 +276,172 @@ class EditTests(TimelineFileCase):
         [t.start() for t in threads]
         [t.join() for t in threads]
         self.assertEqual(sorted(results), [200, 409, 409, 409])
+
+
+class OffsetEditTests(TimelineFileCase):
+    """The sync offset typed by hand (SPECS 3.2, V23, 4.4, 7.6). The owner decided on
+    2026-10-26: "Leave them, I set them"."""
+
+    SRC = "A002_01011540_C002"
+
+    def edit(self, ops, h=None, **kw):
+        return self.post_json("/api/timeline/edit",
+                              {"hash": h if h is not None else self.file_hash(), "operations": ops},
+                              **kw)
+
+    def saved(self):
+        return json.loads(self.path.read_text())["sources"][self.SRC]
+
+    def test_a_typed_offset_is_saved_next_to_the_offset_from_matching(self):
+        status, body = self.edit([{"op": "set_offset", "source": self.SRC, "offset_s": 0.5}])
+        self.assertEqual(status, 200, body)
+        self.assertEqual(self.saved()["audio_offset_hand_s"], 0.5)
+        self.assertEqual(self.saved()["audio_offset_s"], 0.276)
+        self.assertEqual(body["hash"], self.file_hash())
+        first = body["summary"]["clips"][0]
+        self.assertEqual((first["source"], first["offset_original_s"], first["offset_hand_s"],
+                          first["offset_s"]), (self.SRC, 0.276, 0.5, 0.5))
+
+    def test_the_summary_of_the_timeline_lists_the_clips(self):
+        _, body = self.get_json("/api/timeline")
+        clips = body["summary"]["clips"]
+        self.assertEqual([c["source"] for c in clips], [self.SRC, "A002_01060615_C083"])
+        self.assertEqual(clips[0]["segments"], ["s001", "s002"])
+        self.assertIsNone(clips[0]["offset_hand_s"])
+
+    def test_the_old_file_is_kept_as_a_snapshot_and_the_project_file_is_not_touched(self):
+        project_file = self.root / "project.json"
+        Project(work_dir=str(self.work)).save(str(project_file))
+        before_project = project_file.read_bytes()
+        before = self.path.read_bytes()
+        self.edit([{"op": "set_offset", "source": self.SRC, "offset_s": -5.027}])
+        snaps = store.list_snapshots(str(self.path))
+        self.assertEqual([Path(p).read_bytes() for p in snaps], [before])
+        self.assertEqual(project_file.read_bytes(), before_project)
+        self.assertEqual([p.name for p in self.root.rglob("project.json")], ["project.json"])
+
+    def test_a_negative_offset_is_accepted(self):
+        status, _ = self.edit([{"op": "set_offset", "source": self.SRC, "offset_s": -5.027}])
+        self.assertEqual(status, 200)
+        self.assertEqual(self.saved()["audio_offset_hand_s"], -5.027)
+
+    def test_a_value_out_of_range_is_422_with_the_field_path_and_changes_nothing(self):
+        before = self.path.read_bytes()
+        for value in (31, -31, 1000):
+            with self.subTest(value=value):
+                status, body = self.edit([{"op": "set_offset", "source": self.SRC,
+                                           "offset_s": value}])
+                self.assertEqual(status, 422)
+                self.assertEqual(body["findings"][0]["rule"], "V23")
+                self.assertEqual(body["findings"][0]["path"],
+                                 f"sources.{self.SRC}.audio_offset_hand_s")
+                self.assertEqual(self.path.read_bytes(), before)
+        self.assertEqual(store.list_snapshots(str(self.path)), [])
+
+    def test_a_value_that_is_not_a_number_is_400(self):
+        before = self.path.read_bytes()
+        for value in ("0.5", None, True):
+            status, body = self.edit([{"op": "set_offset", "source": self.SRC,
+                                       "offset_s": value}])
+            self.assertEqual(status, 400, value)
+            self.assertIn("offset_s", body["error"])
+        self.assertEqual(self.path.read_bytes(), before)
+
+    def test_an_unknown_clip_is_400(self):
+        status, body = self.edit([{"op": "set_offset", "source": "nope", "offset_s": 0.5}])
+        self.assertEqual(status, 400)
+        self.assertIn("no clip", body["error"])
+
+    def test_resetting_takes_the_hand_offset_away_and_the_original_is_back(self):
+        _, body = self.edit([{"op": "set_offset", "source": self.SRC, "offset_s": 0.5}])
+        status, body = self.edit([{"op": "reset_offset", "source": self.SRC}], h=body["hash"])
+        self.assertEqual(status, 200)
+        self.assertNotIn("audio_offset_hand_s", self.saved())
+        first = body["summary"]["clips"][0]
+        self.assertEqual((first["offset_hand_s"], first["offset_s"]), (None, 0.276))
+
+    def test_a_stale_hash_is_409_and_changes_nothing(self):
+        before = self.path.read_bytes()
+        status, _ = self.edit([{"op": "set_offset", "source": self.SRC, "offset_s": 0.5}],
+                              h="0" * 64)
+        self.assertEqual(status, 409)
+        self.assertEqual(self.path.read_bytes(), before)
+
+    def test_the_page_can_set_no_other_field_of_a_clip(self):
+        status, _ = self.edit([{"op": "set_offset", "source": self.SRC, "offset_s": 0.5,
+                                "audio": "/etc/passwd", "audio_offset_s": 9.0,
+                                "original_video": "/etc/passwd"}])
+        self.assertEqual(status, 200)
+        saved = self.saved()
+        self.assertEqual(saved["audio"], example()["sources"][self.SRC]["audio"])
+        self.assertEqual(saved["audio_offset_s"], 0.276)
+        self.assertNotIn("passwd", self.path.read_text())
+
+    def test_a_wav_with_no_sound_left_for_a_scene_is_a_warning_in_the_answer(self):
+        server.configure(wav_seconds=lambda path: 5.0)
+        status, body = self.edit([{"op": "set_offset", "source": self.SRC, "offset_s": 0.5}])
+        self.assertEqual(status, 200)                       # a warning, not a refusal
+        warnings = [f for f in body["findings"] if f["rule"] == "V23"]
+        self.assertTrue(any("s002" in f["message"] and "no sound" in f["message"]
+                            for f in warnings), warnings)
+        self.assertTrue(all(f["level"] == "warning" for f in warnings))
+        self.assertEqual(self.saved()["audio_offset_hand_s"], 0.5)
+
+    def test_the_warning_is_also_in_the_answer_of_a_plain_read(self):
+        server.configure(wav_seconds=lambda path: 5.0)
+        self.edit([{"op": "set_offset", "source": self.SRC, "offset_s": 0.5}])
+        _, body = self.get_json("/api/timeline")
+        self.assertTrue(any(f["rule"] == "V23" for f in body["findings"]))
+
+    def test_a_wav_that_cannot_be_read_does_not_crash_the_server(self):
+        def broken(path):
+            raise RuntimeError("no such file")
+        server.configure(wav_seconds=broken)
+        status, body = self.edit([{"op": "set_offset", "source": self.SRC, "offset_s": 0.5}])
+        self.assertEqual(status, 200)
+        self.assertTrue(any("cannot read" in f["message"] for f in body["findings"]))
+
+
+class PendingWorkTests(TimelineFileCase):
+    """After a change the page says what the next preview has to do: which sound is new,
+    which pictures are missing."""
+
+    SRC = "A002_01011540_C002"
+
+    def keys(self):
+        tl = timeline.Timeline.load(str(self.path))
+        return render.sound_keys(tl, render.make_plan(tl, preview_width=W))
+
+    def fake_preview(self):
+        (self.work / "previews" / "preview.mp4").write_bytes(b"x")
+        (self.work / "previews" / "preview.json").write_text(json.dumps({
+            "file": "preview.mp4", "frames": 1, "timeline_hash": self.file_hash(),
+            "sound_keys": self.keys()}))
+
+    def test_without_a_preview_all_the_sound_is_pending(self):
+        _, body = self.get_json("/api/timeline")
+        self.assertEqual(body["preview"]["pending"]["sound"], ["s001", "s002", "s003"])
+
+    def test_with_a_current_preview_no_sound_is_pending(self):
+        self.fake_preview()
+        _, body = self.get_json("/api/timeline")
+        self.assertTrue(body["preview"]["up_to_date"])
+        self.assertEqual(body["preview"]["pending"]["sound"], [])
+
+    def test_a_changed_offset_makes_the_sound_of_that_clip_pending_and_nothing_else(self):
+        self.fake_preview()
+        _, body = self.post_json("/api/timeline/edit", {
+            "hash": self.file_hash(),
+            "operations": [{"op": "set_offset", "source": self.SRC, "offset_s": 0.5}]})
+        self.assertFalse(body["preview"]["up_to_date"])
+        self.assertEqual(body["preview"]["pending"]["sound"], ["s001", "s002"])
+
+    def test_a_trim_makes_the_sound_of_that_segment_pending(self):
+        self.fake_preview()
+        _, body = self.post_json("/api/timeline/edit", {
+            "hash": self.file_hash(),
+            "operations": [{"op": "trim_out", "segment": "s003", "frames": -10}]})
+        self.assertEqual(body["preview"]["pending"]["sound"], ["s003"])
 
 
 class PreviewFileTests(TimelineFileCase):
@@ -582,6 +748,26 @@ class PageLogicTests(TimelineFileCase):
         # an invalid change is refused with the field path, and the table keeps the saved values
         self.assertIn("segments[1].out", out["errorInvalid"])
         self.assertEqual(out["rowsAfterInvalid"][1], ["s001", 900])
+        # the sync offset per clip: the table lists both clips with the measured offset,
+        # a typed offset is saved and shown, a mistake or a value out of range is refused
+        src = "A002_01011540_C002"
+        self.assertEqual(out["clipsBefore"], [[src, None, 0.276], ["A002_01060615_C083", None, 0.248]])
+        self.assertEqual(out["afterOffset"][0], [src, -0.5, -0.5])
+        self.assertEqual(out["afterOffset"][1], ["A002_01060615_C083", None, 0.248])
+        self.assertIn(f'id="filmClip_{src}"', out["clipsTable"])
+        self.assertIn("+0.276 s", out["clipsTable"])                    # the measured offset stays visible
+        self.assertIn("-0.500 s (yours)", out["clipsTable"])
+        self.assertEqual(out["errorAfterOffset"], "")
+        self.assertEqual(out["afterComma"][0], [src, 0.25, 0.25])       # "0,25" is 0.25
+        self.assertIn("number of seconds", out["errorNotANumber"])
+        self.assertEqual(out["afterNotANumber"][0], [src, 0.25, 0.25])  # nothing was sent
+        self.assertIn(f"sources.{src}.audio_offset_hand_s", out["errorOutOfRange"])
+        self.assertEqual(out["afterOutOfRange"][0], [src, 0.25, 0.25])
+        self.assertIn("all pictures kept; sound of 2 scenes to render again", out["pendingNote"])
+        self.assertIn("1 scene picture(s) to render; sound unchanged", out["pendingNone"])
+        self.assertEqual(out["afterReset"][0], [src, None, 0.276])      # empty field: back to measured
+        self.assertNotIn("(yours)", out["clipsTableAfterReset"])
+        self.assertNotIn("audio_offset_hand_s", self.path.read_text())
         # a stale hash: the server says so and the page reloads the file as it is
         self.assertTrue(out["errorStale"])
         self.assertEqual(out["hashAfterStale"], timeline.file_hash(str(self.path)))

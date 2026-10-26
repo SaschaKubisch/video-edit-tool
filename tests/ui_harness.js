@@ -66,6 +66,27 @@ const out = {};
   out.errorInvalid = element("filmError").textContent;
   out.rowsAfterInvalid = JSON.parse(run("JSON.stringify(film.summary.rows.map(r => [r.id, r.out]))"));
 
+  // the sync offset per clip: a typed value, a decimal comma, a mistake, a value out of range, empty
+  const hands = () => JSON.parse(run("JSON.stringify(film.summary.clips.map(c => [c.source, c.offset_hand_s, c.offset_s]))"));
+  out.clipsBefore = hands();
+  await run("filmOffset({value: '-0.5'}, 'A002_01011540_C002')");
+  out.afterOffset = hands();
+  out.clipsTable = element("filmClipsTable").innerHTML;
+  out.errorAfterOffset = element("filmError").textContent;
+  await run("filmOffset({value: '0,25'}, 'A002_01011540_C002')");
+  out.afterComma = hands();
+  await run("filmOffset({value: 'abc'}, 'A002_01011540_C002')");
+  out.errorNotANumber = element("filmError").textContent;
+  out.afterNotANumber = hands();
+  await run("filmOffset({value: '99'}, 'A002_01011540_C002')");
+  out.errorOutOfRange = element("filmError").textContent;
+  out.afterOutOfRange = hands();
+  out.pendingNote = run("pendingText({pending: {picture: [], sound: ['s001', 's002']}})");
+  out.pendingNone = run("pendingText({pending: {picture: ['s003'], sound: []}})");
+  await run("filmOffset({value: '  '}, 'A002_01011540_C002')");
+  out.afterReset = hands();
+  out.clipsTableAfterReset = element("filmClipsTable").innerHTML;
+
   run("film.hash = '" + "0".repeat(64) + "'");
   await run("filmOp(null, [{op: 'set_label', segment: 's001', label: 'x'}])");
   out.errorStale = element("filmError").textContent;

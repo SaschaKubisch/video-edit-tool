@@ -15,6 +15,7 @@ free key: the tool keeps it and ignores it.
 import difflib
 import hashlib
 import json
+import math
 import os
 import re
 import subprocess
@@ -23,6 +24,7 @@ from dataclasses import dataclass
 from fractions import Fraction
 from pathlib import Path
 
+import config
 import safety
 import tools
 
@@ -40,7 +42,8 @@ FPS_KEYS = ["num", "den"]
 FRAME_KEYS = ["width", "height"]
 AUDIO_JOIN_KEYS = ["duration_s", "curve"]
 SOURCE_KEYS = ["original_video", "preview_copy", "audio", "audio_offset_s",
-               "audio_drift_ppm", "frames", "fps", "size", "copy_lut_sha256"]
+               "audio_offset_hand_s", "audio_drift_ppm", "frames", "fps", "size",
+               "copy_lut_sha256"]
 SEGMENT_KEYS = ["id", "source", "in", "out", "enabled", "label", "origin", "note",
                 "crop", "audio_join", "gain_db_adjust", "priority"]
 CROP_KEYS = ["x", "x_from", "x_to"]
@@ -114,6 +117,30 @@ def file_hash(path: str) -> str:
     return h.hexdigest()
 
 
+def effective_offset(source: dict) -> float:
+    """The offset the sound uses for a source: the one the owner typed
+    (`audio_offset_hand_s`) when there is one, else the one from matching."""
+    hand = source.get("audio_offset_hand_s")
+    return source["audio_offset_s"] if hand is None else hand
+
+
+_WAV_SECONDS = {}
+
+
+def wav_length_seconds(path: str) -> float:
+    """The length of an audio file in seconds, from ffprobe. Remembered per file and
+    modification time, so a page that asks again does not start ffprobe again."""
+    key = (path, os.stat(path).st_mtime_ns)
+    if key not in _WAV_SECONDS:
+        r = subprocess.run([tools.ffprobe_path(), "-v", "error", "-show_entries",
+                            "format=duration", "-of", "csv=p=0", str(path)],
+                           capture_output=True, text=True)
+        if r.returncode != 0 or not r.stdout.strip():
+            raise RuntimeError(r.stderr.strip() or "ffprobe found no duration")
+        _WAV_SECONDS[key] = float(r.stdout.strip().splitlines()[0])
+    return _WAV_SECONDS[key]
+
+
 def count_video_frames(path: str) -> int:
     """Frames of the first video stream, counted as packets (one per frame in an MP4)."""
     cmd = [tools.ffprobe_path(), "-v", "error", "-count_packets", "-select_streams", "v:0",
@@ -179,12 +206,15 @@ def dumps(data) -> str:
 # ── The validator ───────────────────────────────────────────────
 
 class _Validator:
-    def __init__(self, data, file_checks, frame_counter, hasher, duplicates):
+    def __init__(self, data, file_checks, frame_counter, hasher, duplicates, wav_seconds=None):
         self.d = data
         self.file_checks = file_checks
         self.frame_counter = frame_counter or count_video_frames
         self.hasher = hasher or file_hash
         self.duplicates = duplicates or []
+        # V23 reads the length of the WAV of a clip with a hand offset: with the file
+        # checks on by ffprobe, else only when the caller passes a function.
+        self.wav_seconds = wav_seconds or (wav_length_seconds if file_checks else None)
         self.findings = []
 
     # ── reporting ──
@@ -266,6 +296,7 @@ class _Validator:
         film = self.film()
         sources = self.sources(film)
         segments = self.segments(sources, film)
+        self.hand_offset_coverage(sources, segments, film)
         self.look(sources)
         self.audio()
         self.titles_and_subtitles(segments, film, sources)
@@ -405,12 +436,15 @@ class _Validator:
                 self.err("V0", path, "a source must be an object")
                 continue
             self.check_keys(s, SOURCE_KEYS, path)
-            info = {"frames": None, "offset": 0.0, "drift": 0.0, "fps": None}
+            info = {"frames": None, "offset": 0.0, "drift": 0.0, "fps": None, "hand": None}
             for key in ("original_video", "preview_copy", "audio"):
                 self.typed(s, key, path, "str")
             off = self.typed(s, "audio_offset_s", path, "num")
             if off is not None:
                 info["offset"] = float(off)
+            hand = self.typed(s, "audio_offset_hand_s", path, "num", required=False)
+            if hand is not None:
+                self.hand_offset(hand, f"{path}.audio_offset_hand_s", info)
             drift = self.typed(s, "audio_drift_ppm", path, "num", required=False)
             if drift is not None:
                 info["drift"] = float(drift)
@@ -432,6 +466,62 @@ class _Validator:
             result[sid] = info
             self.source_files(sid, s, info)
         return result
+
+    # V23
+    def hand_offset(self, value, path, info):
+        limit = config.OFFSET_HAND_MAX_SEC
+        if not math.isfinite(value):
+            self.err("V23", path, f"the offset {value} is not a finite number")
+        elif abs(value) > limit:
+            self.err("V23", path, f"the offset {value:g} s is outside -{limit:g} to {limit:g} s",
+                     "the offset is in seconds; the recorder and the camera start a few seconds "
+                     "apart at most")
+        else:
+            info["hand"] = float(value)
+            info["offset"] = float(value)
+
+    def hand_offset_coverage(self, sources, segments, film):
+        """V23, warning: with the offset the owner typed, the WAV may hold no sound, or
+        only part of the sound, for a segment of that clip. Only clips with a hand
+        offset are checked; the render reports the others."""
+        if self.wav_seconds is None or not film["fps"]:
+            return
+        num, den = film["fps"]
+        one_frame = den / num
+        for sid, info in sources.items():
+            if info["hand"] is None:
+                continue
+            raw = self.d["sources"][sid]
+            path = f"sources.{sid}.audio_offset_hand_s"
+            wav = raw.get("audio")
+            if not isinstance(wav, str):
+                continue
+            if self.file_checks and not os.path.isfile(wav):
+                continue                    # V7 reports the missing file
+            try:
+                length = float(self.wav_seconds(wav))
+            except Exception as e:          # ffprobe may fail in many ways
+                self.warn("V23", path, f"cannot read the length of {wav}, so the offset "
+                          f"could not be checked against it: {e}")
+                continue
+            for seg in segments:
+                if seg["source"] != sid or not seg["enabled"]:
+                    continue
+                if seg["in"] is None or seg["out"] is None:
+                    continue
+                t0 = seg["in"] * den / num + info["hand"]
+                t1 = seg["out"] * den / num + info["hand"]
+                covered = max(0.0, min(t1, length) - max(t0, 0.0))
+                if covered <= 1e-9:
+                    self.warn("V23", path,
+                              f"with the offset {info['hand']:+g} s the WAV ({length:.1f} s) holds "
+                              f"no sound for segment {seg['id']} (it needs {t0:.1f} s to {t1:.1f} s); "
+                              "the segment is silent")
+                elif (t1 - t0) - covered >= one_frame:
+                    self.warn("V23", path,
+                              f"with the offset {info['hand']:+g} s the WAV ({length:.1f} s) holds "
+                              f"sound for only {covered:.1f} of the {t1 - t0:.1f} s of segment "
+                              f"{seg['id']}; the rest is silent")
 
     # V7
     def source_files(self, sid, s, info):
@@ -939,13 +1029,16 @@ class _Validator:
                       f"a short may be {SHORT_MAX_SECONDS} s at most")
 
 
-def validate(data, file_checks=True, frame_counter=None, hasher=None, duplicates=None):
+def validate(data, file_checks=True, frame_counter=None, hasher=None, duplicates=None,
+             wav_seconds=None):
     """All findings for `data`, a parsed timeline file.
 
     file_checks=False skips every check that reads the disk (V7, V16 hashes, V20).
     frame_counter(path) -> int and hasher(path) -> sha256 can be replaced in tests.
+    wav_seconds(path) -> seconds is the length of a WAV for rule V23; with the file
+    checks on it defaults to ffprobe, with them off it is not checked unless given.
     """
-    return _Validator(data, file_checks, frame_counter, hasher, duplicates).run()
+    return _Validator(data, file_checks, frame_counter, hasher, duplicates, wav_seconds).run()
 
 
 # ── The timeline object ─────────────────────────────────────────
@@ -1073,10 +1166,11 @@ class Timeline:
 
     def source_audio_start(self, seg) -> int:
         """Sample position in the source WAV at which the segment's sound starts:
-        round((in * den / num + audio_offset_s) * rate), with the drift correction
-        of SPECS 7.3: the start moves by in/fps * ppm * 1e-6 seconds."""
+        round((in * den / num + offset) * rate), where offset is the one the owner typed
+        (`audio_offset_hand_s`) or else the one from matching (`audio_offset_s`), with
+        the drift correction of SPECS 7.3: the start moves by in/fps * ppm * 1e-6 seconds."""
         src = self.data["sources"][seg["source"]]
-        t = Fraction(seg["in"]) / self.fps + Fraction(src["audio_offset_s"])
+        t = Fraction(seg["in"]) / self.fps + Fraction(effective_offset(src))
         ppm = src.get("audio_drift_ppm", 0)
         if ppm:
             t += Fraction(seg["in"]) / self.fps * Fraction(ppm) * Fraction(1, 10 ** 6)

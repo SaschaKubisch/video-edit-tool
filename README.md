@@ -32,7 +32,9 @@ After `match` and `convert` (preview copies on the SSD), these commands build an
 .venv/bin/python main.py app --work /Volumes/SSD/work                        # the page: tab 4, Film
 ```
 
-The film is the clips in recording order with the clap and the camera movement cut out, a hard cut between scenes, the sound crossfaded over 0.5 s, and a fade in (1 s) and out (2 s). A clip with no steady scene of 2 s is left out and listed in `reports/assembly-report.txt`. The originals are never written. `PRD.md` and `SPECS.md` describe the plan and say which parts are built.
+The film is the clips in recording order with the clap and the camera movement cut out, a hard cut between scenes, the sound crossfaded over 0.5 s, and a fade in (1 s) and out (2 s). A clip with no steady scene of 2 s is left out and listed in `reports/assembly-report.txt`. The originals are never written.
+
+**Sync offset per clip.** The tool measures one offset per clip when it matches the files (the seconds by which a sound comes later in the recorder's file than in the camera's). If one is wrong, the Film tab has a card, Sync offset per clip: type the right offset in seconds (a minus sign is allowed). The tool stores it in the timeline file as `audio_offset_hand_s`, beside the measured `audio_offset_s`, which is never changed. The sound of that clip's scenes uses the typed offset; the pictures do not change, so the next preview renders only sound again. Empty the field, or press Original, to use the measured offset again. A value beyond 30 seconds is refused, and a typed offset that leaves the recorder file without sound for a scene is a warning. `timeline summary` lists the offsets set by hand, and `assemble --replace` keeps them. `project.json` is not written. `PRD.md` and `SPECS.md` describe the plan and say which parts are built.
 
 ## UI workflow
 

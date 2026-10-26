@@ -105,6 +105,11 @@ STABLE_MIN_RUN_SEC = 2.0      # D7: a scene shorter than this is dropped
 STABLE_MERGE_GAP_SEC = 0.5    # a shake shorter than this that ends where it began does not split a scene
 STABLE_GUARD_SEC = 0.3        # each scene loses this much at both ends, so the camera has settled
 
+# ── Sync offset typed by hand (SPECS 3.2 `audio_offset_hand_s`, rule V23) ──
+# A starting value. The offsets of the first shoot lie between -5.03 and +1.94 s; a typed
+# offset beyond this is taken for a mistake (for example milliseconds typed as seconds).
+OFFSET_HAND_MAX_SEC = 30.0
+
 # ── Assembly (`assemble`, SPECS 7.5; decisions D5 to D8) ──
 TIMELINE_FILE = "timeline.json"      # next to the project file
 FILM_FRAME = (4096, 2160)            # D5: DCI 4K, wide clips get black bars

@@ -275,5 +275,66 @@ class AssembleCommandTests(ProjectFiles):
         self.assertIn("--work", text)
 
 
+class HandOffsetsAreKept(ProjectFiles):
+    """An offset the owner typed (`audio_offset_hand_s`, SPECS 3.2) is the owner's work. When
+    assemble builds the file again with --replace, it carries the offset over."""
+
+    def assemble(self, **kw):
+        return assemble.assemble_project(self.project, str(self.work), str(self.out),
+                                         log=lambda s: None, **kw)
+
+    def set_hand(self, source, value):
+        tl = timeline.Timeline.load(str(self.out))
+        tl.data["sources"][source]["audio_offset_hand_s"] = value
+        store.save(tl, str(self.out))
+
+    def test_assembling_again_keeps_the_offsets_typed_by_hand(self):
+        self.assemble()
+        self.set_hand("A_C2", -0.75)
+        result = self.assemble(replace=True)
+        sources = result.data["sources"]
+        self.assertEqual(sources["A_C2"]["audio_offset_hand_s"], -0.75)
+        self.assertNotIn("audio_offset_hand_s", sources["A_C1"])
+        self.assertNotIn("audio_offset_hand_s", sources["A_C10"])
+        on_disk = timeline.Timeline.load(str(self.out)).data["sources"]["A_C2"]
+        self.assertEqual(on_disk["audio_offset_hand_s"], -0.75)
+        self.assertEqual(on_disk["audio_offset_s"], 0.2)         # from matching, as before
+
+    def test_the_report_names_the_offsets_that_were_kept(self):
+        self.assemble()
+        self.set_hand("A_C2", -0.75)
+        result = self.assemble(replace=True)
+        self.assertEqual(result.report["hand_offsets_kept"], {"A_C2": -0.75})
+        text = (self.work / "reports" / "assembly-report.txt").read_text()
+        self.assertIn("A_C2", text)
+        self.assertIn("-0.750", text)
+
+    def test_a_clip_that_leaves_the_film_loses_its_offset_and_the_report_says_so(self):
+        self.assemble()
+        self.set_hand("A_C2", -0.75)
+        result = self.assemble(replace=True, only=["A_C1"])
+        self.assertNotIn("A_C2", result.data["sources"])
+        self.assertEqual(result.report["hand_offsets_dropped"], {"A_C2": -0.75})
+        # the earlier file stays in the history, with the offset in it
+        newest = json.loads(Path(store.list_snapshots(str(self.out))[-1]).read_text())
+        self.assertEqual(newest["sources"]["A_C2"]["audio_offset_hand_s"], -0.75)
+
+    def test_without_an_old_file_or_without_hand_offsets_nothing_is_reported(self):
+        first = self.assemble()
+        self.assertEqual(first.report["hand_offsets_kept"], {})
+        again = self.assemble(replace=True)
+        self.assertEqual(again.report["hand_offsets_kept"], {})
+        self.assertEqual(again.report["hand_offsets_dropped"], {})
+        self.assertNotIn("set by hand", (self.work / "reports" / "assembly-report.txt").read_text())
+
+    def test_an_old_file_that_cannot_be_read_does_not_stop_the_assembly(self):
+        self.out.write_text("this is not json")
+        result = self.assemble(replace=True)
+        self.assertEqual(result.report["hand_offsets_kept"], {})
+        self.assertTrue(any("could not be read" in w for w in result.report["film"]["warnings"]),
+                        result.report["film"]["warnings"])
+        self.assertEqual(len(timeline.Timeline.load(str(self.out)).data["segments"]), 6)
+
+
 if __name__ == "__main__":
     unittest.main()

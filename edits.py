@@ -10,11 +10,15 @@ data; the caller validates and saves the result (store.save).
     {"op": "set_enabled", "segment": "s001", "enabled": false}
     {"op": "move",        "segment": "s001", "to_index": 0}
     {"op": "set_label",   "segment": "s001", "label": "text"}
+    {"op": "set_offset",  "source": "A002_..._C047", "offset_s": 0.02}   the owner's offset, seconds
+    {"op": "reset_offset", "source": "A002_..._C047"}                    back to the one from matching
 
 `summary` describes the film for the page and for `timeline summary`.
 """
 
 import copy
+
+import timeline
 
 
 class OperationError(Exception):
@@ -64,12 +68,35 @@ def _set_label(data, op):
     _segment(data, op)["label"] = op["label"]
 
 
+def _clip(data: dict, op: dict) -> dict:
+    sid = op.get("source")
+    if not isinstance(sid, str):
+        raise OperationError(f"operation {op.get('op')!r} needs the field 'source' (a clip id)")
+    sources = data.get("sources")
+    if not isinstance(sources, dict) or not isinstance(sources.get(sid), dict):
+        raise OperationError(f"there is no clip {sid!r}")
+    return sources[sid]
+
+
+def _set_offset(data, op):
+    value = op.get("offset_s")
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        raise OperationError("operation 'set_offset' needs 'offset_s', a number of seconds")
+    _clip(data, op)["audio_offset_hand_s"] = value
+
+
+def _reset_offset(data, op):
+    _clip(data, op).pop("audio_offset_hand_s", None)
+
+
 OPERATIONS = {
     "trim_in": lambda d, o: _trim(d, o, "in"),
     "trim_out": lambda d, o: _trim(d, o, "out"),
     "set_enabled": _set_enabled,
     "move": _move,
     "set_label": _set_label,
+    "set_offset": _set_offset,
+    "reset_offset": _reset_offset,
 }
 
 
@@ -129,7 +156,23 @@ def summary(tl, file_hash: str = None, review: dict = None) -> dict:
     return {"hash": file_hash, "kind": tl.data["kind"], "fps": tl.data["film"]["fps"],
             "frame": tl.data["film"]["frame"], "segments": len(rows),
             "enabled": sum(1 for r in rows if r["enabled"]),
-            "film_frames": total, "film_seconds": float(total / fps), "rows": rows}
+            "film_frames": total, "film_seconds": float(total / fps), "rows": rows,
+            "clips": clip_rows(tl)}
+
+
+def clip_rows(tl) -> list:
+    """One row per clip (source) of the file: its segments, the offset from matching, the
+    offset the owner typed (None when there is none) and the offset the sound uses."""
+    out = []
+    for sid, src in tl.data["sources"].items():
+        hand = src.get("audio_offset_hand_s")
+        out.append({
+            "source": sid,
+            "segments": [s["id"] for s in tl.data["segments"] if s["source"] == sid],
+            "offset_original_s": src["audio_offset_s"],
+            "offset_hand_s": hand,
+            "offset_s": timeline.effective_offset(src)})
+    return out
 
 
 def format_summary(s: dict, name: str = "timeline.json") -> str:
@@ -147,4 +190,9 @@ def format_summary(s: dict, name: str = "timeline.json") -> str:
             film = "(removed)"
         lines.append(f"{r['id']:5} {film:23} {r['length_s']:>5.1f} s  {r['source']:20} "
                      f"{str(r['in']) + '-' + str(r['out']):13} {r['label']}")
+    typed = [c for c in s.get("clips", []) if c["offset_hand_s"] is not None]
+    if typed:
+        lines.append("offsets set by hand: " + "; ".join(
+            f"{c['source']} {c['offset_hand_s']:.3f} s (from matching "
+            f"{c['offset_original_s']:.3f} s)" for c in typed))
     return "\n".join(lines) + "\n"
