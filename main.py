@@ -12,6 +12,7 @@ Commands:
            `sync --undo` removes those copies again
   resolve  Push the ordered timeline (V1 video, A2 audio) into DaVinci Resolve
   rename   (legacy) rename both files of each pair to scene_NN.*, with undo
+  convert  make a small preview copy of every matched .braw clip in the work folder
 
 Usage:
   python main.py
@@ -22,6 +23,7 @@ Usage:
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -240,7 +242,88 @@ def cmd_resolve(args):
         sys.exit(1)
 
 
-def main():
+def cmd_convert(args, decoder=None):
+    """Make the preview copies of the matched .braw clips (SPECS 6)."""
+    import convert
+    import safety
+    from decoder import BrawSourceDecoder, container_tracks
+
+    def fail(message):
+        print(f"Error: {message}")
+        sys.exit(2)
+
+    decoder = decoder or BrawSourceDecoder()
+    try:
+        decoder.check()
+    except RuntimeError as e:
+        fail(str(e))
+
+    if args.probe:
+        info = decoder.probe(args.probe)
+        data = dict(info.__dict__)
+        try:
+            data["tracks"] = container_tracks(args.probe)
+        except (RuntimeError, FileNotFoundError) as e:
+            data["tracks"] = []
+            data["tracks_error"] = str(e)
+        print(json.dumps(data, indent=2))
+        return
+
+    try:
+        lut = convert.find_base_lut(args.lut)
+    except FileNotFoundError as e:
+        fail(str(e))
+    settings = convert.PreviewSettings(encoder=args.encoder or config.PREVIEW_ENCODER)
+
+    # One clip, the first seconds of it, into <work>/test (its own conversion file).
+    if args.test:
+        if not args.work:
+            fail("--test needs --work DIR.")
+        info = decoder.probe(args.test)
+        frames = None if args.seconds is None else \
+            max(1, round(args.seconds * info.fps_num / info.fps_den))
+        folder = str(Path(args.test).resolve().parent)
+        conv = convert.Converter(os.path.join(args.work, "test"), decoder, settings, lut, [folder])
+        try:
+            summary = conv.run([convert.ClipRef(Path(args.test).stem, args.test)],
+                               max_frames=frames)
+        except (safety.OriginalsProtectedError, convert.WorkDirUnavailable,
+                convert.NotEnoughSpace, convert.AlreadyRunning) as e:
+            fail(str(e))
+        sys.exit(summary.exit_code)
+
+    project_file = args.project or config.PROJECT_FILE
+    if not Path(project_file).exists():
+        fail(f"Project file not found: {project_file}\nRun 'python main.py match' first.")
+    project = Project.load(project_file)
+    work_dir = args.work or project.work_dir
+    if not work_dir:
+        fail("No work directory. Pass --work DIR (a folder on the SSD) or set "
+             "work_dir in the project file.")
+
+    clips = [convert.ClipRef(Path(m.video_path).stem, m.video_path) for m in project.matches]
+    if args.only:
+        wanted = {s.strip() for s in args.only.split(",") if s.strip()}
+        clips = [c for c in clips if c.stem in wanted]
+        missing = wanted - {c.stem for c in clips}
+        if missing:
+            fail(f"No matched clip named: {', '.join(sorted(missing))}")
+    if args.limit:
+        clips = clips[:args.limit]
+    if not clips:
+        fail("The project has no matched clips.")
+
+    conv = convert.Converter(work_dir, decoder, settings, lut,
+                             safety.originals_folders(project))
+    try:
+        summary = conv.run(clips, dry_run=args.dry_run)
+    except (safety.OriginalsProtectedError, convert.WorkDirUnavailable,
+            convert.NotEnoughSpace, convert.AlreadyRunning) as e:
+        fail(str(e))
+    sys.exit(summary.exit_code)
+
+
+def build_parser():
     parser = argparse.ArgumentParser(
         description="Dual-System Audio Video Automation (BMPCC 4K + Zoom H2N)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -306,6 +389,36 @@ def main():
         help="List existing projects in Resolve and exit")
     p_resolve.set_defaults(func=cmd_resolve)
 
+    # ── convert ──
+    p_convert = subparsers.add_parser("convert",
+        help="Make a small preview copy of every matched .braw clip (work folder on the SSD)")
+    p_convert.add_argument("--work", "-w",
+        help="Work folder on the SSD (default: work_dir of the project file). "
+             "Never a folder that holds the originals.")
+    p_convert.add_argument("--lut",
+        help="Base LUT (.cube). Default: Blackmagic Gen 5 Film to Video, "
+             "found in Resolve's LUT folder, or the file named by VET_BASE_LUT")
+    p_convert.add_argument("--encoder", choices=["h264_videotoolbox", "libx264"],
+        help=f"Encoder of the copies (default: {config.PREVIEW_ENCODER})")
+    p_convert.add_argument("--limit", type=int,
+        help="Convert only the first N matched clips")
+    p_convert.add_argument("--only",
+        help="Convert only the clips with these names (comma separated, no extension)")
+    p_convert.add_argument("--dry-run", action="store_true",
+        help="Show what would be converted and the estimated size, write nothing")
+    p_convert.add_argument("--probe", metavar="BRAW",
+        help="Print the facts of one clip as JSON and exit")
+    p_convert.add_argument("--test", metavar="BRAW",
+        help="Convert the first --seconds of one clip into <work>/test")
+    p_convert.add_argument("--seconds", type=float,
+        help="Length of the --test piece in seconds (default: the whole clip)")
+    p_convert.set_defaults(func=cmd_convert)
+
+    return parser
+
+
+def main():
+    parser = build_parser()
     args = parser.parse_args()
 
     # Default to "app" if no command given

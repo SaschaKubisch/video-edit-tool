@@ -52,3 +52,20 @@ PROJECT_FILE = "project.json"
 
 # ── Web app ─────────────────────────────────────────────────────
 SELECTOR_PORT = 8765  # HTTP port (127.0.0.1 only)
+
+# ── Preview copies (the `convert` command, SPECS section 6) ─────
+# Values are the ones measured in step 1 (SPECS 6.1 C).
+PREVIEW_SCALE = 2              # decode at 1/2 size: 4096 x 2160 -> 2048 x 1080
+PREVIEW_ENCODER = "h264_videotoolbox"   # or "libx264" (software; slow)
+PREVIEW_Q = 73                 # h264_videotoolbox quality, -q:v (libx264: see convert.py)
+PREVIEW_GOP = 30               # a key frame every 30 frames (about 1 s)
+PREVIEW_AUDIO_KBPS = 192       # camera audio as AAC
+CONVERSION_FILE = "conversion.json"   # in the work directory
+# Resolve's LUT folder. The tool reads LUTs from here and never copies them.
+RESOLVE_LUT_DIR = "/Library/Application Support/Blackmagic Design/DaVinci Resolve/LUT"
+BASE_LUT_FILE = "Blackmagic Gen 5 Film to Video.cube"   # decision D2
+EXPECTED_COLOUR_SCIENCE_GEN = "5"   # the default LUT is made for generation 5
+# Space estimate (C6): size per minute of a copy of a 4096 x 2160 clip, from
+# step 1 (70.7 MB). Used until a clip of that kind was converted and measured.
+PREVIEW_PRIOR_MB_PER_MIN_DCI4K = 71.0
+PREVIEW_SPACE_MARGIN = 1.25    # the size depends on the picture

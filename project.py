@@ -70,6 +70,7 @@ class Project:
     matches: list = field(default_factory=list)   # list of SceneMatch dicts
     selection: list = field(default_factory=list)  # ordered list of scene indices
     selection_trims: dict = field(default_factory=dict)  # {index: {start, end}}
+    work_dir: str = ""     # where the tool writes everything it makes (on the SSD)
 
     def save(self, path: str = None):
         path = path or config.PROJECT_FILE
@@ -77,6 +78,7 @@ class Project:
             "video_dir": self.video_dir,
             "audio_dir": self.audio_dir,
             "output_dir": self.output_dir,
+            "work_dir": self.work_dir,
             "matches": [asdict(m) if isinstance(m, SceneMatch) else m for m in self.matches],
             "selection": self.selection,
             "selection_trims": self.selection_trims,
@@ -105,6 +107,7 @@ class Project:
             video_dir=data.get("video_dir", ""),
             audio_dir=data.get("audio_dir", ""),
             output_dir=data.get("output_dir", ""),
+            work_dir=data.get("work_dir", ""),
             selection=data.get("selection", []),
             selection_trims=data.get("selection_trims", {}),
         )

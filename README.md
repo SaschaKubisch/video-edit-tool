@@ -39,10 +39,14 @@ python3 main.py sync [--selection JSON | --selection-file FILE] [--output DIR]
 python3 main.py sync --undo [--output DIR]
 python3 main.py resolve [--project-name NAME] [--timeline NAME] [--fps N] [--list]
 python3 main.py rename [--pattern P] [--dry-run] [--undo rename_log.json]   # legacy
+python3 main.py convert --work DIR [--lut FILE] [--encoder E] [--limit N] [--only A,B] [--dry-run]
+python3 main.py convert --probe CLIP.braw
+python3 main.py convert --test CLIP.braw --work DIR [--seconds S]
 ```
 
 - `match` writes `project.json` and the thumbnails.
 - `sync` uses the selection saved in `project.json` unless one is passed, e.g. `--selection '{"selection":[3,1,5],"selection_trims":{"3":{"start":2,"end":1}}}'`. The selection holds scene indices in timeline order.
+- `convert` makes one small preview copy (H.264 MP4, half size, the base LUT baked in, the camera audio) of every matched `.braw` clip in `DIR/copies/` and records what it did in `DIR/conversion.json`. `DIR` is a folder on the SSD (or `work_dir` in `project.json`); it must not lie inside a folder that holds the originals, which are only read. Clips whose copy is current are skipped, so an interrupted run resumes. The base LUT is read from Resolve's LUT folder (`VET_BASE_LUT` or `--lut` name another file) and is never copied into the repository. Run it with `.venv/bin/python`; it needs VapourSynth with `vapoursynth-brawsource` (see `requirements.txt`).
 - `rename` is a legacy helper that renames both files of each pair to `scene_NN.*`. It refuses to run if a target name already exists, and `--undo` reverses it from `rename_log.json`. The normal flow does not need it.
 
 ## Offset sign

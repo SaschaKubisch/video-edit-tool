@@ -127,9 +127,10 @@ Originals stay where they are. The tool opens them read-only and never writes in
 |--------|-----|--------|------|
 | `matcher.py` | Pair clips with audio, find offsets | Kept | - |
 | `project.py` | `Project`, `SceneMatch`, `project.json` | Kept, one new field (`work_dir`) | 2 |
-| `tools.py` | Find `ffmpeg-full`, `ffprobe`, VapourSynth; check filters | New | 2 |
-| `decoder.py` | The decoder interface (section 6.2): probe a `.braw` clip, give frames and camera audio. Used by `convert.py` and `render.py`. | New | 2 |
-| `convert.py` | Probe, make preview copies, verify, `conversion.json` | New | 2 |
+| `tools.py` | Find `ffmpeg-full`, `ffprobe`, VapourSynth; check filters. Built so far: the paths of `ffmpeg` and `ffprobe` (`VET_FFMPEG`, else `PATH`). | New, partly built | 2 |
+| `safety.py` | `assert_not_inside`, `originals_folders`: the protection of the originals (M9). Not in the plan before the build (changed in the build). | New, built | 2 |
+| `decoder.py` | The decoder interface (section 6.2): probe a `.braw` clip, give frames and camera audio. Used by `convert.py` and `render.py`. Built: the interface and decoder 1 (`BrawSourceDecoder`). | New, built | 2 |
+| `convert.py` | Probe, make preview copies, verify, `conversion.json` | New, built | 2 |
 | `clap.py` | Find the clap, measure drift | New | 2 |
 | `stable.py` | Find steady runs | New | 2 |
 | `timeline.py` | Load, save, validate, snapshot, hash, derived values | New | 2 |
@@ -812,20 +813,22 @@ The preview copy carries the camera's scratch audio so that it plays with sound.
 
 ### 6.4 `conversion.json`
 
-One file in the work directory. The values below are an illustration (the sizes and the timecode are those of clip C083).
+One file in the work directory. The values below are an illustration (the sizes and the timecode are those of clip C083; the hashes, times and the path of the work directory are made up).
 
 ```json
 {
   "version": 1,
   "decoder": "vapoursynth-brawsource 0.5.0",
   "encoder": "h264_videotoolbox",
-  "quality": 73,
+  "settings": {"scale": 2, "quality": 73, "gop": 30, "audio_kbps": 192, "encoder": "h264_videotoolbox"},
   "base_lut": {"path": "/Library/Application Support/Blackmagic Design/DaVinci Resolve/LUT/Blackmagic Design/Blackmagic Gen 5 Film to Video.cube",
                "sha256": "0000000000000000000000000000000000000000000000000000000000000000"},
   "clips": {
     "A002_01060615_C083": {
       "original": "/Volumes/CARD/Recordings/A002_01060615_C083.braw",
-      "preview_copy": "copies/A002_01060615_C083.mp4",
+      "original_bytes": 163000000,
+      "original_mtime_ns": 1759478132000000000,
+      "preview_copy": "/Volumes/SSD/film/copies/A002_01060615_C083.mp4",
       "status": "done",
       "frames": 805,
       "fps": {"num": 30000, "den": 1001},
@@ -833,17 +836,27 @@ One file in the work directory. The values below are an illustration (the sizes 
       "copy_size": {"width": 2048, "height": 1080},
       "timecode_start": "06:15:34:16",
       "colour_science_gen": "5",
+      "gamma": "Blackmagic Design Film",
+      "gamut": "Blackmagic Design",
+      "iso": 500,
+      "white_balance_k": 4000,
       "has_sidecar": false,
+      "audio": {"sample_rate": 48000, "channels": 2, "samples": 1289288},
+      "lut_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "settings": {"scale": 2, "quality": 73, "gop": 30, "audio_kbps": 192, "encoder": "h264_videotoolbox"},
+      "warnings": [],
       "convert_seconds": 15.0,
       "convert_fps": 53.6,
+      "realtime_factor": 1.79,
       "bytes": 31650145,
-      "check": {"codec": "h264", "pix_fmt": "yuv420p", "frames": 805, "audio": "aac", "timecode": "06:15:34:16"}
+      "check": {"codec": "h264", "pix_fmt": "yuv420p", "frames": 805, "audio": "aac", "timecode": "06:15:34:16"},
+      "converted_at": "2026-10-26T14:00:00Z"
     }
   }
 }
 ```
 
-`status` is `pending`, `partial`, `done` or `failed`. The command skips `done` clips whose file still exists with the recorded size (C2). A clip whose `base_lut.sha256` differs from the current base LUT is converted again (C3).
+`status` is `partial` (being converted, or interrupted), `done`, `failed` or `skipped` (not a `.braw` file). A clip that has no entry is `pending`. The command skips a `done` clip when all of these hold (C2): the copy exists with the recorded size, the original has the recorded size and modification time, the clip's `lut_sha256` equals the hash of the current base LUT (C3), and the clip's `settings` equal the current ones. Otherwise the clip is converted again. **Changed in the build:** the example in the plan used relative paths and lacked the fields `original_bytes`, `original_mtime_ns`, `lut_sha256`, `settings`, `audio`, `warnings`, `error`, `realtime_factor` and `converted_at`; section 2.6 says all paths in `conversion.json` are absolute, so the file stores absolute paths, and it carries those fields. The top level also carries `settings` (scale, quality, GOP, audio bit rate, encoder) of the last run.
 
 ### 6.5 Colour
 
@@ -861,7 +874,7 @@ D2 is settled. The decoder is given no colour overrides: it outputs the picture 
 
 - codec `h264`, profile High, pixel format `yuv420p`,
 - width and height equal to the source's decoded size divided by `PREVIEW_SCALE`,
-- the frame rate of the source, and as many frames as `probe` reported,
+- the frame rate of the source, and as many frames as `probe` reported. **Changed in the build:** the count is the number of packets in the video stream (`ffprobe -count_packets`), because an MP4 holds one packet per frame and reading packets is much faster than decoding the file; step 1 used `-count_frames`, which decodes. The first and the middle frame are decoded as the last item of this list,
 - one AAC audio stream at 48 kHz, as long as the video to within one frame,
 - a timecode equal to the source's,
 - the `moov` box before the `mdat` box.
@@ -871,6 +884,8 @@ Two frames, the first and the middle, must not be entirely one value (a black or
 ### 6.7 Space and the size estimate (C6)
 
 Before the first conversion the tool measures the size per minute on the first clip of each kind (`brlt` and `brhq` differ by a factor of two in size per minute: 71 and 37 MB [measured]), multiplies by the minutes of that kind in the matched clips, adds 25 percent because the size depends on the picture, and refuses to start if the SSD has less free space. For the first shoot the estimate is about 3.6 GB before the margin.
+
+**Built as:** before the first conversion the estimate uses the size per minute of step 1 for a 4096 x 2160 picture (`PREVIEW_PRIOR_MB_PER_MIN_DCI4K`, 71 MB), scaled by the number of pixels for other sizes, until a clip of that kind has been converted. After every converted clip the estimate for the remaining clips is made again from the measured sizes (the clips in `conversion.json` made with the current settings), and the run stops with `NotEnoughSpace` if the free space is below it. The estimate also counts the largest raw camera-audio scratch file (48 kHz, 2 channels, 4 bytes per sample).
 
 The ProRes 422 HQ master of section 5.6 has its own check before it starts: about 3.9 MB per frame times the film's frames, times 1.1 [arithmetic from Src10].
 
@@ -882,7 +897,7 @@ For the test clip and then for all clips: decoder speed, encoder speed, end-to-e
 
 - `Project` gets the field `work_dir`. Loading a file without it still works.
 - `thumbnails.py` reads the preview copy when one exists, so `.braw` clips get thumbnails (M8).
-- A function `assert_not_inside(path, folders)` refuses any write whose target lies inside a folder that holds an original (M9). Every writer calls it.
+- A function `assert_not_inside(path, folders)` refuses any write whose target lies inside a folder that holds an original (M9). Every writer calls it. **Changed in the build:** it lives in `safety.py`, with `originals_folders(project)`, which collects the folders of all matched videos and audio files. It resolves symbolic links and `..` before it compares. `convert` calls it for the work directory before it creates anything.
 - `tools.py` and `python3 main.py tools check` (section 2.4).
 - The tool moves to Python 3.12 in its own environment (D3). The 60 tests of v1.1 are run there first, and what breaks is fixed before anything else [unverified until run].
 
@@ -892,13 +907,13 @@ The `convert` command is planned and not built. These checks belong to it; they 
 
 | Check | Command | Passes when |
 |-------|---------|-------------|
-| 1.1 | `python3 -m unittest tests.test_convert -v` | The `ffmpeg` command line is built as in section 6.3 and the decoder process as in section 5.3. `conversion.json` round-trips. A `done` clip with an existing file is skipped. A `partial` clip is converted again. A `done` clip whose baked LUT hash differs is converted again. All use a fake decoder; no media. |
+| 1.1 | `python3 -m unittest tests.test_convert tests.test_convert_flow tests.test_convert_cli tests.test_decoder -v` | The `ffmpeg` command line is built as in section 6.3 and the decoder process as in section 5.3. `conversion.json` round-trips. A `done` clip with an existing file is skipped. A `partial` clip is converted again. A `done` clip whose baked LUT hash differs is converted again. The fake decoder (`tests/fakes.py`) makes tiny synthetic frames and a sine wave; `ffmpeg` is real and encodes with `libx264` so that the pipe, the filter, the check and the rename run. A LUT path with a space, a colon, a comma and a quote is accepted by `ffmpeg` (**changed in the build:** a quote and a colon in the path need escaping for both parsing levels of the filter description; `convert.escape_filter_path`). |
 | 1.2 | `python3 -m unittest tests.test_convert_verify -v` | The check of section 6.6 accepts an MP4 made from `ffmpeg -f lavfi -i testsrc2=size=640x360:rate=30000/1001 -f lavfi -i sine -t 2 -c:v libx264 -c:a aac -timecode 01:00:00:00 -movflags +faststart` and rejects one with the wrong frame count, a wrong pixel format, no audio stream, no timecode or the `moov` box at the end. |
-| 1.3 | `python3 -m unittest tests.test_convert_space -v` | With a fake free-space value, the tool refuses when the estimate plus margin exceeds it and starts when it does not. The estimate uses the size per minute of each clip kind. |
-| 1.4 | `python3 -m unittest tests.test_originals -v` | A run of convert on fixture originals (a fake decoder) leaves their sha256 unchanged. A write to a path inside the originals' folder raises an error. |
+| 1.3 | `python3 -m unittest tests.test_convert_space -v` | With a fake free-space value, the tool refuses when the estimate plus margin exceeds it and starts when it does not. The estimate uses the size per minute of each clip kind. The tool stops when the space runs out during a run. An SSD that is not mounted is refused before anything is created. |
+| 1.4 | `python3 -m unittest tests.test_originals -v` | A run of convert on fixture originals (a fake decoder) leaves their sha256 unchanged. A write to a path inside the originals' folder raises an error. A work directory inside the originals' folder is refused before any file is made. |
 | 1.5 | `python3 main.py tools check` | Exit 0 and a list in which `ffmpeg-full`, the filters and encoders of section 2.4 and the `vapoursynth` import are all present. [after the installs] |
 | 1.6 | `python3 main.py convert --probe "$VET_REAL_BRAW"` | Exit 0. The JSON on standard output has width, height, fps, frames, colour science generation, the sidecar flag and the names of the metadata tracks. |
-| 1.7 | `python3 main.py convert --test "$VET_REAL_BRAW" --work "$VET_WORK_DIR" --seconds 10` | Exit 0. `ffprobe` on the copy shows `h264`, `yuv420p`, half the decoded frame size, AAC audio, the source timecode and 10 seconds of frames. A frame of the copy compared with the same frame of the RAW decode through the same LUT (a still the check makes) has a PSNR of at least 35 dB at the copy's size (a starting value; the test frame gave 36.2 dB against a still made by a different route). **The owner opens the copy** in QuickTime Player and in Shotcut and looks at the colour. |
+| 1.7 | `python3 main.py convert --test "$VET_REAL_BRAW" --work "$VET_WORK_DIR" --seconds 10` | Exit 0. `ffprobe` on the copy shows `h264`, `yuv420p`, half the decoded frame size, AAC audio, the source timecode and 10 seconds of frames. The first frame of the copy is compared with the first frame of the RAW decode through the same LUT (a frame the check makes), in 8-bit RGB at the copy's size. **Changed in the build:** the plan asked for a PSNR of at least 35 dB. On the first 8 frames tested of `A002_01060615_C083` (q 73, load average about 50) the plain PSNR was 32.8 to 36.8 dB, because the half-size decode, 4:2:0 and H.264 lose fine detail [measured, 2026-10-26]. The check now asks for: plain PSNR of at least 30 dB; the mean of each colour channel within 1.5 of 255 (measured 0.0 to 0.5); and the PSNR after a Gaussian blur of sigma 4, which removes the fine detail, of at least 40 dB (measured 48.8 to 49.7 dB; step 1 gave 47.4 dB). The test is `tests/test_convert_real.py` and needs `VET_REAL_BRAW` and `VET_WORK_DIR`. **The owner opens the copy** in QuickTime Player and in Shotcut and looks at the colour. |
 | 1.8 | `python3 main.py convert --test "$VET_REAL_BRAW" --work "$VET_WORK_DIR"` | The whole clip converts and passes C5. The printed report has the numbers of section 6.8. The speed lies within a factor of two of the step-1 figure for that kind of clip at a comparable load (1.8 times real time for `brlt`, 2.1 for `brhq`). |
 | 1.9 | `python3 main.py convert --work "$VET_WORK_DIR"` | All matched clips of the first shoot are `done` and pass C5. Run again: no clip is converted a second time. The report lists, for every clip, the frame rate, frame size, colour science generation and sidecar flag, and for every WAV the sample rate and channel count. |
 | 1.10 | `python3 -m unittest discover -s tests -v` | All earlier tests still pass, on Python 3.12. |

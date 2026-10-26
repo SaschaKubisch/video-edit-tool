@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased (editor, step 2 in progress)
+
+### Added
+- `convert` command: one small preview copy of every matched `.braw` clip
+  (decoder: vapoursynth-brawsource; ffmpeg applies the base LUT and encodes),
+  with a check of each copy, a resumable `conversion.json`, a free-space check
+  and a guard that never writes into the folder of the originals.
+- `Project.work_dir` field.
+
+### Changed
+- The tool runs on Python 3.12 in its own `.venv`; packages are pinned in
+  `requirements.txt`. The 60 tests of 1.1.0 pass unchanged.
+
 ## 1.1.0 - 2026-10-04
 
 ### Added
