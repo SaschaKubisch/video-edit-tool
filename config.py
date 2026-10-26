@@ -104,3 +104,20 @@ STABLE_CUT_DIFF = 0.12        # mean picture change (0 to 1) that counts as a cu
 STABLE_MIN_RUN_SEC = 2.0      # D7: a scene shorter than this is dropped
 STABLE_MERGE_GAP_SEC = 0.5    # a shake shorter than this that ends where it began does not split a scene
 STABLE_GUARD_SEC = 0.3        # each scene loses this much at both ends, so the camera has settled
+
+# ── Assembly (`assemble`, SPECS 7.5; decisions D5 to D8) ──
+TIMELINE_FILE = "timeline.json"      # next to the project file
+FILM_FRAME = (4096, 2160)            # D5: DCI 4K, wide clips get black bars
+FILM_FIT = "fit"
+FILM_FADE_IN_SEC = 1.0               # D8: the film fades in over 1 s ...
+FILM_FADE_OUT_SEC = 2.0              # ... and out over 2 s (starting values)
+FILM_JOIN_SEC = 0.5                  # D8: the sound crossfades over 0.5 s at every join
+FILM_JOIN_CURVE = "equal_power"
+AUDIO_SAMPLE_RATE = 48000
+
+# ── Film preview (`preview`, SPECS 5.5) ──
+FILM_PREVIEW_WIDTH = 960             # pixels wide; the height follows the film frame
+FILM_PREVIEW_ENCODER = "h264_videotoolbox"
+FILM_PREVIEW_Q = 60                  # h264_videotoolbox quality, -q:v
+FILM_PREVIEW_GOP = 12                # short groups of pictures, so seeking is quick
+FILM_PREVIEW_AUDIO_KBPS = 160

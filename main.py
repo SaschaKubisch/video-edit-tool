@@ -14,6 +14,7 @@ Commands:
   rename   (legacy) rename both files of each pair to scene_NN.*, with undo
   convert  make a small preview copy of every matched .braw clip in the work folder
   analyse  find the sync clap at the start of each clip, find the steady scenes (reports in the work folder)
+  assemble build the timeline file: clap cut, steady scenes, fades
   timeline validate the timeline file
 
 Usage:
@@ -386,6 +387,55 @@ def cmd_analyse(args):
         print(f"Report: {os.path.join(work_dir, 'reports', name)}.json / .txt")
 
 
+def cmd_assemble(args):
+    """Assemble the timeline file from the clips and their analysis (SPECS 7.5)."""
+    import assemble
+    import safety
+
+    def fail(message):
+        print(f"Error: {message}")
+        sys.exit(2)
+
+    project_file = args.project or config.PROJECT_FILE
+    if not Path(project_file).exists():
+        fail(f"Project file not found: {project_file}\nRun 'python main.py match' first.")
+    project = Project.load(project_file)
+    work_dir = args.work or project.work_dir
+    if not work_dir:
+        fail("No work directory. Pass --work DIR (a folder on the SSD) or set "
+             "work_dir in the project file.")
+    output = args.output or str(Path(project_file).resolve().parent / config.TIMELINE_FILE)
+    frame = config.FILM_FRAME
+    if args.frame:
+        try:
+            w, h = args.frame.lower().split("x")
+            frame = (int(w), int(h))
+        except ValueError:
+            fail(f"--frame must look like 4096x2160, not {args.frame!r}")
+    st = assemble.AssembleSettings(
+        frame=frame,
+        fit=args.fit or config.FILM_FIT,
+        fade_in_s=config.FILM_FADE_IN_SEC if args.fade_in is None else args.fade_in,
+        fade_out_s=config.FILM_FADE_OUT_SEC if args.fade_out is None else args.fade_out,
+        join_s=config.FILM_JOIN_SEC if args.join is None else args.join,
+        min_run_sec=config.STABLE_MIN_RUN_SEC if args.min_scene is None else args.min_scene,
+        clap_guard_sec=config.CLAP_GUARD_SEC if args.clap_guard is None else args.clap_guard,
+        title=args.title or "")
+    only = [s.strip() for s in args.only.split(",") if s.strip()] if args.only else None
+    try:
+        assemble.assemble_project(project, work_dir, output, replace=args.replace,
+                                  limit=args.limit, only=only, settings=st,
+                                  report_name=args.report_name,
+                                  file_checks=not args.no_file_checks)
+    except assemble.TimelineExists as e:
+        fail(str(e))
+    except (assemble.AssemblyError, safety.OriginalsProtectedError) as e:
+        fail(str(e))
+    print(f"Timeline: {output}")
+    print(f"Report:   {os.path.join(work_dir, 'reports', args.report_name)}.json / .txt")
+    print(f"Next:     python main.py timeline validate --file {output}")
+
+
 def cmd_timeline(args):
     """Work with the timeline file (SPECS 3, 4.3)."""
     import timeline
@@ -517,6 +567,40 @@ def build_parser():
         help="Name of the report files in <work>/reports (default: clap-report, "
              "scenes-report)")
     p_analyse.set_defaults(func=cmd_analyse)
+
+    # ── assemble ──
+    p_assemble = subparsers.add_parser("assemble",
+        help="Assemble the timeline file: clap cut, steady scenes, fades (needs convert "
+             "and analyse --clap --scenes first)")
+    p_assemble.add_argument("--work", "-w",
+        help="Work folder on the SSD (default: work_dir of the project file)")
+    p_assemble.add_argument("--output", "-o",
+        help=f"Timeline file to write (default: {config.TIMELINE_FILE} next to the project file)")
+    p_assemble.add_argument("--replace", action="store_true",
+        help="Overwrite an existing timeline file; the old one is kept as a snapshot")
+    p_assemble.add_argument("--limit", type=int, help="Use only the first N matched clips")
+    p_assemble.add_argument("--only",
+        help="Use only the clips with these names (comma separated, no extension)")
+    p_assemble.add_argument("--frame", help=f"Film frame, WxH (default: "
+        f"{config.FILM_FRAME[0]}x{config.FILM_FRAME[1]})")
+    p_assemble.add_argument("--fit", choices=["fit", "fill"],
+        help=f"Place the picture whole with bars (fit) or fill the frame (default: {config.FILM_FIT})")
+    p_assemble.add_argument("--fade-in", type=float,
+        help=f"Film fade-in in seconds (default: {config.FILM_FADE_IN_SEC:g})")
+    p_assemble.add_argument("--fade-out", type=float,
+        help=f"Film fade-out in seconds (default: {config.FILM_FADE_OUT_SEC:g})")
+    p_assemble.add_argument("--join", type=float,
+        help=f"Sound crossfade at every join in seconds (default: {config.FILM_JOIN_SEC:g})")
+    p_assemble.add_argument("--min-scene", type=float,
+        help=f"Shortest scene in seconds (default: {config.STABLE_MIN_RUN_SEC:g})")
+    p_assemble.add_argument("--clap-guard", type=float,
+        help=f"Seconds cut after the clap (default: {config.CLAP_GUARD_SEC:g})")
+    p_assemble.add_argument("--title", help="Name of the film")
+    p_assemble.add_argument("--report-name", default="assembly-report",
+        help="Name of the report files in <work>/reports (default: assembly-report)")
+    p_assemble.add_argument("--no-file-checks", action="store_true",
+        help="Do not read the files while validating (tests only)")
+    p_assemble.set_defaults(func=cmd_assemble)
 
     # ── timeline ──
     p_timeline = subparsers.add_parser("timeline",
