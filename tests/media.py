@@ -89,3 +89,32 @@ def duration(info: dict, kind: str) -> float:
         if s["codec_type"] == kind:
             return float(s.get("duration") or info["format"]["duration"])
     raise KeyError(kind)
+
+
+def read_yuv_frames(path, w: int, h: int, pix_fmt: str = "yuv420p"):
+    """Every frame of a video as (Y, U, V) planes of code values (no range conversion), decoded
+    by ffmpeg. For 4:2:0 the chroma planes are (h/2, w/2)."""
+    r = subprocess.run([tools.ffmpeg_path(), "-v", "error", "-i", str(path), "-f", "rawvideo",
+                        "-pix_fmt", pix_fmt, "-"], capture_output=True, check=True)
+    data = np.frombuffer(r.stdout, np.uint8)
+    size = w * h + 2 * (w // 2) * (h // 2)
+    out = []
+    for i in range(len(data) // size):
+        f = data[i * size:(i + 1) * size]
+        out.append((f[:w * h].reshape(h, w),
+                    f[w * h:w * h + (w // 2) * (h // 2)].reshape(h // 2, w // 2),
+                    f[w * h + (w // 2) * (h // 2):].reshape(h // 2, w // 2)))
+    return out
+
+
+def read_audio_f32(path, rate: int = 48000):
+    """The sound of a media file as float32 stereo, decoded by ffmpeg."""
+    r = subprocess.run([tools.ffmpeg_path(), "-v", "error", "-i", str(path), "-vn", "-f", "f32le",
+                        "-ac", "2", "-ar", str(rate), "-"], capture_output=True, check=True)
+    return np.frombuffer(r.stdout, np.float32).reshape(-1, 2)
+
+
+def limited_luma(v8: int) -> float:
+    """The luma code value of a grey of full-range value `v8` (0 to 255) after the conversion to
+    BT.709 video levels (16 to 235)."""
+    return 16 + 219 * v8 / 255

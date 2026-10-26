@@ -792,6 +792,151 @@ def cmd_look(args):
         print("No creative LUT: the film has the base look only.")
 
 
+def _work_dir_of(args, fail):
+    work_dir = getattr(args, "work", None)
+    if not work_dir:
+        project_file = args.project or config.PROJECT_FILE
+        if Path(project_file).exists():
+            work_dir = Project.load(project_file).work_dir
+    if not work_dir:
+        fail("No work directory. Pass --work DIR (a folder on the SSD) or set "
+             "work_dir in the project file.")
+    return work_dir
+
+
+def cmd_export(args):
+    """List, add, switch on and off the exports of the timeline file (SPECS 5.6, 8.5)."""
+    import export
+    import timeline
+
+    def fail(message, code=2):
+        print(f"Error: {message}", file=sys.stderr)
+        sys.exit(code)
+
+    path = default_timeline_path(args)
+    if args.export_command == "list":
+        try:
+            tl = timeline.Timeline.load(path)
+        except FileNotFoundError:
+            fail(f"timeline file not found: {path}")
+        except timeline.TimelineError as e:
+            fail(str(e), 1)
+        frames = tl.film_length_frames()
+        work_dir = args.work or (Project.load(args.project or config.PROJECT_FILE).work_dir
+                                 if Path(args.project or config.PROJECT_FILE).exists() else "")
+        rows = tl.data.get("exports") or []
+        if not rows:
+            print("The timeline file has no exports. Add one: python main.py export add --preset film-4k")
+        for e in rows:
+            last = export.latest_render(work_dir, e["name"]) if work_dir else None
+            state = "on " if e.get("enabled", True) else "off"
+            size = export.estimate_bytes(e, frames, tl.fps) / 1e9
+            done = "" if not last else f"  last render: {'ok' if last['ok'] else 'FAILED'} " \
+                f"{last['finished_at']}, {last['speed']['video_fps']} fps"
+            print(f"{e['name']:16} {state} {e['width']}x{e['height']}  {e['video']['codec']:20} "
+                  f"about {size:.1f} GB  {e['output']}{done}")
+        return
+    if args.export_command in ("enable", "disable"):
+        on = args.export_command == "enable"
+        change_timeline(args, lambda d: export.with_export_enabled(d, args.name, on))
+        print(f"Export {args.name}: {'on' if on else 'off'}")
+        return
+    if args.export_command == "add":
+        work_dir = _work_dir_of(args, fail) if not args.output_dir else None
+        out_dir = args.output_dir or os.path.join(work_dir, "renders")
+
+        made = {}
+
+        def add(data):
+            made["entry"] = export.preset_entry(args.preset, out_dir, data["film"]["frame"],
+                                                name=args.name, width=args.width, height=args.height)
+            return export.with_export(data, made["entry"], replace=args.replace)
+
+        change_timeline(args, add)
+        e = made["entry"]
+        state = f"off (switch on with: export enable {e['name']})" if e.get("enabled") is False else "on"
+        print(f"Export {e['name']} added: {e['width']}x{e['height']}, {e['video']['codec']}, {state}")
+        print(f"File: {e['output']}")
+
+
+def cmd_render(args, decoder=None):
+    """Render the final film from the original .braw files (SPECS 5.3, 8.5)."""
+    import export
+    import safety
+    import timeline
+    from decoder import BrawSourceDecoder
+
+    def fail(message, code=2):
+        print(f"Error: {message}", file=sys.stderr)
+        sys.exit(code)
+
+    if bool(args.export) == bool(args.all):
+        fail("give --export NAME or --all")
+    path = default_timeline_path(args)
+    try:
+        tl = timeline.Timeline.load(path)
+    except FileNotFoundError:
+        fail(f"timeline file not found: {path}")
+    except timeline.TimelineError as e:
+        fail(str(e), 1)
+    work_dir = _work_dir_of(args, fail)
+    names = [e["name"] for e in tl.data.get("exports") or [] if e.get("enabled", True)] if args.all \
+        else [args.export]
+    if not names:
+        fail("the timeline file has no export that is switched on; add one with: "
+             "python main.py export add --preset film-4k")
+    if args.detach:
+        argv = [sys.executable, os.path.abspath(__file__)] + [a for a in sys.argv[1:] if a != "--detach"]
+        tag = names[0] if len(names) == 1 else "all"
+        log_path = os.path.join(work_dir, "reports", f"render-{tag}.log")
+        pid_path = os.path.join(work_dir, "reports", f"render-{tag}.pid")
+        try:
+            pid = export.spawn_detached(argv, log_path, pid_path)
+        except export.AlreadyRunning as e:
+            fail(str(e), 1)
+        print(f"Render started as process {pid}, in a session of its own.")
+        print(f"  Log:     {log_path}")
+        print(f"  Process: {pid_path}")
+        print(f"  Watch:   tail -f '{log_path}'")
+        print(f"  Stop:    kill {pid}   (SIGTERM: the render removes its files and exits)")
+        print(f"  Restart: run the same command again; a stopped render is not resumed, it starts "
+              "from the beginning.")
+        return
+    decoder = decoder or BrawSourceDecoder()
+    try:
+        decoder.check()
+    except RuntimeError as e:
+        fail(str(e))
+    findings = tl.validate(file_checks=False)
+    if timeline.has_errors(findings):
+        print(json.dumps([f.as_dict() for f in findings], indent=2))
+        fail("The timeline is not valid, so nothing was rendered.", 1)
+    originals = timeline_originals(tl.data)
+    install_graceful_stop()
+    failed = False
+    try:
+        for name in names:
+            try:
+                result = export.render_export(
+                    tl, name, work_dir, decoder, timeline_hash=timeline.file_hash(path),
+                    protected=originals, force=args.force,
+                    log=lambda s: print(f"{time.strftime('%H:%M:%S')}  {s}", flush=True))
+            except (export.ExportError, safety.OriginalsProtectedError) as e:
+                print(f"Error: {e}", file=sys.stderr, flush=True)
+                failed = True
+                continue
+            for w in result.warnings:
+                print(f"  warning: {w}", flush=True)
+            if result.credit_file:
+                print(f"  credit for the video description: {result.credit_file}", flush=True)
+            failed = failed or not result.ok
+    except KeyboardInterrupt:
+        print("Interrupted. The files of the render were removed. Run the same command again to "
+              "start over.", flush=True)
+        sys.exit(130)
+    sys.exit(1 if failed else 0)
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         description="Dual-System Audio Video Automation (BMPCC 4K + Zoom H2N)",
@@ -1004,6 +1149,44 @@ def build_parser():
     p_preview.add_argument("--no-file-checks", action="store_true",
         help="Do not read the files while validating the timeline")
     p_preview.set_defaults(func=cmd_preview)
+
+    # ── export ──
+    p_export = subparsers.add_parser("export",
+        help="List, add, switch on and off the exports of the timeline file")
+    ex_sub = p_export.add_subparsers(dest="export_command", required=True)
+    for cmd_name, text in (("list", "List the exports with their size estimate and last render"),
+                           ("enable", "Switch an export on (the ProRes master is off until you do)"),
+                           ("disable", "Switch an export off"),
+                           ("add", "Add an export from a preset")):
+        sp = ex_sub.add_parser(cmd_name, help=text)
+        sp.add_argument("--file", "-f",
+            help=f"Timeline file (default: {config.TIMELINE_FILE} next to the project file)")
+        sp.add_argument("--work", "-w", help="Work folder (default: work_dir of the project file)")
+        if cmd_name in ("enable", "disable"):
+            sp.add_argument("name", help="Name of the export")
+    ex_add = ex_sub.choices["add"]
+    ex_add.add_argument("--preset", required=True, choices=["film-4k", "film-4k-x264", "film-master"],
+        help="film-4k: MP4, H.264, hardware encoder, 45 Mbit/s; film-4k-x264: the same with libx264; "
+             "film-master: ProRes 422 HQ, off until switched on")
+    ex_add.add_argument("--name", help="Name of the export (default: the preset's, or film-<height>p)")
+    ex_add.add_argument("--width", type=int, help="Custom width (needs --height; the shape of the film)")
+    ex_add.add_argument("--height", type=int, help="Custom height")
+    ex_add.add_argument("--output-dir", help="Folder of the file (default: <work>/renders)")
+    ex_add.add_argument("--replace", action="store_true", help="Replace an export of the same name")
+    p_export.set_defaults(func=cmd_export)
+
+    # ── render ──
+    p_render = subparsers.add_parser("render",
+        help="Render the final film from the .braw files (levelled sound, LUTs, DCI 4K)")
+    p_render.add_argument("--file", "-f",
+        help=f"Timeline file (default: {config.TIMELINE_FILE} next to the project file)")
+    p_render.add_argument("--work", "-w", help="Work folder (default: work_dir of the project file)")
+    p_render.add_argument("--export", metavar="NAME", help="Render this export")
+    p_render.add_argument("--all", action="store_true", help="Render every export that is switched on")
+    p_render.add_argument("--force", action="store_true", help="Render an export that is switched off")
+    p_render.add_argument("--detach", action="store_true",
+        help="Run in the background, in a session of its own, with a log and a pid file in <work>/reports")
+    p_render.set_defaults(func=cmd_render)
 
     # ── look ──
     p_look = subparsers.add_parser("look",

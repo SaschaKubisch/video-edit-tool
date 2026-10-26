@@ -2,6 +2,26 @@
 
 ## Unreleased (editor, step 2 in progress)
 
+### Added (step 3, look and sound)
+- Loudness (decision D9, "Each scene, then film"): `loudness set|show` writes the mode and
+  numbers into the timeline file. In the film preview and the final film every scene is
+  measured (EBU R128, ffmpeg `ebur128`) and levelled to the target, at most `max_gain_db`;
+  the film then gets one gain and, if the true peak is over the limit, a look-ahead
+  limiter. The report names the capped and silent scenes and the film's numbers before and
+  after. The preview's record (`previews/preview.json`) carries it.
+- Creative LUT (decision D10, "slay Film + Portrait"): `look list` and `look set --lut|--no-lut|--base`.
+  The LUT is checked, copied to `<work>/luts/<sha256>.cube` and stored in `look.lut` with its
+  name and the credit line of its pack. Applied after the base LUT, tetrahedral, in the
+  preview and in the final film. `VET_LUT_DIR` names the folder of the owner's `.cube` files.
+- The final film (`render`, `export` commands, `export.py`): decoded from the `.braw` files at
+  full size, base LUT, creative LUT, letterbox bars added in RGB, BT.709 video levels, fades,
+  H.264 (hardware encoder at 45 Mbit/s, or `libx264`) or ProRes 422 HQ, AAC or PCM sound,
+  timecode, colour tags, `faststart`. Presets `film-4k`, `film-4k-x264`, `film-master` (off
+  until switched on), custom sizes of the film's shape. Checks on the finished file; the
+  report `reports/render-report.json`; a credit file next to a film that uses a credited LUT;
+  `render --detach` for a background run with a log and a pid file; SIGTERM stops it clean.
+- `Decoder.write_frame_range`.
+
 ### Added
 - `convert` command: one small preview copy of every matched `.braw` clip
   (decoder: vapoursynth-brawsource; ffmpeg applies the base LUT and encodes),

@@ -52,11 +52,41 @@ class Decoder(ABC):
         the order green, blue, red) of the clip, decoded at 1/scale of the full
         size, to the binary file object `sink`. Returns the frames written."""
 
+    def write_frame_range(self, path: str, scale: int, sink, first: int, last: int) -> int:
+        """Like write_frames, for the frames `first` to `last - 1` of the clip only (a
+        segment of the final film). The cut is exact: the frame numbers are the clip's own.
+        Returns the frames written. This default decodes the clip from its first frame and
+        drops the frames before `first`; a decoder that can seek should override it."""
+        info = self.probe(path)
+        if not 0 <= first < last <= info.frames:
+            raise ValueError(f"frames {first} to {last} are outside the {info.frames} frames of {path}")
+        frame_bytes = (info.width // scale) * (info.height // scale) * 6
+        self.write_frames(path, scale, _SkipSink(sink, first * frame_bytes), max_frames=last)
+        return last - first
+
     @abstractmethod
     def write_audio(self, path: str, dest: str, max_frames=None):
         """Write the camera audio to the file `dest` as raw s32le (24 bit audio in
         the upper bits). Returns an AudioInfo, or None when the clip has no audio.
         `max_frames` limits the audio to the duration of that many frames."""
+
+
+class _SkipSink:
+    """A file object that drops the first `skip` bytes written to it and passes on the rest."""
+
+    def __init__(self, sink, skip: int):
+        self.sink, self.skip = sink, skip
+
+    def write(self, data):
+        if self.skip:
+            drop = min(self.skip, len(data))
+            self.skip -= drop
+            data = memoryview(data)[drop:]
+        if len(data):
+            self.sink.write(data)
+
+    def flush(self):
+        self.sink.flush()
 
 
 def container_tracks(path: str) -> list:
@@ -155,6 +185,18 @@ class BrawSourceDecoder(Decoder):
         c = core.braw.Source(str(path), pipeline=self.pipeline, scale=scale)
         if max_frames:
             c = c[:max_frames]
+        n = c.num_frames
+        c = core.std.ShufflePlanes(c, planes=[1, 2, 0], colorfamily=vs.RGB)
+        c.output(sink, y4m=False, prefetch=0, backlog=-1)
+        return n
+
+    def write_frame_range(self, path, scale, sink, first, last):
+        vs = self._vs or (self._core() and self._vs)
+        core = vs.core
+        c = core.braw.Source(str(path), pipeline=self.pipeline, scale=scale)
+        if not 0 <= first < last <= c.num_frames:
+            raise ValueError(f"frames {first} to {last} are outside the {c.num_frames} frames of {path}")
+        c = c[first:last]
         n = c.num_frames
         c = core.std.ShufflePlanes(c, planes=[1, 2, 0], colorfamily=vs.RGB)
         c.output(sink, y4m=False, prefetch=0, backlog=-1)

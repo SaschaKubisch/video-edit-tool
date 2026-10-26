@@ -144,3 +144,6 @@ LOUDNESS_TARGET_LUFS = -14.0       # integrated loudness of the film
 LOUDNESS_TRUE_PEAK_DBTP = -1.0     # the true peak stays at or under this
 LOUDNESS_MAX_GAIN_DB = 12.0        # most that levelling adds to a quiet segment (starting value)
 
+# ── Final film (`render`, SPECS 5.3 and 5.6) ──
+EXPORT_GOP = 30                    # a key frame every 30 frames (about 1 s), as in the tested chain
+EXPORT_LOG_EVERY_SEC = 30          # the render prints its progress this often

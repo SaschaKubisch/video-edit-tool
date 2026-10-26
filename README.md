@@ -34,6 +34,24 @@ After `match` and `convert` (preview copies on the SSD), these commands build an
 
 The film is the clips in recording order with the clap and the camera movement cut out, a hard cut between scenes, the sound crossfaded over 0.5 s, and a fade in (1 s) and out (2 s). A clip with no steady scene of 2 s is left out and listed in `reports/assembly-report.txt`. The originals are never written.
 
+## Look, sound and the final film (step 3, work in progress)
+
+```bash
+export VET_LUT_DIR=/Volumes/SSD/luts/slay                                  # the folder with your .cube files
+.venv/bin/python main.py loudness set --mode segment_then_film             # each scene, then the film: -14 LUFS, -1 dBTP
+.venv/bin/python main.py look list                                         # the creative LUTs you have
+.venv/bin/python main.py look set --lut slay-04-film.cube --work /Volumes/SSD/work   # after the base look
+.venv/bin/python main.py export add --preset film-4k --work /Volumes/SSD/work             # MP4, H.264, DCI 4K, 45 Mbit/s
+.venv/bin/python main.py render --export film-4k --detach --work /Volumes/SSD/work        # in the background, log + pid file
+```
+
+`render` decodes the `.braw` files at full size (never the preview copies), applies the base LUT and the
+creative LUT, adds the letterbox bars of wide clips, levels the sound, and writes the file with its
+checks. `export add --preset film-master` adds a ProRes 422 HQ master that stays off until you run
+`export enable film-master`. A film that uses a LUT with a credit gets `<film>.credit.txt` next to it:
+put its line in the video description. A stopped render (`kill PID`) removes its files and starts over
+when you run the command again.
+
 **Sync offset per clip.** The tool measures one offset per clip when it matches the files (the seconds by which a sound comes later in the recorder's file than in the camera's). If one is wrong, the Film tab has a card, Sync offset per clip: type the right offset in seconds (a minus sign is allowed). The tool stores it in the timeline file as `audio_offset_hand_s`, beside the measured `audio_offset_s`, which is never changed. The sound of that clip's scenes uses the typed offset; the pictures do not change, so the next preview renders only sound again. Empty the field, or press Original, to use the measured offset again. A value beyond 30 seconds is refused, and a typed offset that leaves the recorder file without sound for a scene is a warning. `timeline summary` lists the offsets set by hand, and `assemble --replace` keeps them. `project.json` is not written. `PRD.md` and `SPECS.md` describe the plan and say which parts are built.
 
 ## UI workflow

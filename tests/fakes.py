@@ -53,6 +53,23 @@ class FakeDecoder(Decoder):
             sink.write(g.tobytes() + b.tobytes() + r.tobytes())
         return n
 
+    def write_frame_range(self, path, scale, sink, first, last):
+        self.calls.append(("range", path, first, last))
+        if path in self.fail_on:
+            raise RuntimeError("decoder crashed")
+        info = self.clips[path]
+        if not 0 <= first < last <= info.frames:
+            raise ValueError(f"frames {first} to {last} are outside the {info.frames} frames")
+        w, h = info.width // scale, info.height // scale
+        n = last - first - self.short_by
+        xs = np.linspace(0, 60000, w, dtype=np.float64)[None, :].repeat(h, axis=0)
+        for i in range(first, first + n):
+            g = ((xs + i * 2000) % 65535).astype("<u2")
+            b = ((xs[::-1] + i * 1000) % 65535).astype("<u2")
+            r = np.full((h, w), (i * 3000) % 65535, dtype="<u2")
+            sink.write(g.tobytes() + b.tobytes() + r.tobytes())
+        return n
+
     def write_audio(self, path, dest, max_frames=None):
         self.calls.append(("audio", path))
         if not self.audio:
