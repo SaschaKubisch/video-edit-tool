@@ -23,10 +23,11 @@ class FakeDecoder(Decoder):
     provoke a failed check. `fail_on` names paths whose write_frames raises."""
     name = "fake"
 
-    def __init__(self, clips, audio=True, short_by=0, fail_on=()):
+    def __init__(self, clips, audio=True, short_by=0, fail_on=(), audio_short_by=0):
         self.clips = dict(clips)
         self.audio = audio
         self.short_by = short_by
+        self.audio_short_by = audio_short_by      # frames of audio missing against the picture
         self.fail_on = set(fail_on)
         self.calls = []
 
@@ -58,7 +59,7 @@ class FakeDecoder(Decoder):
             return None
         info = self.clips[path]
         n_frames = info.frames if max_frames is None else min(max_frames, info.frames)
-        samples = round(n_frames * 48000 * info.fps_den / info.fps_num)
+        samples = round((n_frames - self.audio_short_by) * 48000 * info.fps_den / info.fps_num)
         t = np.arange(samples) / 48000.0
         wave = (np.sin(2 * np.pi * 440 * t) * 0.3 * (2 ** 31)).astype("<i4")
         stereo = np.stack([wave, wave], axis=-1)

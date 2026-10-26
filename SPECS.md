@@ -878,7 +878,7 @@ D2 is settled. The decoder is given no colour overrides: it outputs the picture 
 - codec `h264`, profile High, pixel format `yuv420p`,
 - width and height equal to the source's decoded size divided by `PREVIEW_SCALE`,
 - the frame rate of the source, and as many frames as `probe` reported. **Changed in the build:** the count is the number of packets in the video stream (`ffprobe -count_packets`), because an MP4 holds one packet per frame and reading packets is much faster than decoding the file; step 1 used `-count_frames`, which decodes. The first and the middle frame are decoded as the last item of this list,
-- one AAC audio stream at 48 kHz, as long as the video to within one frame,
+- one AAC audio stream at 48 kHz, as long as the source's own audio to within one frame. **Changed in the build:** the plan said "as long as the video". A real clip (`A002_01011735_C021`) holds 4.000 s of audio and 4.87 s of picture (the file says so: `ffprobe` and the decoder agree), so the copy cannot be as long as the video. The copy is compared with the source audio's length (samples divided by the sample rate), and the clip gets a warning in `conversion.json` when the audio and the picture differ by a frame or more,
 - a timecode equal to the source's,
 - the `moov` box before the `mdat` box.
 

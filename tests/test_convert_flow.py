@@ -171,6 +171,20 @@ class FlowTests(unittest.TestCase):
         self.assertIsNone(e["audio"])
         self.assertEqual(e["check"]["audio"], "")
 
+    def test_audio_shorter_than_the_picture_in_the_source_converts_with_a_warning(self):
+        # Found on a real clip (A002_01011735_C021): 4.87 s of picture, 4.000 s of audio.
+        self.ws.decoder.audio_short_by = 6
+        summary = make_converter(self.ws).run(refs(self.ws))
+        self.assertEqual((summary.converted, summary.failed), (2, 0))
+        e = load_json(self.ws)["clips"][self.ws.refs[0][0]]
+        self.assertEqual(e["status"], "done")
+        self.assertTrue(any("audio" in w and "shorter" in w for w in e["warnings"]), e["warnings"])
+
+    def test_audio_of_the_same_length_as_the_picture_gives_no_audio_warning(self):
+        make_converter(self.ws).run(refs(self.ws))
+        e = load_json(self.ws)["clips"][self.ws.refs[0][0]]
+        self.assertFalse(any("audio" in w for w in e["warnings"]), e["warnings"])
+
     def test_other_colour_science_generation_is_converted_but_warned(self):
         ws = Workspace(self, names=("B001_C001",), gen="4")
         summary = make_converter(ws).run(refs(ws))

@@ -169,6 +169,10 @@ class CopyExpectation:
     audio_rate: int = 48000
     timecode: str = ""          # "" : the source has none, none is required
     colour_tags: bool = True    # BT.709 primaries, transfer, matrix; TV range
+    # Length of the source's own audio in seconds. A .braw file can hold less audio
+    # than picture (found on a real clip: 4.000 s against 4.87 s). When given, the
+    # copy's audio is compared with this; when None, with the picture.
+    audio_seconds: float = None
 
 
 @dataclass
@@ -291,11 +295,19 @@ def verify_copy(path: str, expected: CopyExpectation, ffprobe=None, ffmpeg=None)
                 problems.append(f"audio sample rate is {audio[0].get('sample_rate')}, "
                                 f"expected {expected.audio_rate}")
             try:
-                gap = abs(float(audio[0]["duration"]) - float(video["duration"]))
                 frame_s = expected.fps_den / expected.fps_num
-                if gap >= frame_s:
-                    problems.append(f"audio and video differ by {gap:.3f} s, "
-                                    f"more than one frame ({frame_s:.3f} s)")
+                audio_s = float(audio[0]["duration"])
+                if expected.audio_seconds is not None:
+                    gap = abs(audio_s - expected.audio_seconds)
+                    if gap >= frame_s:
+                        problems.append(
+                            f"the audio is {audio_s:.3f} s but the source audio is "
+                            f"{expected.audio_seconds:.3f} s (more than one frame apart)")
+                else:
+                    gap = abs(audio_s - float(video["duration"]))
+                    if gap >= frame_s:
+                        problems.append(f"audio and video differ by {gap:.3f} s, "
+                                        f"more than one frame ({frame_s:.3f} s)")
             except (KeyError, ValueError):
                 problems.append("audio or video duration is unknown")
     else:
@@ -803,6 +815,17 @@ class Converter:
             entry["audio"] = None if ainfo is None else {
                 "sample_rate": ainfo.sample_rate, "channels": ainfo.channels,
                 "samples": ainfo.samples}
+            audio_s = None
+            if ainfo is not None:
+                audio_s = ainfo.samples / ainfo.sample_rate
+                picture_s = frames * info.fps_den / info.fps_num
+                if abs(audio_s - picture_s) >= info.fps_den / info.fps_num:
+                    word = "shorter" if audio_s < picture_s else "longer"
+                    msg = (f"the camera audio ({audio_s:.2f} s) is {word} than the picture "
+                           f"({picture_s:.2f} s) in the source; the copy carries what the "
+                           f"source has")
+                    warnings.append(msg)
+                    self.log(f"WARNING {ref.stem}: {msg}")
             cmd = build_ffmpeg_command(self.ffmpeg, info, ainfo, audio_raw, partial,
                                        self.lut_path, self.settings)
             with open(ffmpeg_log, "wb") as errfile:
@@ -832,7 +855,8 @@ class Converter:
                                 fps_den=info.fps_den, frames=frames,
                                 has_audio=ainfo is not None,
                                 audio_rate=ainfo.sample_rate if ainfo else 48000,
-                                timecode=info.timecode_start, colour_tags=True),
+                                timecode=info.timecode_start, colour_tags=True,
+                                audio_seconds=audio_s),
                 ffprobe=self.ffprobe, ffmpeg=self.ffmpeg)
             if not result.ok:
                 raise RuntimeError("check of the copy failed: " + "; ".join(result.problems))

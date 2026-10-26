@@ -11,10 +11,11 @@ FPS = "testsrc2=size=640x360:rate=30000/1001"
 
 
 def make_clip(path, video=FPS, seconds=2, audio=True, timecode="01:00:00:00",
-              faststart=True, pix_fmt=None, extra=()):
+              faststart=True, pix_fmt=None, extra=(), audio_seconds=None):
     cmd = ["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", video]
     if audio:
-        cmd += ["-f", "lavfi", "-i", "sine"]
+        cmd += ["-f", "lavfi", "-i",
+                "sine" if audio_seconds is None else f"sine=duration={audio_seconds}"]
     cmd += ["-t", str(seconds), "-c:v", "libx264"]
     if pix_fmt:
         cmd += ["-pix_fmt", pix_fmt]
@@ -52,6 +53,8 @@ class VerifyCopyTests(unittest.TestCase):
         cls.black = make_clip(root / "black.mp4",
                               video="color=c=black:s=640x360:r=30000/1001")
         cls.other_tc = make_clip(root / "tc.mp4", timecode="02:00:00:00")
+        # picture 2 s, sound 1 s: the source itself can have less audio than picture
+        cls.short_audio = make_clip(root / "short_audio.mp4", audio_seconds=1)
 
     @classmethod
     def tearDownClass(cls):
@@ -93,6 +96,22 @@ class VerifyCopyTests(unittest.TestCase):
     def test_a_clip_that_has_no_audio_may_have_none(self):
         r = convert.verify_copy(str(self.no_audio), expected(has_audio=False))
         self.assertTrue(r.ok, r.problems)
+
+    def test_audio_much_shorter_than_the_picture_is_rejected_by_default(self):
+        r = convert.verify_copy(str(self.short_audio), expected())
+        self.assertFalse(r.ok)
+        self.assertTrue(any("differ" in p for p in r.problems), r.problems)
+
+    def test_audio_is_compared_with_the_length_of_the_source_audio_when_given(self):
+        # Found on a real clip: the .braw file holds 4.000 s of audio and 4.87 s of picture.
+        # The copy carries what the source has; that is not a failure of the copy.
+        r = convert.verify_copy(str(self.short_audio), expected(audio_seconds=1.0))
+        self.assertTrue(r.ok, r.problems)
+
+    def test_audio_of_the_wrong_length_is_rejected_when_the_source_length_is_given(self):
+        r = convert.verify_copy(str(self.good), expected(audio_seconds=1.0))
+        self.assertFalse(r.ok)
+        self.assertTrue(any("source" in p for p in r.problems), r.problems)
 
     def test_wrong_audio_sample_rate_is_rejected(self):
         r = convert.verify_copy(str(self.good), expected(audio_rate=44100))
