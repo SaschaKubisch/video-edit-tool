@@ -287,3 +287,329 @@ def build_mix(tl, plan: RenderPlan, loader) -> MixResult:
             result.samples[lo:hi] += (region[lo - pos:hi - pos] * g[lo - pos:hi - pos, None]
                                       ).astype(np.float32)
     return result
+
+
+# ── The film preview (SPECS 5.5) ────────────────────────────────
+
+class RenderError(Exception):
+    """A render cannot start or its output failed a check."""
+
+
+@dataclass
+class PreviewSettings:
+    width: int = config.FILM_PREVIEW_WIDTH
+    encoder: str = config.FILM_PREVIEW_ENCODER
+    quality: int = config.FILM_PREVIEW_Q
+    gop: int = config.FILM_PREVIEW_GOP
+    audio_kbps: int = config.FILM_PREVIEW_AUDIO_KBPS
+
+    def as_dict(self) -> dict:
+        return {"width": self.width, "encoder": self.encoder, "quality": self.quality,
+                "gop": self.gop, "audio_kbps": self.audio_kbps}
+
+
+@dataclass
+class PreviewResult:
+    path: str
+    frames: int
+    seconds: float
+    segments: list                      # ids of the segments in the file
+    rendered: list = field(default_factory=list)
+    cached: list = field(default_factory=list)
+    warnings: list = field(default_factory=list)
+    joins: list = field(default_factory=list)
+    problems: list = field(default_factory=list)
+    timeline_hash: str = None
+    elapsed_s: float = 0.0
+    problems_fatal: bool = False
+
+    def as_dict(self) -> dict:
+        return {"file": os.path.basename(self.path), "frames": self.frames,
+                "seconds": round(self.seconds, 3), "segments": self.segments,
+                "rendered": self.rendered, "cached": self.cached, "warnings": self.warnings,
+                "joins": self.joins, "problems": self.problems,
+                "timeline_hash": self.timeline_hash, "elapsed_s": round(self.elapsed_s, 2)}
+
+
+def _encoder_args(settings: PreviewSettings) -> list:
+    if settings.encoder == "h264_videotoolbox":
+        return ["-c:v", "h264_videotoolbox", "-profile:v", "high", "-g", str(settings.gop),
+                "-bf", "0", "-q:v", str(settings.quality), "-tag:v", "avc1"]
+    if settings.encoder == "libx264":
+        return ["-c:v", "libx264", "-profile:v", "high", "-preset", "veryfast",
+                "-crf", str(max(0, min(51, round((100 - settings.quality) * 0.45 - 6)))),
+                "-g", str(settings.gop), "-bf", "0", "-tag:v", "avc1"]
+    raise ValueError(f"Unknown preview encoder: {settings.encoder}")
+
+
+def segment_filter(tl, plan: RenderPlan, seg: SegmentPlan, copy_size=None) -> str:
+    """The ffmpeg filter chain that turns frames of the preview copy into the segment's
+    picture in the film preview: new time stamps, the creative LUT if there is one, the
+    placement (SPECS 5.2), the film fades, 4:2:0."""
+    import convert
+    fps = tl.data["film"]["fps"]
+    chain = [f"setpts=N/({fps['num']}/{fps['den']})/TB"]
+    lut = tl.data["look"].get("lut")
+    if lut:
+        chain.append(f"lut3d=file={convert.escape_filter_path(lut['path'])}:interp=tetrahedral")
+    p = seg.placement
+    W, H = plan.frame
+    if p["mode"] == "fit":
+        if copy_size != (p["w"], p["h"]):
+            chain.append(f"scale={p['w']}:{p['h']}:flags=bicubic")
+        if (p["w"], p["h"]) != (W, H):
+            chain.append(f"pad={W}:{H}:{p['x']}:{p['y']}:color=black")
+    else:
+        src = tl.data["sources"][seg.source]["size"]
+        k = (copy_size[0] / src["width"]) if copy_size else 1.0
+        ww, wh = round_even(p["ww"] * k), round_even(p["wh"] * k)
+        wy = round_even(p["wy"] * k)
+        if p["wx_from"] == p["wx_to"]:
+            wx = str(round_even(p["wx_from"] * k))
+        else:
+            span = max(1, seg.length_frames - 1)
+            wx = (f"{round_even(p['wx_from'] * k)}+({round_even(p['wx_to'] * k) - round_even(p['wx_from'] * k)})"
+                  f"*n/{span}")
+        chain.append(f"crop={ww}:{wh}:'{wx}':{wy}")
+        chain.append(f"scale={W}:{H}:flags=bicubic")
+    if seg.picture_fade_in_frames:
+        chain.append(f"fade=t=in:s=0:n={seg.picture_fade_in_frames}")
+    if seg.picture_fade_out_frames:
+        chain.append(f"fade=t=out:s={seg.length_frames - seg.picture_fade_out_frames}:"
+                     f"n={seg.picture_fade_out_frames}")
+    chain.append("format=yuv420p")
+    return ",".join(chain)
+
+
+def segment_command(ffmpeg, tl, plan, seg, out_path, settings, copy_size=None) -> list:
+    fps = tl.data["film"]["fps"]
+    src = tl.data["sources"][seg.source]
+    cmd = [ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-y"]
+    if seg.in_frame > 0:
+        # Seek half a frame before the first frame wanted, so that the frame at `in` is
+        # kept and the frame before it is dropped, whatever rounding the time gets.
+        cmd += ["-ss", f"{(seg.in_frame - 0.5) * fps['den'] / fps['num']:.6f}"]
+    cmd += ["-i", src["preview_copy"], "-an", "-sn", "-frames:v", str(seg.length_frames),
+            "-vf", segment_filter(tl, plan, seg, copy_size),
+            "-fps_mode", "cfr", "-r", f"{fps['num']}/{fps['den']}"]
+    cmd += _encoder_args(settings)
+    cmd += ["-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709",
+            "-color_range", "tv", "-f", "mp4", str(out_path)]
+    return cmd
+
+
+def _copy_size(path):
+    import stable
+    return stable.probe_size(path)
+
+
+def render_segment(tl, plan: RenderPlan, seg: SegmentPlan, out_path: str,
+                   settings: PreviewSettings, ffmpeg: str = None) -> None:
+    """Cut one segment from its preview copy and write it as a small H.264 file with
+    exactly `seg.length_frames` frames. The file is written as .partial and renamed."""
+    import subprocess
+    import tools
+    ffmpeg = ffmpeg or tools.ffmpeg_path()
+    src = tl.data["sources"][seg.source]
+    copy_size = _copy_size(src["preview_copy"])
+    partial = out_path + ".partial"
+    cmd = segment_command(ffmpeg, tl, plan, seg, partial, settings, copy_size)
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode != 0:
+        _remove(partial)
+        raise RenderError(f"ffmpeg failed on segment {seg.id}: {r.stderr.strip()[-600:]}")
+    os.replace(partial, out_path)
+
+
+def _remove(path):
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
+
+
+def segment_key(tl, plan: RenderPlan, seg: SegmentPlan, settings: PreviewSettings) -> str:
+    """A name for the segment file that changes when anything that shapes the picture
+    changes: the preview copy (path, size, modification time), in and out, the placement,
+    the preview frame, the creative LUT, the film fades that touch the segment, the settings."""
+    import hashlib
+    import json
+    src = tl.data["sources"][seg.source]
+    st = os.stat(src["preview_copy"])
+    lut = tl.data["look"].get("lut")
+    material = {
+        "v": 1, "copy": src["preview_copy"], "size": st.st_size, "mtime": st.st_mtime_ns,
+        "in": seg.in_frame, "out": seg.out_frame, "placement": seg.placement,
+        "frame": list(plan.frame), "lut": lut["sha256"] if lut else None,
+        "fade_in": seg.picture_fade_in_frames, "fade_out": seg.picture_fade_out_frames,
+        "fps": tl.data["film"]["fps"], "settings": settings.as_dict()}
+    digest = hashlib.sha256(json.dumps(material, sort_keys=True).encode()).hexdigest()[:20]
+    return f"seg-{digest}.mp4"
+
+
+def load_wav(path: str, rate: int) -> np.ndarray:
+    """Decode a WAV with ffmpeg to float32 stereo at `rate`: (samples, 2)."""
+    import subprocess
+    import tools
+    cmd = [tools.ffmpeg_path(), "-v", "error", "-nostdin", "-i", str(path), "-vn",
+           "-f", "f32le", "-ac", "2", "-ar", str(rate), "-"]
+    r = subprocess.run(cmd, capture_output=True)
+    if r.returncode != 0:
+        raise RenderError(f"ffmpeg could not read {path}: {r.stderr.decode('utf-8', 'replace').strip()}")
+    return np.frombuffer(r.stdout, np.float32).reshape(-1, 2)
+
+
+def _frame_count(path: str) -> int:
+    import subprocess
+    import tools
+    r = subprocess.run([tools.ffprobe_path(), "-v", "error", "-count_packets", "-select_streams",
+                        "v:0", "-show_entries", "stream=nb_read_packets", "-of", "csv=p=0",
+                        str(path)], capture_output=True, text=True)
+    if r.returncode != 0 or not r.stdout.strip():
+        raise RenderError(f"ffprobe cannot read {path}: {r.stderr.strip()}")
+    return int(r.stdout.strip().split(",")[0])
+
+
+def _stream_durations(path: str) -> dict:
+    import json
+    import subprocess
+    import tools
+    r = subprocess.run([tools.ffprobe_path(), "-v", "error", "-show_entries",
+                        "stream=codec_type,duration:format=duration", "-of", "json", str(path)],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        raise RenderError(f"ffprobe cannot read {path}: {r.stderr.strip()}")
+    info = json.loads(r.stdout)
+    out = {}
+    for s in info.get("streams", []):
+        d = s.get("duration")
+        out.setdefault(s["codec_type"], float(d) if d not in (None, "N/A") else
+                       float(info["format"]["duration"]))
+    return out
+
+
+def verify_preview(path: str, frames: int, fps: Fraction) -> list:
+    """The checks of SPECS 5.7 on a finished file. Returns a list of problems (empty
+    when all pass): as many video frames as the film has, a sound track, the sound as
+    long as the picture within one frame, a file that is not empty."""
+    problems = []
+    if not os.path.isfile(path) or os.path.getsize(path) == 0:
+        return [f"{path} is empty or missing"]
+    n = _frame_count(path)
+    if n != frames:
+        problems.append(f"the file has {n} video frames, the film has {frames}")
+    d = _stream_durations(path)
+    one_frame = float(1 / fps)
+    if "audio" not in d:
+        problems.append("the file has no sound")
+    elif abs(d["audio"] - d.get("video", d["audio"])) >= one_frame:
+        problems.append(f"the sound is {d['audio']:.3f} s long and the picture {d['video']:.3f} s: "
+                        "they differ by one frame or more")
+    return problems
+
+
+def render_preview(tl, work_dir: str, name: str = "preview", settings: PreviewSettings = None,
+                   film_range=None, loader=None, timeline_hash: str = None, protected=None,
+                   log=print, progress=None) -> PreviewResult:
+    """Render the film preview of `tl` to <work_dir>/previews/<name>.mp4.
+
+    Picture: one small file per segment in previews/seg-<key>.mp4, cut from the preview
+    copy and kept between runs (an unchanged segment is not rendered again), joined
+    without a new encode. Sound: the whole mix of build_mix, encoded as AAC. A second file,
+    previews/<name>.json, records the timeline hash and the segments, so the page can tell
+    whether the preview is up to date. `film_range` (from, to) in film seconds renders
+    only the segments that touch it. `protected` lists folders that hold originals; the
+    work directory must not lie inside one.
+    """
+    import datetime
+    import subprocess
+    import time
+    import fsutil
+    import safety
+    import tools
+
+    started = time.time()
+    settings = settings or PreviewSettings()
+    if protected:
+        safety.assert_not_inside(work_dir, protected)
+    findings = tl.validate(file_checks=False)
+    errors = [f for f in findings if f.level == "error"]
+    if errors:
+        raise RenderError("The timeline is not valid: " + "; ".join(
+            f"{f.rule} at {f.path}: {f.message}" for f in errors))
+    for sid, src in tl.data["sources"].items():
+        if not os.path.isfile(src["preview_copy"]):
+            raise RenderError(f"The preview copy of clip {sid} is missing "
+                              f"({src['preview_copy']}). Run convert.")
+    plan = make_plan(tl, preview_width=settings.width)
+    fps = plan.fps
+    segs = plan.segments
+    if film_range is not None:
+        a, b = film_range
+        segs = [s for s in segs
+                if float(s.film_start_frame / fps) < b
+                and float((s.film_start_frame + s.length_frames) / fps) > a]
+        if not segs:
+            raise RenderError(f"No segment lies within {a:g} to {b:g} s of the film.")
+    ffmpeg = tools.ffmpeg_path()
+    folder = os.path.join(work_dir, "previews")
+    os.makedirs(folder, exist_ok=True)
+    result = PreviewResult(path=os.path.join(folder, f"{name}.mp4"), frames=0, seconds=0.0,
+                           segments=[s.id for s in segs], timeline_hash=timeline_hash)
+
+    # Picture: one file per segment, from the cache where it exists.
+    files = []
+    for i, s in enumerate(segs):
+        target = os.path.join(folder, segment_key(tl, plan, s, settings))
+        if os.path.isfile(target) and os.path.getsize(target) > 0:
+            result.cached.append(s.id)
+        else:
+            log(f"[{i + 1}/{len(segs)}] rendering segment {s.id} ({s.length_frames} frames)")
+            render_segment(tl, plan, s, target, settings, ffmpeg)
+            result.rendered.append(s.id)
+        files.append(target)
+        if progress:
+            progress(i + 1, len(segs))
+
+    # Sound: the whole mix, then the part that belongs to the segments in the file.
+    loader = loader or (lambda path: load_wav(path, plan.sample_rate))
+    mix = build_mix(tl, plan, loader)
+    result.warnings, result.joins = mix.warnings, mix.joins
+    first, last = segs[0], segs[-1]
+    lo = first.film_start_sample
+    hi = last.film_start_sample + last.sample_length
+    audio = np.ascontiguousarray(mix.samples[lo:hi])
+    result.frames = sum(s.length_frames for s in segs)
+    result.seconds = float(result.frames / fps)
+
+    list_file = os.path.join(folder, f"{name}.concat.txt")
+    mix_file = os.path.join(folder, f"{name}.mix.f32le")
+    partial = result.path + ".partial"
+    try:
+        with open(list_file, "w", encoding="utf-8") as f:
+            for p in files:
+                f.write("file '" + p.replace("'", "'\\''") + "'\n")
+        audio.tofile(mix_file)
+        cmd = [ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
+               "-f", "concat", "-safe", "0", "-i", list_file,
+               "-f", "f32le", "-ar", str(plan.sample_rate), "-ac", "2", "-i", mix_file,
+               "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy",
+               "-c:a", "aac", "-b:a", f"{settings.audio_kbps}k",
+               "-movflags", "+faststart", "-f", "mp4", partial]
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        if r.returncode != 0:
+            raise RenderError(f"ffmpeg failed to join the preview: {r.stderr.strip()[-600:]}")
+        result.problems = verify_preview(partial, result.frames, fps)
+        if result.problems:
+            raise RenderError("The preview failed its checks: " + "; ".join(result.problems))
+        os.replace(partial, result.path)
+    finally:
+        for p in (list_file, mix_file, partial):
+            _remove(p)
+
+    result.elapsed_s = time.time() - started
+    fsutil.write_json_atomic(os.path.join(folder, f"{name}.json"), {
+        **result.as_dict(), "range": list(film_range) if film_range else None,
+        "settings": settings.as_dict(),
+        "rendered_at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")})
+    return result
