@@ -213,7 +213,7 @@ The wording is the owner's, as recorded.
 
 Priority: Must, Should, Could. "Built" means released in v1.1.0.
 
-**Built on the branch `editor-step2`** [measured by the tests of the branch, 2026-10-26; `SPECS.md` section 7 says how]: C1 to C6 and the interface of C7; T1 to T3; T4 (atomic saves and numbered snapshots; the `undo` command is not built); T5 (`timeline validate` and `timeline summary`; `timeline frames` is not built); T6 (hash check on every page edit); A1 to A8 (the drift is not in the report); E1; U1 to U3; M7 and M9. **Not built:** M8 (thumbnails from the preview copies), the drift measurement (7.3), E2 to E7, and the requirements of steps 3 to 6.
+**Built on the branch `editor-step2`** [measured by the tests of the branch, 2026-10-26; `SPECS.md` section 7 says how]: C1 to C6 and the interface of C7; T1 to T3; T4 (atomic saves, numbered snapshots, `timeline undo` and `timeline history`); T5 (`timeline validate`, `timeline summary` and `timeline frames`); T6 (hash check on every page edit); A1 to A8 (the drift is not in the report); E1; U1 to U3; M7 and M9. **Not built:** M8 (thumbnails from the preview copies), the drift measurement (7.3), E2 to E7, and the requirements of steps 3 to 6.
 
 **M - Match and sync (kept from v1.1)**
 

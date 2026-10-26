@@ -16,7 +16,8 @@ Commands:
   analyse  find the sync clap at the start of each clip, find the steady scenes (reports in the work folder)
   assemble build the timeline file: clap cut, steady scenes, fades
   preview  render the film preview from the preview copies
-  timeline validate or summarise the timeline file
+  timeline validate or summarise the timeline file, list its versions (history), go back (undo),
+           write stills at film times (frames)
 
 Usage:
   python main.py
@@ -480,7 +481,120 @@ def cmd_timeline(args):
             sys.exit(1)
         findings = tl.validate(file_checks=not args.no_file_checks)
         print(json.dumps([f.as_dict() for f in findings], indent=2))
+        if not timeline.has_errors(findings):
+            # SPECS 4.1 rule 3: a good check keeps the version, so a direct edit can be undone
+            import store
+            made = store.snapshot_if_changed(path)
+            if made:
+                print(f"snapshot {os.path.basename(made)[:-5]} of the valid file kept in "
+                      f"{store.history_dir(path)}", file=sys.stderr)
         sys.exit(1 if timeline.has_errors(findings) else 0)
+    if args.timeline_command == "history":
+        return cmd_timeline_history(args, path)
+    if args.timeline_command == "undo":
+        return cmd_timeline_undo(args, path)
+    if args.timeline_command == "frames":
+        return cmd_timeline_frames(args, path)
+
+
+def cmd_timeline_history(args, path):
+    """List the versions of the timeline file with time and a one-line change (SPECS 4.3)."""
+    import store
+    if not os.path.isfile(path):
+        print(f"Error: timeline file not found: {path}", file=sys.stderr)
+        sys.exit(2)
+    rows = store.history(path)
+    if args.json:
+        print(json.dumps(rows, indent=2))
+        return
+    name = os.path.basename(path)
+    snapshots = [r for r in rows if not r["current"]]
+    if not snapshots:
+        print(f"{name}: no earlier version is kept yet. A version is kept when the file is "
+              "saved over, or when `timeline validate` finds it valid.")
+        return
+    print(f"{name}: {len(snapshots)} earlier version(s) kept in {store.history_dir(path)}")
+    print(f"{'no.':8} {'time':19}  {'hash':8}  change from the version before")
+    for r in rows:
+        number = "current" if r["current"] else f"{r['number']:04d}"
+        print(f"{number:8} {store.format_time(r['time']):19}  {r['hash'][:8]}  {r['change']}")
+
+
+def cmd_timeline_undo(args, path):
+    """Go back to the previous version of the timeline file (SPECS 4.3 step 6)."""
+    import store
+    import timeline
+    try:
+        replaced = store._read_data(path)
+        result = store.undo(path)
+    except FileNotFoundError:
+        print(f"Error: timeline file not found: {path}", file=sys.stderr)
+        sys.exit(2)
+    except store.NothingToUndo as e:
+        print(f"Nothing to undo: {e}", file=sys.stderr)
+        sys.exit(1)
+    restored = store._read_data(path)
+    print(f"Restored version {result['restored']:04d} of {os.path.basename(path)} "
+          f"(written {store.format_time(os.path.getmtime(path))}).")
+    if replaced is not None and restored is not None:
+        print(f"Changes made by the undo: {store.describe_change(replaced, restored)}")
+    print(f"The version that was replaced is kept in {result['undone']}.")
+
+
+def cmd_timeline_frames(args, path):
+    """Write stills at film times or source times and print their paths (SPECS 4.3 step 5)."""
+    import frames
+    import render
+    import safety
+    import timeline
+
+    def fail(message, code=2):
+        print(f"Error: {message}", file=sys.stderr)
+        sys.exit(code)
+
+    if bool(args.film_s) == bool(args.source):
+        fail("Say what to show: --film-s T1,T2 (film times in seconds) or --source CLIP --at "
+             "T1,T2 (times in a clip), not both.")
+    if args.source and not args.at:
+        fail("--source needs --at T1,T2 (times in seconds in the clip).")
+    if args.at and not args.source:
+        fail("--at belongs to --source CLIP.")
+    try:
+        times = frames.parse_times(args.film_s or args.at)
+    except ValueError:
+        fail("the times must be numbers of seconds separated by commas, for example 12.0,48.5")
+    try:
+        tl = timeline.Timeline.load(path)
+    except FileNotFoundError:
+        fail(f"timeline file not found: {path}")
+    except timeline.TimelineError as e:
+        fail(str(e), 1)
+    work_dir = args.work
+    if not work_dir:
+        project_file = args.project or config.PROJECT_FILE
+        if Path(project_file).exists():
+            work_dir = Project.load(project_file).work_dir
+    if not work_dir:
+        fail("No work directory. Pass --work DIR (a folder on the SSD) or set "
+             "work_dir in the project file.")
+    findings = tl.validate(file_checks=not args.no_file_checks)
+    if timeline.has_errors(findings):
+        print(json.dumps([f.as_dict() for f in findings], indent=2))
+        fail("The timeline is not valid, so no still was written.", 1)
+    originals = sorted({str(Path(s[k]).parent) for s in tl.data["sources"].values()
+                        for k in ("original_video", "audio")})
+    try:
+        safety.assert_not_inside(work_dir, originals)
+        if args.film_s:
+            paths = frames.film_stills(tl, times, work_dir)
+        else:
+            paths = frames.source_stills(tl, args.source, times, work_dir)
+    except safety.OriginalsProtectedError as e:
+        fail(str(e))
+    except frames.FrameError as e:
+        fail(str(e), 1)
+    for p in paths:
+        print(p)
 
 
 def cmd_preview(args):
@@ -705,6 +819,30 @@ def build_parser():
         help=f"Timeline file (default: {config.TIMELINE_FILE} next to the project file)")
     p_validate.add_argument("--no-file-checks", action="store_true",
         help="Skip the checks that read the disk (files, hashes)")
+    p_history = tl_sub.add_parser("history",
+        help="List the versions of the timeline file with their time and what changed")
+    p_history.add_argument("--file", "-f",
+        help=f"Timeline file (default: {config.TIMELINE_FILE} next to the project file)")
+    p_history.add_argument("--json", action="store_true", help="Print the rows as JSON")
+    p_undo = tl_sub.add_parser("undo",
+        help="Go back to the previous version of the timeline file; the version that is "
+             "replaced is kept in timeline.history/undone/")
+    p_undo.add_argument("--file", "-f",
+        help=f"Timeline file (default: {config.TIMELINE_FILE} next to the project file)")
+    p_frames = tl_sub.add_parser("frames",
+        help="Write PNG stills at film times or clip times into <work>/stills and print the paths")
+    p_frames.add_argument("--file", "-f",
+        help=f"Timeline file (default: {config.TIMELINE_FILE} next to the project file)")
+    p_frames.add_argument("--work", "-w",
+        help="Work folder on the SSD (default: work_dir of the project file)")
+    p_frames.add_argument("--film-s", metavar="T1,T2",
+        help="Film times in seconds, for example 12.0,48.5")
+    p_frames.add_argument("--source", metavar="CLIP",
+        help="A clip of the timeline file (its id); use with --at")
+    p_frames.add_argument("--at", metavar="T1,T2",
+        help="Times in seconds in the clip named by --source")
+    p_frames.add_argument("--no-file-checks", action="store_true",
+        help="Do not read the files while validating the timeline")
     p_timeline.set_defaults(func=cmd_timeline)
 
     # ── preview ──

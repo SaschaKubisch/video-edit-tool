@@ -61,13 +61,18 @@ python3 main.py convert --probe CLIP.braw
 python3 main.py convert --test CLIP.braw --work DIR [--seconds S]
 python3 main.py analyse --clap --work DIR [--limit N] [--report-name NAME]
 python3 main.py timeline validate [--file timeline.json] [--no-file-checks]
+python3 main.py timeline history [--file timeline.json] [--json]
+python3 main.py timeline undo [--file timeline.json]
+python3 main.py timeline frames [--file timeline.json] [--work DIR] (--film-s 12.0,48.5 | --source CLIP --at 3.0)
 ```
 
 - `match` writes `project.json` and the thumbnails.
 - `sync` uses the selection saved in `project.json` unless one is passed, e.g. `--selection '{"selection":[3,1,5],"selection_trims":{"3":{"start":2,"end":1}}}'`. The selection holds scene indices in timeline order.
 - `convert` makes one small preview copy (H.264 MP4, half size, the base LUT baked in, the camera audio) of every matched `.braw` clip in `DIR/copies/` and records what it did in `DIR/conversion.json`. `DIR` is a folder on the SSD (or `work_dir` in `project.json`); it must not lie inside a folder that holds the originals, which are only read. Clips whose copy is current are skipped, so an interrupted run resumes. The base LUT is read from Resolve's LUT folder (`VET_BASE_LUT` or `--lut` name another file) and is never copied into the repository. Run it with `.venv/bin/python`; it needs VapourSynth with `vapoursynth-brawsource` (see `requirements.txt`).
 - `analyse --clap` finds the sync clap at the start of each matched clip: a sound that the camera's scratch audio and the recorder's WAV both heard at the stored offset. It writes `analysis/<clip>/clap.json` and the report `reports/clap-report.txt` and `.json` in `DIR`, and marks clips for review (no clap, a clap that only one microphone heard, a late or weak clap, an offset outside the usual range). The originals are only read.
-- `timeline validate` checks the timeline file (`timeline.json`, format in `SPECS.md` section 3) against its rules and prints the findings as JSON; exit code 1 when there are errors.
+- `timeline validate` checks the timeline file (`timeline.json`, format in `SPECS.md` section 3) against its rules and prints the findings as JSON; exit code 1 when there are errors. A valid file that differs from the newest snapshot is kept as a snapshot in `timeline.history/` (the number is printed on standard error).
+- `timeline history` lists the versions of the timeline file with their time and what changed; `timeline undo` goes back to the previous version (the version it replaces is kept in `timeline.history/undone/`).
+- `timeline frames` writes PNG stills of the film at film times (`--film-s`) or of a clip at clip times (`--source CLIP --at`) into `DIR/stills/` and prints the paths. It reads the preview copies.
 - `rename` is a legacy helper that renames both files of each pair to `scene_NN.*`. It refuses to run if a target name already exists, and `--undo` reverses it from `rename_log.json`. The normal flow does not need it.
 
 ## Offset sign
