@@ -49,7 +49,7 @@ SEGMENT_KEYS = ["id", "source", "in", "out", "enabled", "label", "origin", "note
 CROP_KEYS = ["x", "x_from", "x_to"]
 LOOK_KEYS = ["base", "lut"]
 BASE_KEYS = ["mode", "path", "sha256"]
-LUT_KEYS = ["path", "sha256", "interp"]
+LUT_KEYS = ["path", "sha256", "interp", "name", "credit"]
 AUDIO_KEYS = ["sample_rate", "loudness"]
 LOUDNESS_KEYS = ["mode", "target_lufs", "true_peak_dbtp", "max_gain_db"]
 TITLE_KEYS = ["id", "text", "anchor", "start_s", "end_s", "template", "fade_s"]
@@ -711,6 +711,8 @@ class _Validator:
                 self.check_keys(lut, LUT_KEYS, "look.lut")
                 self.typed(lut, "path", "look.lut", "str")
                 self.typed(lut, "sha256", "look.lut", "str")
+                self.typed(lut, "name", "look.lut", "str", required=False)
+                self.typed(lut, "credit", "look.lut", "str", required=False)
                 interp = self.typed(lut, "interp", "look.lut", "str")
                 if interp is not None and interp != "tetrahedral":
                     self.err("V16", "look.lut.interp",

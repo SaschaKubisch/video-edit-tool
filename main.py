@@ -728,6 +728,70 @@ def cmd_loudness(args):
           + ("" if args.mode == "off" else f", target {args.target if args.target is not None else config.LOUDNESS_TARGET_LUFS:g} LUFS"))
 
 
+def timeline_originals(data: dict) -> list:
+    """The folders that hold the originals a timeline file uses (nothing is written there)."""
+    return sorted({str(Path(s[k]).parent) for s in (data.get("sources") or {}).values()
+                   for k in ("original_video", "audio") if isinstance(s.get(k), str)})
+
+
+def cmd_look(args):
+    """List the creative LUTs, or choose the base or the creative LUT of the film (SPECS 8.2)."""
+    import look
+    import safety
+
+    def fail(message, code=1):
+        print(f"Error: {message}", file=sys.stderr)
+        sys.exit(code)
+
+    folder = args.luts or look.lut_dir()
+    if args.look_command == "list":
+        rows = look.list_luts(folder)
+        if not rows:
+            fail(f"no .cube files found{'' if folder else ': set VET_LUT_DIR or pass --luts DIR'}"
+                 f"{' in ' + folder if folder else ''}", 1)
+        for r in rows:
+            note = r.get("problem") or f"{r['size']} points" + (f", {r['title']}" if r.get("title") else "")
+            credit = f"  credit: {look.plain_credit(r['credit'])}" if r.get("credit") else ""
+            print(f"{r['id']:40} {note}{credit}")
+        return
+
+    chosen = [bool(args.lut), bool(args.no_lut), bool(args.base)]
+    if sum(chosen) != 1:
+        fail("give exactly one of --lut, --no-lut and --base", 2)
+    work_dir = args.work
+    if not work_dir and args.lut:
+        project_file = args.project or config.PROJECT_FILE
+        if Path(project_file).exists():
+            work_dir = Project.load(project_file).work_dir
+        if not work_dir:
+            fail("No work directory. Pass --work DIR (a folder on the SSD) or set "
+                 "work_dir in the project file.", 2)
+
+    def change(data):
+        try:
+            if args.no_lut:
+                return look.with_creative_lut(data, None)
+            if args.base:
+                return look.with_base_lut(data, args.base)
+            path = args.lut if Path(args.lut).is_file() else look.find_lut(folder, args.lut)
+            return look.with_creative_lut(
+                data, look.install(path, work_dir, protected=timeline_originals(data)))
+        except (look.LutError, safety.OriginalsProtectedError) as e:
+            raise ValueError(str(e))
+
+    new = change_timeline(args, change, file_checks=not args.no_file_checks)
+    lut = new.data["look"].get("lut")
+    if args.base:
+        print(f"Base look set: {args.base}")
+        print("The preview copies carry the old base look; run convert to make them again.")
+    elif lut:
+        print(f"Creative LUT set: {lut.get('name', lut['path'])} (after the base look)")
+        if lut.get("credit"):
+            print(f"Credit to publish with the film: {look.plain_credit(lut['credit'])}")
+    else:
+        print("No creative LUT: the film has the base look only.")
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         description="Dual-System Audio Video Automation (BMPCC 4K + Zoom H2N)",
@@ -940,6 +1004,30 @@ def build_parser():
     p_preview.add_argument("--no-file-checks", action="store_true",
         help="Do not read the files while validating the timeline")
     p_preview.set_defaults(func=cmd_preview)
+
+    # ── look ──
+    p_look = subparsers.add_parser("look",
+        help="List creative LUTs, choose the base or the creative LUT of the film")
+    lk_sub = p_look.add_subparsers(dest="look_command", required=True)
+    p_lk_list = lk_sub.add_parser("list", help="List the .cube files in the LUT folder")
+    p_lk_list.add_argument("--luts", metavar="DIR",
+        help="Folder with the .cube files (default: the environment variable VET_LUT_DIR)")
+    p_lk_set = lk_sub.add_parser("set",
+        help="Choose the creative LUT (after the base look) or the base look of the film")
+    p_lk_set.add_argument("--file", "-f",
+        help=f"Timeline file (default: {config.TIMELINE_FILE} next to the project file)")
+    p_lk_set.add_argument("--work", "-w",
+        help="Work folder on the SSD: the LUT is copied to <work>/luts (default: work_dir of the project file)")
+    p_lk_set.add_argument("--luts", metavar="DIR",
+        help="Folder with the .cube files (default: the environment variable VET_LUT_DIR)")
+    p_lk_set.add_argument("--lut", metavar="ID_OR_FILE",
+        help="The creative LUT: a file, or an id from `look list`, for example slay/slay-04-film.cube")
+    p_lk_set.add_argument("--no-lut", action="store_true", help="No creative LUT: the base look only")
+    p_lk_set.add_argument("--base", metavar="FILE",
+        help="Change the base look (the preview copies then have to be made again)")
+    p_lk_set.add_argument("--no-file-checks", action="store_true",
+        help="Do not read the files while validating (tests)")
+    p_look.set_defaults(func=cmd_look)
 
     # ── loudness ──
     p_loud = subparsers.add_parser("loudness",
