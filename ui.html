@@ -348,6 +348,29 @@
     background: none; border: none; padding: 0; margin-left: 6px;
     color: #e94560; cursor: pointer; font-size: inherit; text-decoration: underline;
   }
+  /* ── Film (step 4) ── */
+  .film-player { width: 100%; max-width: 960px; background: #000; border-radius: 6px; display: block; }
+  .film-head { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 10px 0; }
+  .film-head .grow { flex: 1; min-width: 200px; }
+  .film-badge { display: inline-block; padding: 2px 8px; border-radius: 3px; font-size: 0.8em; font-weight: 600; }
+  .film-badge.ok { background: #1b4332; color: #95d5b2; }
+  .film-badge.old { background: #3d3200; color: #ffd166; }
+  .film-badge.none { background: #2a2a4a; color: #aaa; }
+  .film-error { color: #ff6b6b; font-size: 0.85em; margin: 8px 0; white-space: pre-wrap; }
+  .film-error:empty { display: none; }
+  .film-table { width: 100%; border-collapse: collapse; font-size: 0.8em; margin-top: 12px; }
+  .film-table th { text-align: left; color: #888; font-weight: 500; padding: 6px 8px; border-bottom: 1px solid #2a2a4a; }
+  .film-table td { padding: 6px 8px; border-bottom: 1px solid #1a1a2e; vertical-align: middle; }
+  .film-row { cursor: pointer; }
+  .film-row:hover { background: #16213e; }
+  .film-row.off { opacity: 0.45; }
+  .film-row.playing { background: #0f3460; }
+  .film-btn { padding: 2px 7px; font-size: 0.85em; margin-right: 2px; }
+  .film-label { width: 100%; min-width: 140px; padding: 3px 6px; background: #0a0a2e; border: 1px solid #333;
+                color: #e0e0e0; border-radius: 3px; font-size: 0.95em; }
+  .film-mono { font-family: monospace; color: #aaa; white-space: nowrap; }
+  .film-flag { color: #ffd166; font-weight: 600; cursor: help; }
+  .film-note { font-size: 0.8em; color: #888; margin-top: 6px; }
 </style>
 </head>
 <body>
@@ -371,6 +394,9 @@
       </div>
       <div class="step-tab" data-step="3" onclick="showStep(3)">
         <span class="num">3</span>Sync &amp; Export
+      </div>
+      <div class="step-tab" data-step="4" onclick="showStep(4)">
+        <span class="num">4</span>Film
       </div>
     </div>
 
@@ -498,6 +524,37 @@
         <div id="syncResultsContent"></div>
       </div>
     </div>
+
+    <!-- STEP 4: Film -->
+    <div class="step-panel" id="step4">
+      <div class="card">
+        <h2>Film preview</h2>
+        <p>The film is built from the timeline file: the clips in recording order, the clap and the
+           camera movement cut out, a hard cut between scenes, the sound crossfaded, the film faded in
+           and out. The preview plays the small preview copies, not the 4K film.</p>
+        <div class="film-head">
+          <button class="btn btn-secondary btn-small" id="filmAssembleBtn" onclick="filmAssemble()">Assemble the film</button>
+          <button class="btn btn-primary btn-small" id="filmPreviewBtn" onclick="filmRenderPreview()">Render preview</button>
+          <span class="film-badge none" id="filmPreviewBadge">no preview</span>
+          <span class="hint grow" id="filmSummaryLine"></span>
+        </div>
+        <div class="progress-bar" id="filmProgress" style="display:none">
+          <div class="progress-fill" id="filmProgressFill"></div>
+        </div>
+        <div class="film-error" id="filmError"></div>
+        <div class="hint" id="filmMissing"></div>
+        <video id="filmPlayer" class="film-player" controls preload="metadata" style="display:none"></video>
+        <div class="film-note" id="filmPlayerNote"></div>
+      </div>
+      <div class="card" id="filmSegmentsCard" style="display:none">
+        <h2>Scenes</h2>
+        <p>Move the start or the end of a scene by one second or one frame, remove a scene (and
+           restore it), or change the order. Every change is saved to the timeline file at once and
+           the old file is kept. Click a row to jump to it in the preview. After a change, render the
+           preview again.</p>
+        <table class="film-table" id="filmTable"></table>
+      </div>
+    </div>
   </main>
 </div>
 
@@ -565,6 +622,7 @@ function showStep(n) {
   });
   if (n === 2) renderScenes();
   if (n === 3) refreshSyncControls();
+  if (n === 4) loadFilm();
 }
 
 function markStepCompleted(n) {
@@ -590,6 +648,7 @@ function updateStatus(s) {
   const dot = document.getElementById("statusDot");
   const text = document.getElementById("statusText");
   text.textContent = s.message;
+  filmStatus(s);
 
   dot.className = "status-dot";
   if (s.step === "error") dot.classList.add("error");
@@ -989,6 +1048,213 @@ function selectCurrentDir() {
     : browserTarget === "audio" ? "audioDirInput" : "outputDirInput";
   document.getElementById(input).value = browserCurrentPath;
   closeBrowser();
+}
+
+// ── Step 4: Film ──
+let film = null;            // the last answer of GET /api/timeline
+let filmBusy = false;       // a change is on its way to the server
+let filmJob = false;        // assemble or preview is running
+
+function fmtFilm(sec) {
+  const t = Math.max(0, sec);
+  const m = Math.floor(t / 60);
+  return m + ":" + (t - m * 60).toFixed(1).padStart(4, "0");
+}
+
+function filmFps() {
+  return film.summary.fps.num / film.summary.fps.den;
+}
+
+function showFilmError(text) {
+  document.getElementById("filmError").textContent = text || "";
+}
+
+function showFilmFindings(resp) {
+  const lines = [resp.error || "The change was not saved."];
+  (resp.findings || []).filter(f => f.level === "error").forEach(f => {
+    lines.push(f.path + ": " + f.message + (f.hint ? " (" + f.hint + ")" : ""));
+  });
+  showFilmError(lines.join("\n"));
+}
+
+async function loadFilm() {
+  const r = await api("GET", "/api/timeline");
+  if (r.error || !r.summary) {
+    film = null;
+    document.getElementById("filmMissing").textContent = r.error || "No timeline file yet.";
+  } else {
+    film = r;
+    document.getElementById("filmMissing").textContent = "";
+  }
+  renderFilm();
+}
+
+function renderFilm() {
+  const card = document.getElementById("filmSegmentsCard");
+  const player = document.getElementById("filmPlayer");
+  const badge = document.getElementById("filmPreviewBadge");
+  document.getElementById("filmAssembleBtn").disabled = filmJob;
+  document.getElementById("filmPreviewBtn").disabled = filmJob || !film;
+  if (!film) {
+    card.style.display = "none";
+    player.style.display = "none";
+    badge.className = "film-badge none";
+    badge.textContent = "no preview";
+    document.getElementById("filmSummaryLine").textContent = "";
+    document.getElementById("filmPlayerNote").textContent = "";
+    return;
+  }
+  const s = film.summary;
+  card.style.display = "block";
+  document.getElementById("filmSummaryLine").textContent =
+    film.name + " (hash " + film.hash.slice(0, 8) + "): " + s.enabled + " of " + s.segments +
+    " scenes in the film, " + fmtFilm(s.film_seconds) + " long";
+  const p = film.preview;
+  if (p.exists) {
+    badge.className = "film-badge " + (p.up_to_date ? "ok" : "old");
+    badge.textContent = p.up_to_date ? "preview is up to date" : "preview is out of date";
+    const src = "/api/preview/" + encodeURIComponent(p.file) + "?v=" + encodeURIComponent(p.rendered_at || p.frames);
+    if (player.getAttribute("data-src") !== src) {
+      const at = player.currentTime || 0;
+      player.setAttribute("data-src", src);
+      player.src = src;
+      player.addEventListener("loadedmetadata", () => {
+        player.currentTime = Math.min(at, player.duration || 0);
+      }, { once: true });
+    }
+    player.style.display = "block";
+    document.getElementById("filmPlayerNote").textContent = p.up_to_date ? "" :
+      "The film changed after this preview was made. Press Render preview.";
+  } else {
+    badge.className = "film-badge none";
+    badge.textContent = "no preview";
+    player.style.display = "none";
+    document.getElementById("filmPlayerNote").textContent = "No preview yet. Press Render preview.";
+  }
+  renderFilmTable();
+}
+
+function renderFilmTable() {
+  const rows = film.summary.rows;
+  const fps = filmFps();
+  const one = Math.round(fps);
+  const buttons = (id, which) => [["-1s", -one], ["-1f", -1], ["+1f", 1], ["+1s", one]].map(([text, frames]) =>
+    `<button class="btn btn-secondary film-btn" onclick="filmOp(event, [{op:'trim_${which}', segment:'${escapeHtml(id)}', frames:${frames}}])">${text}</button>`
+  ).join("");
+  const head = `<tr><th>#</th><th>Label</th><th>Film time</th><th>Length</th>
+    <th>Start (frame, source time)</th><th>End (frame, source time)</th><th>In film</th><th>Order</th><th></th></tr>`;
+  const body = rows.map((r, i) => {
+    const film_time = r.enabled
+      ? fmtFilm(r.film_start_s) + " - " + fmtFilm(r.film_start_s + r.length_s) : "removed";
+    const flag = r.review
+      ? `<span class="film-flag" title="${escapeHtml(r.review.join('; '))}">check</span>` : "";
+    return `<tr class="film-row ${r.enabled ? "" : "off"}" id="filmRow_${escapeHtml(r.id)}" data-index="${i}"
+        onclick="filmSeek(${i})">
+      <td>${i + 1}</td>
+      <td><input class="film-label" value="${escapeHtml(r.label)}" title="${escapeHtml(r.source)}"
+           onclick="event.stopPropagation()"
+           onchange="filmOp(event, [{op:'set_label', segment:'${escapeHtml(r.id)}', label:this.value}])"></td>
+      <td class="film-mono">${film_time}</td>
+      <td class="film-mono">${fmtDur(r.length_s)}</td>
+      <td><span class="film-mono">${r.in} (${fmtDur(r.in / fps)})</span><br>${buttons(r.id, "in")}</td>
+      <td><span class="film-mono">${r.out} (${fmtDur(r.out / fps)})</span><br>${buttons(r.id, "out")}</td>
+      <td><input type="checkbox" ${r.enabled ? "checked" : ""} onclick="event.stopPropagation()"
+           onchange="filmOp(event, [{op:'set_enabled', segment:'${escapeHtml(r.id)}', enabled:this.checked}])"></td>
+      <td>
+        <button class="btn btn-secondary film-btn" ${i === 0 ? "disabled" : ""}
+          onclick="filmOp(event, [{op:'move', segment:'${escapeHtml(r.id)}', to_index:${i - 1}}])">up</button>
+        <button class="btn btn-secondary film-btn" ${i === rows.length - 1 ? "disabled" : ""}
+          onclick="filmOp(event, [{op:'move', segment:'${escapeHtml(r.id)}', to_index:${i + 1}}])">down</button>
+      </td>
+      <td>${flag}</td>
+    </tr>`;
+  }).join("");
+  document.getElementById("filmTable").innerHTML = head + body;
+}
+
+// Send operations to the server with the hash the page started from.
+async function filmOp(event, ops) {
+  if (event) event.stopPropagation();
+  if (filmBusy || !film) return;
+  filmBusy = true;
+  showFilmError("");
+  const resp = await api("POST", "/api/timeline/edit", { hash: film.hash, operations: ops });
+  filmBusy = false;
+  if (resp.hash && resp.summary) {
+    film.hash = resp.hash;
+    film.summary = resp.summary;
+    film.preview = resp.preview;
+    renderFilm();
+    return;
+  }
+  if (resp.findings) {
+    showFilmFindings(resp);
+    renderFilm();            // put the controls back to the saved state
+    return;
+  }
+  showFilmError(resp.error || "The change was not saved.");
+  if (resp.hash) await loadFilm();     // 409: the file changed; show the file as it is now
+  else renderFilm();
+}
+
+function filmSeek(i) {
+  const r = film.summary.rows[i];
+  const player = document.getElementById("filmPlayer");
+  if (r && r.enabled && player.style.display !== "none") {
+    player.currentTime = r.film_start_s;
+  }
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  document.getElementById("filmPlayer").addEventListener("timeupdate", () => {
+    if (!film) return;
+    const t = document.getElementById("filmPlayer").currentTime;
+    film.summary.rows.forEach(r => {
+      const el = document.getElementById("filmRow_" + r.id);
+      if (el) el.classList.toggle("playing",
+        r.enabled && t >= r.film_start_s && t < r.film_start_s + r.length_s);
+    });
+  });
+});
+
+async function filmAssemble() {
+  const replace = !!film;
+  if (replace && !confirm("Assemble the film again? The current timeline file is kept as a snapshot.")) return;
+  showFilmError("");
+  const resp = await api("POST", "/api/assemble", { replace });
+  if (resp.error) { showFilmError(resp.error); return; }
+  filmJob = true;
+  renderFilm();
+  startPolling();
+}
+
+async function filmRenderPreview() {
+  showFilmError("");
+  const resp = await api("POST", "/api/preview", {});
+  if (resp.error) { showFilmFindings(resp); return; }
+  filmJob = true;
+  renderFilm();
+  startPolling();
+}
+
+// Called with every status answer: shows the progress of assemble and preview.
+function filmStatus(s) {
+  const bar = document.getElementById("filmProgress");
+  if (s.step === "assembling" || s.step === "previewing") {
+    filmJob = true;
+    bar.style.display = "block";
+    document.getElementById("filmProgressFill").style.width = s.progress + "%";
+    document.getElementById("filmSummaryLine").textContent = s.message;
+    document.getElementById("filmAssembleBtn").disabled = true;
+    document.getElementById("filmPreviewBtn").disabled = true;
+  } else if (s.step === "assembled" || s.step === "previewed" || s.step === "error") {
+    if (filmJob) {
+      filmJob = false;
+      bar.style.display = "none";
+      if (s.step === "error") showFilmError(s.message);
+      loadFilm();
+    }
+  }
 }
 
 // ── Helpers ──

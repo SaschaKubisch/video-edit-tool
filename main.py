@@ -38,7 +38,10 @@ from project import Project
 def cmd_app(args):
     """Launch the web app (default command)."""
     from server import run_server
-    run_server(port=args.port)
+    if args.project:
+        config.PROJECT_FILE = args.project
+    run_server(port=args.port, open_browser=not args.no_browser,
+               timeline_path=args.timeline, work_dir_path=args.work)
 
 
 def cmd_match(args):
@@ -552,6 +555,12 @@ def build_parser():
         help="Launch the web app (default)")
     p_app.add_argument("--port", type=int, default=config.SELECTOR_PORT,
         help=f"Port to run on (default: {config.SELECTOR_PORT})")
+    p_app.add_argument("--timeline", metavar="FILE",
+        help=f"Timeline file for the Film tab (default: {config.TIMELINE_FILE} next to the project file)")
+    p_app.add_argument("--work", metavar="DIR",
+        help="Work folder on the SSD (default: work_dir of the project file)")
+    p_app.add_argument("--no-browser", action="store_true",
+        help="Do not open a browser window")
     p_app.set_defaults(func=cmd_app)
 
     # ── match ──

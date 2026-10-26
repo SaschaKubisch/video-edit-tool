@@ -6,12 +6,13 @@ Provides API endpoints that the frontend calls, and serves the UI.
 import copy
 import json
 import os
+import re
 import sys
 import threading
 import traceback
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, unquote
 
 import config
 from project import Project, SceneMatch
@@ -22,9 +23,58 @@ _project_lock = threading.Lock()
 _status = {"step": "idle", "message": "Ready", "progress": 0}
 _status_lock = threading.Lock()
 
-# Only one background job (match, sync, resolve) may run at a time
+# Only one background job (match, sync, resolve, assemble, preview) may run at a time
 _job_running = False
 _job_lock = threading.Lock()
+
+# The film (SPECS 12): the timeline file, the work folder and the preview settings can be
+# set by the command line or by tests. Without them the timeline file is timeline.json
+# next to the project file and the work folder is the project's work_dir.
+_timeline_path = None
+_work_dir = None
+_preview_settings = None
+_timeline_lock = threading.Lock()      # one edit of the timeline file at a time
+
+PREVIEW_NAME = "preview"
+
+
+def configure(**kw):
+    """Set what the film endpoints use: timeline_path, work_dir, project, preview_settings.
+    Only the names given are changed; None or "" means "not set"."""
+    global _timeline_path, _work_dir, _preview_settings, _project
+    unknown = set(kw) - {"timeline_path", "work_dir", "project", "preview_settings"}
+    if unknown:
+        raise TypeError(f"unknown settings: {', '.join(sorted(unknown))}")
+    if "timeline_path" in kw:
+        _timeline_path = kw["timeline_path"] or None
+    if "work_dir" in kw:
+        _work_dir = kw["work_dir"] or None
+    if "preview_settings" in kw:
+        _preview_settings = kw["preview_settings"]
+    if "project" in kw:
+        with _project_lock:
+            _project = kw["project"]
+
+
+def reset_state():
+    """Free the job slot and set the status to idle (tests)."""
+    global _job_running
+    with _job_lock:
+        _job_running = False
+    _set_status("idle", "Ready", 0)
+
+
+def timeline_file() -> str:
+    if _timeline_path:
+        return _timeline_path
+    return str(Path(config.PROJECT_FILE).resolve().parent / config.TIMELINE_FILE)
+
+
+def work_dir() -> str:
+    if _work_dir:
+        return _work_dir
+    with _project_lock:
+        return _project.work_dir or ""
 
 
 def _set_status(step: str, message: str, progress: int = 0):
@@ -99,18 +149,40 @@ class AppHandler(BaseHTTPRequestHandler):
         port = self.server.server_address[1]
         hosts = {f"localhost:{port}", f"127.0.0.1:{port}"}
         if self.headers.get("Host", "") not in hosts:
-            _json_response(self, {"error": "Forbidden host"}, 403)
+            self._refuse("Forbidden host", is_post)
             return False
         if is_post:
             origin = self.headers.get("Origin")
             if origin is not None and origin not in {f"http://{h}" for h in hosts}:
-                _json_response(self, {"error": "Forbidden origin"}, 403)
+                self._refuse("Forbidden origin", is_post)
                 return False
         return True
+
+    def _refuse(self, message: str, is_post: bool):
+        """Answer 403. The request body is read first: a server that closes the socket
+        with unread data makes the client see a reset instead of the answer."""
+        if is_post:
+            try:
+                left = min(int(self.headers.get("Content-Length", 0)), 1 << 20)
+                while left > 0:
+                    chunk = self.rfile.read(min(65536, left))
+                    if not chunk:
+                        break
+                    left -= len(chunk)
+            except (ValueError, OSError):
+                pass
+        _json_response(self, {"error": message}, 403)
 
     def do_GET(self):
         if not self._check_request(False):
             return
+        try:
+            self._route_get()
+        except Exception as e:
+            traceback.print_exc()
+            _json_response(self, {"error": str(e)}, 500)
+
+    def _route_get(self):
         parsed = urlparse(self.path)
         path = parsed.path
 
@@ -126,6 +198,10 @@ class AppHandler(BaseHTTPRequestHandler):
             self._handle_browse(params)
         elif path.startswith("/api/thumbnail/"):
             self._serve_thumbnail(path)
+        elif path == "/api/timeline":
+            self._handle_get_timeline()
+        elif path.startswith("/api/preview/"):
+            self._serve_preview_file(unquote(path[len("/api/preview/"):]))
         else:
             self.send_error(404)
 
@@ -144,6 +220,12 @@ class AppHandler(BaseHTTPRequestHandler):
                 self._handle_sync()
             elif path == "/api/resolve":
                 self._handle_resolve()
+            elif path == "/api/timeline/edit":
+                self._handle_timeline_edit()
+            elif path == "/api/assemble":
+                self._handle_assemble()
+            elif path == "/api/preview":
+                self._handle_preview()
             else:
                 self.send_error(404)
         except json.JSONDecodeError:
@@ -360,6 +442,233 @@ class AppHandler(BaseHTTPRequestHandler):
 
         _json_response(self, {"status": "started"})
 
+    # ── The film: timeline, edits, preview ──
+
+    def _load_timeline(self):
+        """(Timeline, hash) of the timeline file, or None after answering 404 or 422."""
+        import timeline
+        path = timeline_file()
+        if not os.path.isfile(path):
+            _json_response(self, {"error": f"No timeline file at {path}. Assemble the film "
+                                  "first (the Assemble button, or python main.py assemble)."}, 404)
+            return None
+        try:
+            return timeline.Timeline.load(path), timeline.file_hash(path)
+        except (timeline.TimelineError, OSError) as e:
+            _json_response(self, {"error": f"{path} is not a timeline file: {e}"}, 422)
+            return None
+
+    def _handle_get_timeline(self):
+        import edits
+        with _timeline_lock:
+            loaded = self._load_timeline()
+        if loaded is None:
+            return
+        tl, h = loaded
+        findings = tl.validate(file_checks=False)
+        _json_response(self, {
+            "path": timeline_file(), "name": os.path.basename(timeline_file()), "hash": h,
+            "summary": edits.summary(tl, h, _review_flags()),
+            "findings": [f.as_dict() for f in findings],
+            "preview": _preview_state(h)})
+
+    def _handle_timeline_edit(self):
+        import edits
+        import store
+        import timeline
+        body = _read_body(self)
+        ops = body.get("operations") if isinstance(body, dict) else None
+        sent_hash = body.get("hash") if isinstance(body, dict) else None
+        if not isinstance(body, dict) or not isinstance(sent_hash, str) or not sent_hash:
+            _json_response(self, {"error": "The body must be an object with 'hash' (the hash "
+                                  "the page started from) and 'operations'."}, 400)
+            return
+        with _timeline_lock:
+            loaded = self._load_timeline()
+            if loaded is None:
+                return
+            tl, h = loaded
+            if h != sent_hash:
+                _json_response(self, {"error": "The timeline file changed since the page read "
+                                      "it. Reload.", "hash": h}, 409)
+                return
+            try:
+                new_data = edits.apply_operations(tl.data, ops)
+            except edits.OperationError as e:
+                _json_response(self, {"error": str(e)}, 400)
+                return
+            new = timeline.Timeline(new_data, tl.duplicates)
+            findings = new.validate(file_checks=False)
+            if timeline.has_errors(findings):
+                _json_response(self, {"error": "The change breaks a rule of the timeline file; "
+                                      "nothing was saved.",
+                                      "findings": [f.as_dict() for f in findings]}, 422)
+                return
+            try:
+                new_hash = store.save(new, timeline_file(), expected_hash=sent_hash)
+            except store.StaleHash as e:
+                _json_response(self, {"error": str(e), "hash": e.actual}, 409)
+                return
+        _json_response(self, {"hash": new_hash,
+                              "summary": edits.summary(new, new_hash, _review_flags()),
+                              "findings": [f.as_dict() for f in findings],
+                              "preview": _preview_state(new_hash)})
+
+    def _serve_preview_file(self, name):
+        """A file of <work>/previews, with HTTP range requests (SPECS 12). Any path that
+        leaves that folder, also by a symbolic link, is a 404."""
+        work = work_dir()
+        base = os.path.realpath(os.path.join(work, "previews")) if work else None
+        if not base or not name or "\0" in name or os.path.isabs(name):
+            self.send_error(404)
+            return
+        target = os.path.realpath(os.path.join(base, name))
+        if not target.startswith(base + os.sep) or not os.path.isfile(target):
+            self.send_error(404)
+            return
+        size = os.path.getsize(target)
+        start, end, status = 0, size - 1, 200
+        header = (self.headers.get("Range") or "").strip()
+        m = re.fullmatch(r"bytes=(\d*)-(\d*)", header)
+        if m and (m.group(1) or m.group(2)):
+            if not m.group(1):                      # the last n bytes
+                n = int(m.group(2))
+                start, end = max(0, size - n), size - 1
+                if n == 0:
+                    start = size
+            else:
+                start = int(m.group(1))
+                end = min(int(m.group(2)), size - 1) if m.group(2) else size - 1
+            if start >= size or start > end:
+                self.send_response(416)
+                self.send_header("Content-Range", f"bytes */{size}")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            status = 206
+        mime = {".mp4": "video/mp4", ".json": "application/json", ".vtt": "text/vtt",
+                ".jpg": "image/jpeg", ".png": "image/png"}.get(Path(target).suffix.lower(),
+                                                                "application/octet-stream")
+        length = end - start + 1
+        self.send_response(status)
+        self.send_header("Content-Type", mime)
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Content-Length", str(length))
+        self.send_header("Cache-Control", "no-cache")
+        if status == 206:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+        self.end_headers()
+        try:
+            with open(target, "rb") as f:
+                f.seek(start)
+                left = length
+                while left > 0:
+                    block = f.read(min(262144, left))
+                    if not block:
+                        break
+                    self.wfile.write(block)
+                    left -= len(block)
+        except (BrokenPipeError, ConnectionResetError):
+            pass            # the browser stopped reading (it seeks, or the tab closed)
+
+    def _handle_preview(self):
+        import render
+        import timeline
+        _read_body(self)
+        work = work_dir()
+        with _timeline_lock:
+            loaded = self._load_timeline()
+        if loaded is None:
+            return
+        if not work:
+            _json_response(self, {"error": "No work folder. Start the app with --work DIR, or "
+                                  "set work_dir in the project file."}, 400)
+            return
+        tl, h = loaded
+        findings = tl.validate(file_checks=False)
+        if timeline.has_errors(findings):
+            _json_response(self, {"error": "The timeline file is not valid; no preview was "
+                                  "started.", "findings": [f.as_dict() for f in findings]}, 422)
+            return
+        if not _try_start_job():
+            _json_response(self, {"error": "Another job is already running"}, 409)
+            return
+        _set_status("previewing", "Rendering the film preview...", 3)
+
+        def do_preview():
+            try:
+                settings = _preview_settings or render.PreviewSettings()
+                originals = sorted({str(Path(s[k]).parent) for s in tl.data["sources"].values()
+                                    for k in ("original_video", "audio")})
+
+                def progress(i, n):
+                    _set_status("previewing", f"Rendering segment {i} of {n}...",
+                                min(95, 5 + int(85 * i / max(n, 1))))
+
+                result = render.render_preview(tl, work, name=PREVIEW_NAME, settings=settings,
+                                               timeline_hash=h, protected=originals,
+                                               log=lambda s: None, progress=progress)
+                _set_status("previewed",
+                            f"Film preview ready: {result.frames} frames, "
+                            f"{len(result.rendered)} segments rendered, {len(result.cached)} reused.",
+                            100)
+            except Exception as e:
+                traceback.print_exc()
+                _set_status("error", f"Preview failed: {e}", 0)
+            finally:
+                _end_job()
+
+        threading.Thread(target=do_preview, daemon=True).start()
+        _json_response(self, {"status": "started"})
+
+    def _handle_assemble(self):
+        body = _read_body(self)
+        body = body if isinstance(body, dict) else {}
+        with _project_lock:
+            proj = copy.deepcopy(_project)
+        work = work_dir()
+        if not proj.matches:
+            _json_response(self, {"error": "The project has no matched clips. Match the files "
+                                  "first."}, 400)
+            return
+        if not work:
+            _json_response(self, {"error": "No work folder. Start the app with --work DIR, or "
+                                  "set work_dir in the project file."}, 400)
+            return
+        path = timeline_file()
+        replace = bool(body.get("replace"))
+        if os.path.exists(path) and not replace:
+            _json_response(self, {"error": "A timeline file exists. Send replace: true to "
+                                  "assemble again; the old file is kept as a snapshot."}, 409)
+            return
+        limit = body.get("limit")
+        limit = limit if isinstance(limit, int) and not isinstance(limit, bool) and limit > 0 else None
+        only = body.get("only")
+        only = [s for s in only if isinstance(s, str)] if isinstance(only, list) else None
+        if not _try_start_job():
+            _json_response(self, {"error": "Another job is already running"}, 409)
+            return
+        _set_status("assembling", "Assembling the film...", 10)
+
+        def do_assemble():
+            try:
+                import assemble
+                result = assemble.assemble_project(proj, work, path, replace=replace, limit=limit,
+                                                   only=only, log=lambda s: None)
+                film = result.report["film"]
+                _set_status("assembled",
+                            f"Assembled {film['segments']} segments from {film['clips_used']} "
+                            f"clips, {film['seconds']:.0f} s; {len(film['left_out'])} clips left out.",
+                            100)
+            except Exception as e:
+                traceback.print_exc()
+                _set_status("error", f"Assembly failed: {e}", 0)
+            finally:
+                _end_job()
+
+        threading.Thread(target=do_assemble, daemon=True).start()
+        _json_response(self, {"status": "started"})
+
     # ── Thumbnails ──
 
     def _serve_thumbnail(self, path):
@@ -437,16 +746,64 @@ class AppHandler(BaseHTTPRequestHandler):
         }
 
 
-def run_server(port: int = None, open_browser: bool = True):
+def _review_flags() -> dict:
+    """Segment id -> reasons to look at it, from the assembly report in the work folder."""
+    work = work_dir()
+    if not work:
+        return {}
+    path = os.path.join(work, "reports", "assembly-report.json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            report = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    flags = {}
+    for clip in report.get("clips", []):
+        if clip.get("review") and clip.get("review_reasons"):
+            for seg_id in clip.get("segments", []):
+                flags[seg_id] = clip["review_reasons"]
+    return flags
+
+
+def _preview_state(current_hash: str) -> dict:
+    """Whether a film preview exists and was made from the timeline file as it is now."""
+    state = {"exists": False, "up_to_date": False, "file": None, "frames": None}
+    work = work_dir()
+    if not work:
+        return state
+    folder = os.path.join(work, "previews")
+    meta_path = os.path.join(folder, f"{PREVIEW_NAME}.json")
+    try:
+        with open(meta_path, encoding="utf-8") as f:
+            meta = json.load(f)
+    except (OSError, ValueError):
+        return state
+    if not os.path.isfile(os.path.join(folder, str(meta.get("file", "")))):
+        return state
+    state.update(exists=True, file=meta["file"], frames=meta.get("frames"),
+                 seconds=meta.get("seconds"), rendered_at=meta.get("rendered_at"),
+                 up_to_date=meta.get("timeline_hash") == current_hash and not meta.get("range"))
+    return state
+
+
+def make_server(port: int = 0, host: str = "127.0.0.1"):
+    """A server bound to `host`:`port` (port 0 picks a free one). Not started."""
+    httpd = ThreadingHTTPServer((host, port), AppHandler)
+    httpd.daemon_threads = True
+    return httpd
+
+
+def run_server(port: int = None, open_browser: bool = True, timeline_path: str = None,
+               work_dir_path: str = None):
     """Start the app server."""
     port = port or config.SELECTOR_PORT
+    configure(timeline_path=timeline_path, work_dir=work_dir_path)
     _load_project()
-    server = ThreadingHTTPServer(("127.0.0.1", port), AppHandler)
-    server.daemon_threads = True
+    server = make_server(port)
     print(f"\n  Ambient Video Automation")
     print(f"  Running at: http://localhost:{port}")
+    print(f"  Timeline file: {timeline_file()}")
     print(f"  Press Ctrl+C to stop.\n")
-
     if open_browser:
         try:
             import webbrowser
