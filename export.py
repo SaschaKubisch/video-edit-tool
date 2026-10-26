@@ -644,7 +644,10 @@ def render_export(tl, name: str, work_dir: str, decoder, timeline_hash: str = No
     if protected:
         safety.assert_not_inside(out_path, protected)
         safety.assert_not_inside(work_dir, protected)
-    convert.check_work_dir_available(os.path.dirname(os.path.abspath(out_path)))
+    try:
+        convert.check_work_dir_available(os.path.dirname(os.path.abspath(out_path)))
+    except convert.WorkDirUnavailable as e:
+        raise ExportError(str(e))
     fps = tl.fps
     plan = render.make_plan(tl, preview_width=entry["width"])
     frames = plan.film_frames

@@ -549,3 +549,12 @@ class AudioFileTests(unittest.TestCase):
                                                  48000, scratch, "ffmpeg")
             self.assertIsNone(level)
             np.testing.assert_array_equal(np.fromfile(path, "<f4").reshape(-1, 2), x)
+
+
+class VolumeTests(ExportFixture):
+    def test_an_output_on_a_volume_that_is_not_mounted_is_an_export_error(self):
+        e = self.entry("nowhere")
+        e["output"] = "/Volumes/not-mounted-for-sure/film.mp4"
+        tl = self.make_tl(segments=[("A", 10, 40)], exports=[e])
+        with self.assertRaisesRegex(export.ExportError, "not mounted"):
+            self.run_export(tl, "nowhere")
