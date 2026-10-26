@@ -11,12 +11,13 @@ A local tool for the BMPCC 4K + Zoom H2N dual-system workflow. It pairs each cam
 ## Quick start
 
 ```bash
-pip install -r requirements.txt
+uv venv --python 3.12 .venv
+uv pip install --python .venv/bin/python -r requirements.txt
 brew install ffmpeg        # provides ffmpeg and ffprobe
-python3 main.py            # opens http://localhost:8765
+.venv/bin/python main.py   # opens http://localhost:8765
 ```
 
-Requires Python 3.9 or newer, numpy, scipy, tqdm and ffmpeg/ffprobe on the PATH.
+Requires Python 3.12 (in the `.venv` folder next to the tool), the packages in `requirements.txt` (numpy, scipy, tqdm, vapoursynth with vapoursynth-brawsource, opencv-python-headless) and ffmpeg/ffprobe on the PATH. The tests run with `.venv/bin/python -m unittest discover -s tests -v`; 60 tests of version 1.1.0 pass on Python 3.12 without code changes.
 
 ## UI workflow
 
@@ -83,7 +84,7 @@ To turn off the sequential-recording rule (e.g. when mixing cards whose numberin
 ## Tests
 
 ```bash
-python3 -m unittest discover -s tests -v
+.venv/bin/python -m unittest discover -s tests -v
 ```
 
 See `PRD.md` for requirements and `SPECS.md` for the technical design.
