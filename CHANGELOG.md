@@ -21,6 +21,12 @@
   report `reports/render-report.json`; a credit file next to a film that uses a credited LUT;
   `render --detach` for a background run with a log and a pid file; SIGTERM stops it clean.
 - `Decoder.write_frame_range`.
+- The Shotcut project and its read-back (decision D11): `export-shotcut` writes `film.mlt`
+  (the preview copies on V1, the sound of each clip shifted by its offset in whole samples
+  on two sound tracks, crossfades and fades as filters, the creative LUT as a filter) and
+  checks it with Shotcut's own `melt`; `import-shotcut` reads the cut points and the order
+  back after the hand work, lists what was added in Shotcut and is not read, and refuses cut
+  points that break a rule of the timeline file.
 
 ### Added
 - `convert` command: one small preview copy of every matched `.braw` clip

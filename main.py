@@ -937,6 +937,78 @@ def cmd_render(args, decoder=None):
     sys.exit(1 if failed else 0)
 
 
+def cmd_export_shotcut(args):
+    """Write the Shotcut project of the timeline file (SPECS 8.6)."""
+    import export_shotcut
+    import safety
+    import timeline
+
+    def fail(message, code=2):
+        print(f"Error: {message}", file=sys.stderr)
+        sys.exit(code)
+
+    path = default_timeline_path(args)
+    try:
+        tl = timeline.Timeline.load(path)
+    except FileNotFoundError:
+        fail(f"timeline file not found: {path}")
+    except timeline.TimelineError as e:
+        fail(str(e), 1)
+    work_dir = _work_dir_of(args, fail)
+    out = args.out or os.path.join(work_dir, "film.mlt")
+    try:
+        result = export_shotcut.write_project(tl, work_dir, out, protected=timeline_originals(tl.data),
+                                              check=not args.no_check,
+                                              log=lambda s: print(s, flush=True))
+    except (export_shotcut.ShotcutError, safety.OriginalsProtectedError) as e:
+        fail(str(e), 1)
+    print(f"Shotcut project: {result.path}  ({result.segments} scenes, profile "
+          f"{result.profile[0]}x{result.profile[1]})")
+    for w in result.warnings:
+        print(f"  warning: {w}")
+    print("Open it in Shotcut for hand work, save it, then: python main.py import-shotcut")
+
+
+def cmd_import_shotcut(args):
+    """Read the cut points and the order back from a saved Shotcut project (SPECS 8.6)."""
+    import import_shotcut
+    import timeline
+
+    def fail(message, code=2):
+        print(f"Error: {message}", file=sys.stderr)
+        sys.exit(code)
+
+    path = default_timeline_path(args)
+    if not os.path.isfile(path):
+        fail(f"timeline file not found: {path}")
+    mlt = args.mlt or os.path.join(_work_dir_of(args, fail), "film.mlt")
+    if not os.path.isfile(mlt):
+        fail(f"Shotcut project not found: {mlt}")
+    try:
+        report = import_shotcut.read_back(mlt, path, dry_run=args.dry_run)
+    except (import_shotcut.ShotcutImportError, timeline.TimelineError) as e:
+        fail(str(e), 1)
+    verb = "Would change" if args.dry_run else "Changed"
+    if report.nothing_changed:
+        print("The cut points and the order in the Shotcut project are those of the timeline file; "
+              "nothing was changed.")
+    for c in report.changed:
+        print(f"  {c['id']}: in {c['in'][0]} -> {c['in'][1]}, out {c['out'][0]} -> {c['out'][1]}")
+    if report.moved:
+        print(f"  new order for: {', '.join(report.moved)}")
+    if report.added:
+        print(f"  new scenes: {', '.join(report.added)}")
+    if report.removed:
+        print(f"  removed (enabled: false): {', '.join(report.removed)}")
+    if not report.nothing_changed:
+        print(f"{verb} the timeline file {path}." + ("" if args.dry_run else
+              " The old file is kept as a snapshot (python main.py timeline undo)."))
+    if report.ignored:
+        print("Not read (made in Shotcut, they do not come back):")
+        for line in report.ignored:
+            print(f"  - {line}")
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         description="Dual-System Audio Video Automation (BMPCC 4K + Zoom H2N)",
@@ -1187,6 +1259,24 @@ def build_parser():
     p_render.add_argument("--detach", action="store_true",
         help="Run in the background, in a session of its own, with a log and a pid file in <work>/reports")
     p_render.set_defaults(func=cmd_render)
+
+    # ── export-shotcut, import-shotcut ──
+    p_xs = subparsers.add_parser("export-shotcut",
+        help="Write the Shotcut project (film.mlt) of the timeline file, for hand work")
+    p_xs.add_argument("--file", "-f",
+        help=f"Timeline file (default: {config.TIMELINE_FILE} next to the project file)")
+    p_xs.add_argument("--work", "-w", help="Work folder (default: work_dir of the project file)")
+    p_xs.add_argument("--out", metavar="FILE", help="The project file to write (default: <work>/film.mlt)")
+    p_xs.add_argument("--no-check", action="store_true", help="Do not read the project with melt")
+    p_xs.set_defaults(func=cmd_export_shotcut)
+    p_is = subparsers.add_parser("import-shotcut",
+        help="Read the cut points and the order back from the saved Shotcut project")
+    p_is.add_argument("--file", "-f",
+        help=f"Timeline file (default: {config.TIMELINE_FILE} next to the project file)")
+    p_is.add_argument("--work", "-w", help="Work folder (default: work_dir of the project file)")
+    p_is.add_argument("--mlt", metavar="FILE", help="The Shotcut project to read (default: <work>/film.mlt)")
+    p_is.add_argument("--dry-run", action="store_true", help="Show what would change; write nothing")
+    p_is.set_defaults(func=cmd_import_shotcut)
 
     # ── look ──
     p_look = subparsers.add_parser("look",

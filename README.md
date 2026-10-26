@@ -52,6 +52,12 @@ checks. `export add --preset film-master` adds a ProRes 422 HQ master that stays
 put its line in the video description. A stopped render (`kill PID`) removes its files and starts over
 when you run the command again.
 
+**Shotcut, for rare hand work.** `main.py export-shotcut --work DIR` writes `DIR/film.mlt` for Shotcut (it uses the
+preview copies, because Shotcut cannot read BRAW) and `DIR/audio-synced/`, and checks the project with Shotcut's
+`melt` without opening Shotcut. After the hand work, `main.py import-shotcut --work DIR` reads the cut points and
+the order back into the timeline file (the old file is kept as a snapshot); filters, transitions and audio edits made
+in Shotcut do not come back, and the command lists them. Then `render` makes the 4K film from the `.braw` files.
+
 **Sync offset per clip.** The tool measures one offset per clip when it matches the files (the seconds by which a sound comes later in the recorder's file than in the camera's). If one is wrong, the Film tab has a card, Sync offset per clip: type the right offset in seconds (a minus sign is allowed). The tool stores it in the timeline file as `audio_offset_hand_s`, beside the measured `audio_offset_s`, which is never changed. The sound of that clip's scenes uses the typed offset; the pictures do not change, so the next preview renders only sound again. Empty the field, or press Original, to use the measured offset again. A value beyond 30 seconds is refused, and a typed offset that leaves the recorder file without sound for a scene is a warning. `timeline summary` lists the offsets set by hand, and `assemble --replace` keeps them. `project.json` is not written. `PRD.md` and `SPECS.md` describe the plan and say which parts are built.
 
 ## UI workflow
