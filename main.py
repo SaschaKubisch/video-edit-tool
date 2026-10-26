@@ -15,7 +15,8 @@ Commands:
   convert  make a small preview copy of every matched .braw clip in the work folder
   analyse  find the sync clap at the start of each clip, find the steady scenes (reports in the work folder)
   assemble build the timeline file: clap cut, steady scenes, fades
-  timeline validate the timeline file
+  preview  render the film preview from the preview copies
+  timeline validate or summarise the timeline file
 
 Usage:
   python main.py
@@ -436,11 +437,33 @@ def cmd_assemble(args):
     print(f"Next:     python main.py timeline validate --file {output}")
 
 
+def default_timeline_path(args) -> str:
+    """The timeline file named by --file, else timeline.json next to the project file."""
+    explicit = getattr(args, "file", None)
+    if explicit:
+        return explicit
+    project_file = args.project or config.PROJECT_FILE
+    return str(Path(project_file).resolve().parent / config.TIMELINE_FILE)
+
+
 def cmd_timeline(args):
     """Work with the timeline file (SPECS 3, 4.3)."""
     import timeline
 
-    path = args.file or "timeline.json"
+    path = default_timeline_path(args)
+    if args.timeline_command == "summary":
+        import edits
+        try:
+            tl = timeline.Timeline.load(path)
+        except FileNotFoundError:
+            print(f"Error: timeline file not found: {path}", file=sys.stderr)
+            sys.exit(2)
+        except timeline.TimelineError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            sys.exit(1)
+        print(edits.format_summary(edits.summary(tl, file_hash=timeline.file_hash(path)),
+                                   name=os.path.basename(path)), end="")
+        return
     if args.timeline_command == "validate":
         try:
             tl = timeline.Timeline.load(path)
@@ -455,6 +478,63 @@ def cmd_timeline(args):
         findings = tl.validate(file_checks=not args.no_file_checks)
         print(json.dumps([f.as_dict() for f in findings], indent=2))
         sys.exit(1 if timeline.has_errors(findings) else 0)
+
+
+def cmd_preview(args):
+    """Render the film preview from the preview copies (SPECS 5.5)."""
+    import render
+    import safety
+    import timeline
+
+    def fail(message, code=2):
+        print(f"Error: {message}", file=sys.stderr)
+        sys.exit(code)
+
+    path = default_timeline_path(args)
+    try:
+        tl = timeline.Timeline.load(path)
+    except FileNotFoundError:
+        fail(f"timeline file not found: {path}")
+    except timeline.TimelineError as e:
+        fail(str(e), 1)
+    work_dir = args.work
+    if not work_dir:
+        project_file = args.project or config.PROJECT_FILE
+        if Path(project_file).exists():
+            work_dir = Project.load(project_file).work_dir
+    if not work_dir:
+        fail("No work directory. Pass --work DIR (a folder on the SSD) or set "
+             "work_dir in the project file.")
+    film_range = None
+    if args.range:
+        try:
+            a, b = (float(x) for x in args.range.split(":"))
+            if not 0 <= a < b:
+                raise ValueError
+            film_range = (a, b)
+        except ValueError:
+            fail(f"--range must look like 60:90 (film seconds, from:to), not {args.range!r}")
+    findings = tl.validate(file_checks=not args.no_file_checks)
+    if timeline.has_errors(findings):
+        print(json.dumps([f.as_dict() for f in findings], indent=2))
+        print("The timeline is not valid, so no preview was rendered.", file=sys.stderr)
+        sys.exit(1)
+    settings = render.PreviewSettings(width=args.width or config.FILM_PREVIEW_WIDTH,
+                                      encoder=args.encoder or config.FILM_PREVIEW_ENCODER)
+    originals = sorted({str(Path(s[k]).parent) for s in tl.data["sources"].values()
+                        for k in ("original_video", "audio")})
+    try:
+        result = render.render_preview(tl, work_dir, name=args.name, settings=settings,
+                                       film_range=film_range, timeline_hash=timeline.file_hash(path),
+                                       protected=originals)
+    except (render.RenderError, safety.OriginalsProtectedError) as e:
+        fail(str(e), 1)
+    print(f"Preview: {result.path}")
+    print(f"  {result.frames} frames, {result.seconds:.2f} s; "
+          f"{len(result.rendered)} rendered, {len(result.cached)} reused; "
+          f"{result.elapsed_s:.1f} s")
+    for w in result.warnings:
+        print(f"  warning: {w}")
 
 
 def build_parser():
@@ -606,13 +686,36 @@ def build_parser():
     p_timeline = subparsers.add_parser("timeline",
         help="Work with the timeline file")
     tl_sub = p_timeline.add_subparsers(dest="timeline_command", required=True)
+    p_summary = tl_sub.add_parser("summary",
+        help="Print the film as a table: segments, film times, sources, frames")
+    p_summary.add_argument("--file", "-f",
+        help=f"Timeline file (default: {config.TIMELINE_FILE} next to the project file)")
     p_validate = tl_sub.add_parser("validate",
         help="Check the timeline file; print the findings as JSON; exit 1 on errors")
     p_validate.add_argument("--file", "-f",
-        help="Timeline file (default: timeline.json)")
+        help=f"Timeline file (default: {config.TIMELINE_FILE} next to the project file)")
     p_validate.add_argument("--no-file-checks", action="store_true",
         help="Skip the checks that read the disk (files, hashes)")
     p_timeline.set_defaults(func=cmd_timeline)
+
+    # ── preview ──
+    p_preview = subparsers.add_parser("preview",
+        help="Render the film preview from the preview copies (cuts, crossfades, fades)")
+    p_preview.add_argument("--file", "-f",
+        help=f"Timeline file (default: {config.TIMELINE_FILE} next to the project file)")
+    p_preview.add_argument("--work", "-w",
+        help="Work folder on the SSD (default: work_dir of the project file)")
+    p_preview.add_argument("--name", default="preview",
+        help="Name of the preview file in <work>/previews (default: preview)")
+    p_preview.add_argument("--range", metavar="A:B",
+        help="Render only the segments that touch film seconds A to B")
+    p_preview.add_argument("--encoder", choices=["h264_videotoolbox", "libx264"],
+        help=f"Encoder of the segment files (default: {config.FILM_PREVIEW_ENCODER})")
+    p_preview.add_argument("--width", type=int,
+        help=f"Width of the preview in pixels (default: {config.FILM_PREVIEW_WIDTH})")
+    p_preview.add_argument("--no-file-checks", action="store_true",
+        help="Do not read the files while validating the timeline")
+    p_preview.set_defaults(func=cmd_preview)
 
     return parser
 
