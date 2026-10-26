@@ -3,7 +3,7 @@
 **Version:** 2.2 (draft for the owner's review)
 **Date:** 2026-10-26
 **Owner:** Sascha Kubisch
-**Status:** Matching and sync (requirements M1 to M6) are built and released as v1.1.0. Step 1, the conversion test, is done: its results are in section 5 and in `SPECS.md` section 6. Of the rest, the first part of step 2 is built on the branch `editor-step2` (the `convert` command, the timeline file's loader and validator, the clap finder); everything else in this document is planned and not built. Section 3 records the owner's decisions of 2026-10-26 on storage, colour, frame, Python and export. Section 2 replaces the goal of v1.1. Version 2.2 records the owner's decisions of 2026-10-26 on the clap (D6), steady scenes (D7), transitions (D8), reading cuts back from Shotcut (D11) and the encoder (D17); step 2 is being built.
+**Status:** Matching and sync (requirements M1 to M6) are built and released as v1.1.0. Step 1, the conversion test, is done: its results are in section 5 and in `SPECS.md` section 6. Of the rest, the first part of step 2 is built on the branch `editor-step2` (the `convert` command, the timeline file's loader and validator, the clap finder); everything else in this document is planned and not built. Section 3 records the owner's decisions of 2026-10-26 on storage, colour, frame, Python and export. Section 2 replaces the goal of v1.1. Version 2.2 records the owner's decisions of 2026-10-26 on the clap (D6), steady scenes (D7, including the clip with no steady scene), transitions (D8), reading cuts back from Shotcut (D11) and the encoder (D17); step 2 is being built.
 
 Companion document: `SPECS.md` (how it is built, the timeline file format, the tests).
 
@@ -67,7 +67,7 @@ The tool does all automatic work on one timeline file. It renders a preview and 
 
 ## 3. Settled Decisions (Owner)
 
-These decisions are settled. This document builds on them and does not reopen them. Each is also a row in section 12 or a requirement in section 9. D1, D2, D3 and D5 were open decisions in version 2.0; the owner answered them on 2026-10-26 (section 14 lists what remains open). D6, D7, D8, D11 and D17 were answered later the same day.
+These decisions are settled. This document builds on them and does not reopen them. Each is also a row in section 12 or a requirement in section 9. D1, D2, D3 and D5 were open decisions in version 2.0; the owner answered them on 2026-10-26 (section 14 lists what remains open). D6, D7, D8, D11 and D17 were answered later the same day; the last part of D7 (a clip with no steady scene) was answered after that.
 
 | Area | Decision |
 |------|----------|
@@ -80,7 +80,7 @@ These decisions are settled. This document builds on them and does not reopen th
 | Python (D3) | **Python 3.12 and OpenCV allowed**, as the owner decided: "Yes, 3.12 + OpenCV". The tool moves to Python 3.12 and runs in its own environment. It may use OpenCV. |
 | Export | **Default final export:** MP4, H.264 video, DCI 4K 4096 x 2160, about 45 Mbit/s, AAC audio. YouTube's recommended range for 4K at 30 frames per second is 35 to 45 Mbit/s [documented, Src11]. **Master:** a ProRes 422 HQ `.mov` file is made only when the owner ticks it; it needs about 130 GB per 20 minutes at DCI 4K [estimate given with the decision; `SPECS.md` section 5.6 gives the arithmetic], so the free space is checked first. **Vertical shorts:** MP4, H.264, 1080 x 1920. The owner first said: "for the final export we can do quick time movie or another best practice format", then chose this. |
 | Clap (D6) | **"Only at the start".** Each clip has one clap, at its beginning. The tool cuts everything up to 0.5 s after the clap (starting value, changeable). A clip without a clap is kept from its first steady frame and is listed in the report. |
-| Steady scenes (D7) | **"Every steady scene".** The tool keeps each steady part of a clip as its own scene and drops only the movement between them. A scene shorter than 2 s is dropped (starting value, changeable). |
+| Steady scenes (D7) | **"Every steady scene".** The tool keeps each steady part of a clip as its own scene and drops only the movement between them. A scene shorter than 2 s is dropped (starting value, changeable). A clip with no steady scene of that length: the owner answered **"Leave it out, list it"**. The clip is not put on the timeline, the report names it, and the owner can add it back by hand. |
 | Transitions (D8) | **"Hard cut"** for the picture. The sound crossfades for 0.5 s at every join. The film fades in over 1 s and out over 2 s (starting values, changeable). |
 | Shotcut read-back (D11) | **"Tool reads cuts back".** After hand work in Shotcut, the tool reads the cut points and the order from the Shotcut project back into its timeline and renders the 4K film from the `.braw` files. Effects made only in Shotcut do not come back. Built in step 3. This answers the part of D11 about the preview size. The part about the audio form is still open (section 14). |
 | Encoder (D17) | **"Hardware (fast)".** The default encoder of the final export is `h264_videotoolbox` (Apple's hardware encoder) at 45 Mbit/s. `libx264` (software) stays selectable. |
@@ -368,7 +368,7 @@ Step 1 tested this method on two clips (section 5.1). These requirements describ
 | The tool renders preview and film itself. | Owner | Render with Shotcut's engine (`melt`). | Owner decision. The specification builds on `ffmpeg-full` and the decoder (Design). `melt` reads the preview copies and renders from them, and Shotcut's own ffmpeg cannot decode BRAW [measured]. |
 | A Shotcut project is written last. After hand work the tool reads the cut points and the order back; effects made only in Shotcut do not come back. (D11) | Owner | Never read back (version 2.1); a reader for all Shotcut edits, filters included; full-size ProRes copies for Shotcut. | The owner answered "Tool reads cuts back". Cut points and order are plain numbers in the MLT XML (`in` and `out` of each playlist entry) [inference]. The preview copy and the `.braw` file have the same frame numbers, so the 4K render can use them. A reader for effects would need a model of every Shotcut filter [inference]. The MLT format is documented as unstable [documented, Src6], so the reader targets one tested Shotcut version. |
 | One clap per clip, at the start. Cut up to 0.5 s after it. A clip without a clap starts at its first steady frame and is listed. (D6) | Owner | A clap at the end as well; search the whole clip. | The owner answered "Only at the start". The 0.5 s guard is a starting value that the owner can change. |
-| Keep every steady scene of a clip; drop only the movement between them; drop scenes shorter than 2 s. (D7) | Owner | Keep only the steadiest scene of each clip. | The owner answered "Every steady scene". 2 s is a starting value. The case of a clip with no scene of 2 s is not decided; the plan leaves the clip out and lists it. |
+| Keep every steady scene of a clip; drop only the movement between them; drop scenes shorter than 2 s. A clip with no steady scene is left out and listed. (D7) | Owner | Keep only the steadiest scene of each clip. Keep the whole clip after the clap when it has no steady scene. | The owner answered "Every steady scene". 2 s is a starting value. For a clip with no scene of 2 s the owner answered "Leave it out, list it": the clip is not put on the timeline, the report names it, and the owner can add it back by hand. |
 | Hard cut for the picture. Sound crossfade 0.5 s. Film fade-in 1 s, fade-out 2 s. (D8) | Owner | A dissolve between scenes. | The owner answered "Hard cut" for the picture. The lengths are starting values that the owner can change. |
 | The default encoder of the final export is `h264_videotoolbox` at 45 Mbit/s; `libx264` stays selectable. (D17) | Owner | `libx264` preset slow as the default. | The owner answered "Hardware (fast)". Measured on 5 s of a `brlt` clip at 4096 x 2160 (section 5.1): `h264_videotoolbox` ran at 13.9 to 15.2 fps and gave 45.7 Mbit/s; `libx264` preset slow ran at 4.1 to 4.4 fps and gave 49.1 Mbit/s with the same 45 Mbit/s setting. A 20-minute film takes about 40 minutes against about 2.4 hours at the loads of that test [arithmetic]. Picture quality was compared on one frame only (PSNR against the step-1 still: 39.1 dB and 39.3 dB). Check 3.8 compares both on the whole first shoot. |
 | One LUT for the whole film, chosen from side-by-side stills; tetrahedral interpolation. | Owner | Per-clip grading. | Fits static ambient films; one choice, easy to repeat. |
@@ -405,15 +405,11 @@ Step 1 tested this method on two clips (section 5.1). These requirements describ
 
 Nothing here is decided. Where the owner has said something, it is quoted. The current plan in `SPECS.md` is a technical default, not a decision. Each question is needed before the step named.
 
-Answered on 2026-10-26 and moved to section 3 (settled decisions) and section 12 (rationale): **D1** storage (option A), **D2** colour, **D3** Python and packages, **D5** frame shape, the default LUT of **D10**, **D6** the clap, **D7** steady scenes, **D8** transitions and fades, **D17** the encoder, and the preview-size part of **D11**. These numbers are not reused. **D17** came from the speed measurements of step 1.
+Answered on 2026-10-26 and moved to section 3 (settled decisions) and section 12 (rationale): **D1** storage (option A), **D2** colour, **D3** Python and packages, **D5** frame shape, the default LUT of **D10**, **D6** the clap, **D7** steady scenes (including the clip with no steady scene: "Leave it out, list it"), **D8** transitions and fades, **D17** the encoder, and the preview-size part of **D11**. These numbers are not reused. **D17** came from the speed measurements of step 1.
 
 **Any time**
 
 - **D4. Does the Resolve push stay as an option?** The owner said: "no longer needs DaVinci Resolve for these films". Open: keep the Resolve push, the audio copy step (R1, R2) and their tests, or remove them. Until answered, they stay in the code and are not extended.
-
-**Before step 2**
-
-- **D7, the part not answered.** What to do with a clip that has no steady scene of at least 2 s. The plan: leave the clip out and list it in the report. A setting can keep the whole clip after the clap instead.
 
 **Before step 3**
 
@@ -450,7 +446,8 @@ Answered on 2026-10-26 and moved to section 3 (settled decisions) and section 12
 
 - Decisions moved from open to settled: D6 ("Only at the start"), D7 ("Every steady scene"), D8 ("Hard cut"), D17 ("Hardware (fast)") and the preview-size part of D11 ("Tool reads cuts back"). Section 3 has new rows, section 12 new rows, section 14 shrinks.
 - Reading cut points and order back from Shotcut is now in scope (new requirement E7, step 3). It was out of scope in version 2.1. E4 no longer says "one-way".
-- Not answered and still open: what to do with a clip that has no steady scene (D7), and the audio form in the Shotcut project (D11).
+- Not answered and still open: the audio form in the Shotcut project (D11).
+- Added later on 2026-10-26: the owner answered the last open part of D7, what to do with a clip that has no steady scene: **"Leave it out, list it"**. The clip is not put on the timeline, the report names it, and the owner can add it back by hand. The plan's setting that would keep the whole clip instead is dropped.
 
 **Changed in version 2.1 against version 2.0**
 
