@@ -244,6 +244,19 @@ def cmd_resolve(args):
         sys.exit(1)
 
 
+def install_graceful_stop():
+    """Make `kill PID` (SIGTERM) stop a long run the clean way: it raises
+    KeyboardInterrupt, so the partial file is removed, the lock released and the
+    clip left as 'partial' for the next run. (A job started in the background of
+    a shell ignores SIGINT, so SIGTERM is the way to stop it.)"""
+    import signal
+
+    def handler(signum, frame):
+        raise KeyboardInterrupt()
+
+    signal.signal(signal.SIGTERM, handler)
+
+
 def cmd_convert(args, decoder=None):
     """Make the preview copies of the matched .braw clips (SPECS 6)."""
     import convert
@@ -317,11 +330,15 @@ def cmd_convert(args, decoder=None):
 
     conv = convert.Converter(work_dir, decoder, settings, lut,
                              safety.originals_folders(project))
+    install_graceful_stop()
     try:
         summary = conv.run(clips, dry_run=args.dry_run)
     except (safety.OriginalsProtectedError, convert.WorkDirUnavailable,
             convert.NotEnoughSpace, convert.AlreadyRunning) as e:
         fail(str(e))
+    except KeyboardInterrupt:
+        print("Interrupted. Run the same command again to continue; finished copies are kept.")
+        sys.exit(130)
     sys.exit(summary.exit_code)
 
 

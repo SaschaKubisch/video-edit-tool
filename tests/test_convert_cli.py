@@ -119,5 +119,48 @@ class ConvertCliTests(unittest.TestCase):
         self.assertFalse((self.ws.work / "conversion.json").exists())
 
 
+
+class GracefulStopTests(unittest.TestCase):
+    """`kill` (SIGTERM) must stop a long run cleanly: the partial copy removed, the
+    lock released, the clip left as 'partial' so that the next run converts it again.
+    A background job started by a shell ignores SIGINT, so SIGTERM is the way to stop."""
+
+    def test_sigterm_becomes_a_keyboard_interrupt_and_the_run_can_resume(self):
+        import os
+        import signal
+        import threading
+
+        import convert
+        ws = Workspace(self, names=("A_C001", "A_C002"))
+        real = ws.decoder.write_frames
+        started = threading.Event()
+
+        def slow(path, scale, sink, max_frames=None):
+            if path == ws.refs[1][1]:
+                started.set()
+                os.kill(os.getpid(), signal.SIGTERM)       # as `kill pid` would
+            return real(path, scale, sink, max_frames)
+
+        ws.decoder.write_frames = slow
+        old = signal.getsignal(signal.SIGTERM)
+        self.addCleanup(signal.signal, signal.SIGTERM, old)
+        main.install_graceful_stop()
+        conv = convert.Converter(str(ws.work), ws.decoder,
+                                 convert.PreviewSettings(encoder="libx264"), str(ws.lut),
+                                 [str(ws.src)], log=lambda s: None, free_bytes=lambda p: 10 ** 12)
+        refs = [convert.ClipRef(n, p) for n, p in ws.refs]
+        with self.assertRaises(KeyboardInterrupt):
+            conv.run(refs)
+        self.assertTrue(started.is_set())
+        self.assertFalse((ws.work / ".convert.lock").exists())
+        self.assertEqual(list(ws.work.rglob("*.partial")), [])
+        data = json.loads((ws.work / "conversion.json").read_text())
+        self.assertEqual(data["clips"]["A_C001"]["status"], "done")
+        self.assertEqual(data["clips"]["A_C002"]["status"], "partial")
+        ws.decoder.write_frames = real
+        summary = conv.run(refs)
+        self.assertEqual((summary.converted, summary.skipped), (1, 1))
+
+
 if __name__ == "__main__":
     unittest.main()
