@@ -13,6 +13,8 @@ Commands:
   resolve  Push the ordered timeline (V1 video, A2 audio) into DaVinci Resolve
   rename   (legacy) rename both files of each pair to scene_NN.*, with undo
   convert  make a small preview copy of every matched .braw clip in the work folder
+  analyse  find the sync clap at the start of each clip (report in the work folder)
+  timeline validate the timeline file
 
 Usage:
   python main.py
@@ -323,6 +325,35 @@ def cmd_convert(args, decoder=None):
     sys.exit(summary.exit_code)
 
 
+def cmd_analyse(args):
+    """Analyse the clips of the project (SPECS 7). So far: the sync clap."""
+    import clap
+    import safety
+
+    def fail(message):
+        print(f"Error: {message}")
+        sys.exit(2)
+
+    if not args.clap:
+        fail("Say what to analyse. So far only --clap exists.")
+    project_file = args.project or config.PROJECT_FILE
+    if not Path(project_file).exists():
+        fail(f"Project file not found: {project_file}\nRun 'python main.py match' first.")
+    project = Project.load(project_file)
+    work_dir = args.work or project.work_dir
+    if not work_dir:
+        fail("No work directory. Pass --work DIR (a folder on the SSD) or set "
+             "work_dir in the project file.")
+    try:
+        rows = clap.analyse_project(project, work_dir, limit=args.limit,
+                                    report_name=args.report_name)
+    except safety.OriginalsProtectedError as e:
+        fail(str(e))
+    print()
+    print(clap.format_report(rows))
+    print(f"Report: {os.path.join(work_dir, 'reports', args.report_name)}.json / .txt")
+
+
 def cmd_timeline(args):
     """Work with the timeline file (SPECS 3, 4.3)."""
     import timeline
@@ -434,6 +465,19 @@ def build_parser():
     p_convert.add_argument("--seconds", type=float,
         help="Length of the --test piece in seconds (default: the whole clip)")
     p_convert.set_defaults(func=cmd_convert)
+
+    # ── analyse ──
+    p_analyse = subparsers.add_parser("analyse",
+        help="Analyse the clips: find the sync clap")
+    p_analyse.add_argument("--clap", action="store_true",
+        help="Find the sync clap at the start of each clip (camera audio and WAV)")
+    p_analyse.add_argument("--work", "-w",
+        help="Work folder on the SSD (default: work_dir of the project file)")
+    p_analyse.add_argument("--limit", type=int,
+        help="Analyse only the first N matched clips")
+    p_analyse.add_argument("--report-name", default="clap-report",
+        help="Name of the report files in <work>/reports (default: clap-report)")
+    p_analyse.set_defaults(func=cmd_analyse)
 
     # ── timeline ──
     p_timeline = subparsers.add_parser("timeline",

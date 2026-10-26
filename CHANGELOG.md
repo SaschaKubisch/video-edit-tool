@@ -8,6 +8,10 @@
   with a check of each copy, a resumable `conversion.json`, a free-space check
   and a guard that never writes into the folder of the originals.
 - `Project.work_dir` field.
+- `timeline.py` and `timeline validate`: the timeline file, version 1 (SPECS 3):
+  load, validate (rules V0 to V22), atomic save, derived values.
+- `analyse --clap`: finds the sync clap at the start of each clip from the
+  camera audio and the WAV together, and writes a report with review flags.
 
 ### Changed
 - The tool runs on Python 3.12 in its own `.venv`; packages are pinned in

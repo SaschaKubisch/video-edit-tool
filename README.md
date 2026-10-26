@@ -42,11 +42,15 @@ python3 main.py rename [--pattern P] [--dry-run] [--undo rename_log.json]   # le
 python3 main.py convert --work DIR [--lut FILE] [--encoder E] [--limit N] [--only A,B] [--dry-run]
 python3 main.py convert --probe CLIP.braw
 python3 main.py convert --test CLIP.braw --work DIR [--seconds S]
+python3 main.py analyse --clap --work DIR [--limit N] [--report-name NAME]
+python3 main.py timeline validate [--file timeline.json] [--no-file-checks]
 ```
 
 - `match` writes `project.json` and the thumbnails.
 - `sync` uses the selection saved in `project.json` unless one is passed, e.g. `--selection '{"selection":[3,1,5],"selection_trims":{"3":{"start":2,"end":1}}}'`. The selection holds scene indices in timeline order.
 - `convert` makes one small preview copy (H.264 MP4, half size, the base LUT baked in, the camera audio) of every matched `.braw` clip in `DIR/copies/` and records what it did in `DIR/conversion.json`. `DIR` is a folder on the SSD (or `work_dir` in `project.json`); it must not lie inside a folder that holds the originals, which are only read. Clips whose copy is current are skipped, so an interrupted run resumes. The base LUT is read from Resolve's LUT folder (`VET_BASE_LUT` or `--lut` name another file) and is never copied into the repository. Run it with `.venv/bin/python`; it needs VapourSynth with `vapoursynth-brawsource` (see `requirements.txt`).
+- `analyse --clap` finds the sync clap at the start of each matched clip: a sound that the camera's scratch audio and the recorder's WAV both heard at the stored offset. It writes `analysis/<clip>/clap.json` and the report `reports/clap-report.txt` and `.json` in `DIR`, and marks clips for review (no clap, a clap that only one microphone heard, a late or weak clap, an offset outside the usual range). The originals are only read.
+- `timeline validate` checks the timeline file (`timeline.json`, format in `SPECS.md` section 3) against its rules and prints the findings as JSON; exit code 1 when there are errors.
 - `rename` is a legacy helper that renames both files of each pair to `scene_NN.*`. It refuses to run if a target name already exists, and `--undo` reverses it from `rename_log.json`. The normal flow does not need it.
 
 ## Offset sign

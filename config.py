@@ -69,3 +69,23 @@ EXPECTED_COLOUR_SCIENCE_GEN = "5"   # the default LUT is made for generation 5
 # step 1 (70.7 MB). Used until a clip of that kind was converted and measured.
 PREVIEW_PRIOR_MB_PER_MIN_DCI4K = 71.0
 PREVIEW_SPACE_MARGIN = 1.25    # the size depends on the picture
+
+# ── Sync clap (`analyse --clap`, SPECS 7.2, decision D6: only at the start) ──
+# All values are starting values; the owner corrects them from the report.
+CLAP_SEARCH_SEC = 20          # the clap is searched in the first N seconds
+CLAP_HIGHPASS_HZ = 2000       # a clap is broadband; wind and room tone sit lower
+CLAP_WINDOW_SEC = 0.002       # power is measured in windows of 2 ms
+CLAP_MIN_ONSET = 2.0          # rise of log power between two windows (about 7 times)
+CLAP_LOCAL_MAX_SEC = 0.05     # a candidate is the strongest onset within +-50 ms
+CLAP_DECAY_SEC = 0.1          # a clap decays within 100 ms ...
+CLAP_DECAY_FRACTION = 0.2     # ... to 20 percent of its peak power
+CLAP_REFINE_FRACTION = 0.25   # to the first sample at a quarter of the local peak
+CLAP_AGREE_SEC = 0.02         # camera and WAV claps agree within 20 ms of the offset
+CLAP_PAIR_BAND_DB = 10.0      # the clap is the first shared event within 10 dB of the loudest
+CLAP_WEAK_CONFIDENCE = 0.5    # a clap with a lower confidence is marked for review
+CLAP_GUARD_SEC = 0.5          # the film starts 0.5 s after the clap (D6)
+CLAP_LATE_SEC = 10.0          # a clap later than this is flagged for review
+# 96 of 105 offsets of the first shoot lie in this range (PRD section 5 says 0.09 to
+# 0.37 s; the lowest of the 96 is 0.0851 s, so the lower end is 0.085). An offset
+# outside it is flagged for review.
+USUAL_OFFSET_RANGE_SEC = (0.085, 0.37)

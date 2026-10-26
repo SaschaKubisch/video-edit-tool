@@ -131,7 +131,7 @@ Originals stay where they are. The tool opens them read-only and never writes in
 | `safety.py` | `assert_not_inside`, `originals_folders`: the protection of the originals (M9). Not in the plan before the build (changed in the build). | New, built | 2 |
 | `decoder.py` | The decoder interface (section 6.2): probe a `.braw` clip, give frames and camera audio. Used by `convert.py` and `render.py`. Built: the interface and decoder 1 (`BrawSourceDecoder`). | New, built | 2 |
 | `convert.py` | Probe, make preview copies, verify, `conversion.json` | New, built | 2 |
-| `clap.py` | Find the clap, measure drift | New | 2 |
+| `clap.py` | Find the clap, measure drift. Built so far: the clap (`find_clap`, `analyse_clip`, `analyse_project`); the drift is not built. | New, partly built | 2 |
 | `stable.py` | Find steady runs | New | 2 |
 | `timeline.py` | Load, save, validate, snapshot, hash, derived values. Built so far: load, atomic save, validate (V0 to V22), hash, derived values; snapshots and undo are not built yet (section 4). | New, partly built | 2 |
 | `assemble.py` | Build `timeline.json` from matches and analysis | New | 2 |
@@ -937,24 +937,36 @@ Status: not built. Needs the result of step 1 (done). D5 to D8 are settled (`PRD
 
 ### 7.2 Finding the clap
 
-`clap.py` offers a pure function `find_clap(samples, rate, search_s)`. It returns the time of the first clap in the first `search_s` seconds, with a strength, or nothing. The method follows the research note on onset detection [inference; the details below are a design, not a tested method]:
+`clap.py` offers a pure function `find_clap(samples, rate, search_s)`. It returns the time of the first clap in the first `search_s` seconds, with a strength, or nothing. The method follows the research note on onset detection. It was built and tested on synthetic signals and on the first shoot (below).
 
 1. High-pass the signal at 2 kHz. A clap is a very short broadband sound; wind and room tone sit lower [inference].
 2. Take the mean power in windows of 2 ms.
 3. Onset strength per window: the rise of the log power from the window before, `max(0, log(P[k]) - log(P[k-1]))`. A log ratio does not depend on gain.
 4. A candidate is a window whose onset strength is at least `CLAP_MIN_ONSET` and is the local maximum within 50 ms. It counts as a clap only if the power falls under 20 percent of its peak within `CLAP_DECAY_SEC`. A steady loud sound or a step in level does not decay and is not a clap.
-5. Refine the time to the first sample, within 20 ms around the window, whose absolute value reaches a quarter of the local peak.
-6. The first candidate in time that passes step 4 is the clap. The result also lists the strongest candidate, for the report.
+5. Refine the time to the first sample, on the high-passed signal, that reaches a quarter of the peak of the three windows from the window before the onset to the window after it, and at least five times the RMS of the 50 ms before. **Changed in the build:** the plan said "within 20 ms around the window"; with loud ambience (noise at 0.2 of the clap's level) a 20 ms span let a noise sample pull the time 9 ms early, over the 5 ms tolerance of check 2.4.
+6. `find_clap` returns the first candidate in time that passes step 4, with its `onset`, `snr_db` (peak power against the median power of the span), `decay_s` and `confidence` (the onset against three times `CLAP_MIN_ONSET`, at most 1), the list of all candidates and the strongest one. It returns nothing when no candidate passes.
 
 Decision D6: "Only at the start". Each clip has one clap at its beginning, so the search covers the first `CLAP_SEARCH_SEC` seconds only and there is no search for a clap at the end.
 
-`analyse --clap` runs it on the scratch audio of each `.braw` (16 kHz mono, as the matcher extracts it) and on the matched WAV. The two results must agree: `(t_wav - t_video)` equals the stored offset within `CLAP_AGREE_SEC`.
+`analyse --clap` runs it on the scratch audio of each `.braw` (16 kHz mono, as the matcher extracts it, the first `CLAP_SEARCH_SEC` + 10 s) and on the matched WAV, and combines the two (`analyse_clip`). It writes `<work_dir>/analysis/<stem>/clap.json` for each clip and the report `<work_dir>/reports/clap-report.json` and `.txt` (options `--limit N`, `--report-name NAME`, `--work DIR`; it never writes into a folder that holds originals).
 
-| Result | When | Used |
-|--------|------|------|
-| `agree` | Both found and consistent | The video time. |
-| `single` | Only one found, or they disagree | The one found, converted by the offset. Marked for review. |
-| `none` | Neither found | No clap cut. The clip is kept from its first steady frame (section 7.5, rule 3) and is listed in the report as "no clap" (D6). |
+**Changed in the build: the clap is a sound that both microphones heard.** The plan took the first clap of each channel and required that `(t_wav - t_video)` equals the stored offset within `CLAP_AGREE_SEC`. On the 105 clips of the first shoot that held for 58 clips and failed for 47 [measured, 2026-10-26]. The envelopes of three failing clips (C008, C010, C012) show why: the real clap is the loudest event near the start, and one channel often has an earlier sound that the other did not hear (a click of 11 to 19 dB under the clap at 0.04 to 0.4 s in the WAV, or in the camera audio). The stored offset is known to about 1 ms, so the method uses it as evidence:
+
+1. A shared event is a camera candidate and a WAV candidate that lie `offset` apart within `CLAP_AGREE_SEC`.
+2. The loudness of a shared event is the smaller of its two `peak_db` values.
+3. The clap is the first shared event whose loudness is within `CLAP_PAIR_BAND_DB` (10 dB) of the loudest shared event of the clip. A clap is among the loudest sounds; the first of those is the one at the start (D6).
+
+| Result | When | Video time | Review |
+|--------|------|------------|--------|
+| `agree` | At least one shared event | The camera's time of the clap. | Only for the reasons below. |
+| `single` | No shared event, but a clap in at least one channel | The first clap of the camera audio, else the first clap of the WAV minus the offset. | Always. |
+| `none` | No clap in either channel | None. No clap cut. The clip is kept from its first steady frame (section 7.5, rule 3) and is listed in the report as "no clap" (D6). | Always. |
+
+Reasons that mark a clip for review: a result of `single` or `none`; a clap later than `CLAP_LATE_SEC` (10 s), because a clap at the start is expected; a confidence under `CLAP_WEAK_CONFIDENCE` (0.5); an offset outside `USUAL_OFFSET_RANGE_SEC`. The last one is the owner's list of nine odd offsets of the first shoot: 96 of the 105 offsets lie between 0.085 and 0.37 s (`PRD.md` section 5 says 0.09; the lowest of the 96 is 0.0851 s), and the nine outside are -5.03, -1.70, 0.63, 0.64, 0.66, 0.83, 0.89, 1.28 and 1.94 s.
+
+**Result on the first shoot** [measured, 2026-10-26, report `clap-report-all.txt` in the work folder]: 98 of 105 clips `agree` (the difference of the claps from the stored offset is at most 2 ms); 7 `single`; none `none`. The times of the 98 claps: median 0.26 s, 90 percent under 5.1 s. 30 clips are marked for review. Of the nine odd offsets, six are confirmed by shared sounds at that offset (0.63, 0.64, 0.66, 0.83, 0.89 and 1.94 s): the offsets are correct. Three have no shared sound at the stored offset: **-5.03 s (A002_01011851_C047), -1.70 s (A002_01060614_C082) and 1.28 s (A002_01060813_C101)**. Their offsets stay unconfirmed [unverified]; the report lists them. Whether the claps found are the claps the owner made is [unverified] until the owner listens (check 2.14). The first 10 clips all `agree`, with claps between 0.10 and 1.45 s, except A002_01011540_C002, whose only shared sound is at 15.9 s and weak (marked for review).
+
+`peak_db` uses the median power of the searched span as its reference; a clip with a busy kitchen has a higher median and so lower values, which is why the band is relative to the loudest event of the same clip.
 
 The segment's first frame is `ceil((t_clap + CLAP_GUARD_SEC) * fps)`. The guard keeps the clap's tail out of the film. Because the audio follows the segment, cutting the picture also cuts the sound at the same instant.
 
@@ -966,8 +978,12 @@ The segment's first frame is `ceil((t_clap + CLAP_GUARD_SEC) * fps)`. The guard 
 | `CLAP_DECAY_SEC` | 0.1 |
 | `CLAP_AGREE_SEC` | 0.02 |
 | `CLAP_GUARD_SEC` | 0.5 (the research suggests 0.5 to 1 s) |
+| `CLAP_PAIR_BAND_DB` | 10 (added in the build) |
+| `CLAP_LATE_SEC` | 10 (added in the build) |
+| `CLAP_WEAK_CONFIDENCE` | 0.5 (added in the build) |
+| `USUAL_OFFSET_RANGE_SEC` | 0.085 to 0.37 (added in the build) |
 
-All six are [inference] starting values. Check 2.14 prints the clap time of every clip so the owner can listen to a sample and correct the values. D6 is settled; the values stay starting values.
+All are [inference] starting values. Check 2.14 prints the clap time of every clip so the owner can listen to a sample and correct the values. D6 is settled; the values stay starting values.
 
 ### 7.3 Drift between camera and recorder
 
