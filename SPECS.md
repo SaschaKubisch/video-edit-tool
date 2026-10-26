@@ -578,6 +578,7 @@ Measured speed of the tested chain (5 s = 150 frames of a `brlt` clip, 4096 x 21
 - With `h264_videotoolbox` at 45 Mbit/s: 13.9 to 15.2 fps, 0.46 to 0.51 times real time, at load average 6 to 26. A 20-minute film at 29.97 fps takes about 40 minutes [arithmetic].
 - With `libx264` preset slow at 45 Mbit/s: 4.1 to 4.4 fps, 0.14 to 0.15 times real time. A 20-minute film takes about 2.4 hours [arithmetic].
 - A `brhq` clip letterboxed into the DCI 4K frame: 20.6 fps with `h264_videotoolbox`, because it has fewer pixels to decode.
+- A repeat at a lighter load (load average 3 to 5): 27.3 fps without an encoder, 26.1 fps with `h264_videotoolbox` (0.87 times real time; a 20-minute film in about 23 minutes) and 6.6 fps with `libx264` slow (0.22 times real time; about 1.5 hours) [arithmetic from the speeds]. So the load changes the speed by up to a factor of 1.7; the figures at the load of a working day are the first set.
 
 Details that this section does not settle:
 
@@ -659,7 +660,7 @@ A file that fails stays as `.partial` and the render report names the failed che
 
 **Purpose.** Show on real clips what decoding BRAW costs on this machine (speed, size, colour), and settle how the tool stores the footage. Status: **done on 2026-10-26.** The test was run by hand with scripts, not with tool commands. The scripts and logs are on the SSD: `/Volumes/Untitled/video-edit-tool-work/step1/` (`scripts/`, `logs/`, `stills/`, `prores/`) and `/Volumes/Untitled/video-edit-tool-work/step2-preview/` (`scripts/`, `logs/`, `previews/`, `render/`, `stills/`, `shotcut_check/`). They are not in the repository. The original `.braw` and WAV files were opened read-only; nothing was written beside them.
 
-All numbers in this section are [measured] on 2026-10-26 on the Apple M4. Other jobs loaded the machine. The load average was 21 to 73 during the conversion test and 6 to 26 during the preview-copy check and the final-render check; each speed names the load where it was logged. Speeds on an idle machine would be higher [inference].
+All numbers in this section are [measured] on 2026-10-26 on the Apple M4. Other jobs loaded the machine. The load average was 21 to 73 during the conversion test and 6 to 26 during the preview-copy check and the final-render check; each speed names the load where it was logged. A repeat at a lighter load is in the tables C and E; speeds on an idle machine would be higher still [inference].
 
 **The two test clips.**
 
@@ -705,7 +706,7 @@ Extrapolation for the folder: 23.75 minutes of `brlt` at 2.8 GB per minute and 5
 | Peak memory, two runs | Python 927 and 913 MB; `ffmpeg` 243 and 244 MB; footprint 1.10 and 1.08 GB | Python 770 and 749 MB; `ffmpeg` 205 and 201 MB; footprint 0.91 and 0.89 GB |
 | Load average (1 minute) at start and end of the two runs | 16.0 to 15.7, then 15.7 to 18.1 | 18.1 to 19.3, then 19.3 to 17.6 |
 
-Extrapolation to the 116 clips, one clip after another [arithmetic from the table]: 51 `brlt` clips of 23.75 minutes make 1.68 GB in 13.2 minutes; 65 `brhq` clips of 52.8 minutes make 1.94 GB in 25.4 minutes. In all about 3.6 GB (3.4 GiB) and 39 minutes at a load average of 16 to 19. The size depends on the picture: at the same `-q:v` the two clips differ by a factor of two in data rate. Fixed-rate encoding (`-b:v 10M`) gave 10.2 Mbit/s on both clips, which would be 5.9 GB for the folder [arithmetic].
+Extrapolation to the 116 clips, one clip after another [arithmetic from the table]: 51 `brlt` clips of 23.75 minutes make 1.68 GB in 13.2 minutes; 65 `brhq` clips of 52.8 minutes make 1.94 GB in 25.4 minutes. In all about 3.6 GB (3.4 GiB) and 39 minutes at a load average of 16 to 19. A repeat of both clips ran at 73.6 and 76.6 fps (2.46 and 2.56 times real time) at a load average of 9 to 15, which would be about 31 minutes for the folder [arithmetic]. The size depends on the picture: at the same `-q:v` the two clips differ by a factor of two in data rate. Fixed-rate encoding (`-b:v 10M`) gave 10.2 Mbit/s on both clips, which would be 5.9 GB for the folder [arithmetic].
 
 Quality sweep (data rate of the whole file; PSNR of the H.264 against a lossless copy of the same filter chain, first 240 frames; the scratch files were deleted, the numbers are in `step2-preview/logs/quality_sweep.txt`):
 
@@ -752,6 +753,9 @@ What the preview copies were checked for (commands in the logs; the checks are t
 | `libx264 -preset medium -b:v 45M` | 5.3 fps | 0.18 | 49.1 Mbit/s | 13.1 to 23.5 |
 | C040 (4096 x 1720) letterboxed into 4096 x 2160, `h264_videotoolbox` | 20.6 fps | 0.69 | 45.7 Mbit/s | 7.4 to 8.1 |
 | The same, `libx264 -preset slow` | 4.4 fps | 0.15 | 52.9 Mbit/s | 7.2 to 13.3 |
+| Repeat at a lighter load, C083, no encoder | 27.3 fps | 0.91 | | 2.9 to 3.9 |
+| Repeat at a lighter load, C083, `h264_videotoolbox -b:v 45M` | 26.1 fps | 0.87 | | 3.9 to 5.2 |
+| Repeat at a lighter load, C083, `libx264 -preset slow -b:v 45M` | 6.6 fps | 0.22 | | 5.2 to 10.8 |
 
 The load of the `libx264` runs includes the encoder itself, which uses all cores. Peak memory: Python 2.0 to 2.5 GB; `ffmpeg` 0.7 to 0.9 GB with VideoToolbox and 2.7 to 3.1 GB with `libx264`. Each output has 150 frames; `ffprobe` reports H.264 High (or HEVC Main 10), 4096 x 2160, `yuv420p` (or `yuv420p10le`). Frame 100 of each render (source frame 400) against the step-1 still (d) at 1920 x 1012: PSNR 39.1 dB (`h264_videotoolbox`), 39.3 dB (`libx264`), 40.0 dB (HEVC). The letterbox bars measured Y 16 and U 128, V 128 (`h264_videotoolbox`) after the bars were added in RGB. The first letterbox test added them after the colour conversion and gave Y 0; those files were deleted.
 
