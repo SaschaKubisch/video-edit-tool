@@ -193,11 +193,15 @@ TEXT_LAYOUTS = {
     "9:16": {"safe": (0.04, 0.15, 0.18, 0.35), "size_pct": 3.3, "bottom_pct": 0.0, "max_chars": 24},
 }
 # Titles (SPECS 9.7): font size in percent of the frame height, the box and where it sits.
+# `y_ref` says what `y_pct` means: the middle of the text block ("center") or its bottom edge
+# ("bottom"). `align` is the alignment of the lines; a left-aligned title starts at the left
+# edge of the safe area.
 TITLE_TEMPLATES = {
-    "center": {"size_pct": 7.0, "anchor": "center", "x_pct": 50.0, "y_pct": 50.0, "max_width_pct": 80.0},
-    "lower_third": {"size_pct": 4.8, "anchor": "left", "x_pct": None, "y_pct": 72.0, "max_width_pct": 60.0},
-    "opening": {"size_pct": 9.0, "anchor": "center", "x_pct": 50.0, "y_pct": 45.0, "max_width_pct": 80.0},
+    "center": {"size_pct": 7.0, "align": "center", "y_pct": 50.0, "y_ref": "center", "max_width_pct": 80.0},
+    "lower_third": {"size_pct": 4.8, "align": "left", "y_pct": 72.0, "y_ref": "bottom", "max_width_pct": 60.0},
+    "opening": {"size_pct": 9.0, "align": "center", "y_pct": 45.0, "y_ref": "center", "max_width_pct": 80.0},
 }
+TITLE_MAX_LINES = 3
 TITLE_FADE_SEC = 0.5
 
 # Whisper (D12, SPECS 9.2). The names of the files are settings; nothing is downloaded at run time.

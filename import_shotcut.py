@@ -33,6 +33,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import timeline
+import words
 
 SEGMENT_ID = re.compile(r"^s([0-9]+)$")
 OWN = "vet:own"
@@ -279,7 +280,10 @@ def apply_entries(data: dict, entries: list) -> tuple:
             new_in, new_out = e.first, e.last + 1
             if (seg["in"], seg["out"]) != (new_in, new_out):
                 report.changed.append({"id": seg["id"], "in": [seg["in"], new_in], "out": [seg["out"], new_out]})
+                was_in, was_out = seg["in"], seg["out"]
                 seg["in"], seg["out"] = new_in, new_out
+                if 0 <= new_in < new_out:           # the cues stay with their picture
+                    words.retime_segment(out, seg["id"], was_in, was_out)
             ordered.append(seg)
             continue
         parent = by_id.get(e.segment) if e.segment else None

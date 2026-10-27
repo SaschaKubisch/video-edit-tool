@@ -19,10 +19,8 @@ data; the caller validates and saves the result (store.save).
 import copy
 
 import timeline
-
-
-class OperationError(Exception):
-    """An operation is unknown or malformed. The page gets HTTP 400."""
+import words
+from words import OperationError        # the page gets HTTP 400 for it; defined in words.py
 
 
 def _is_int(v) -> bool:
@@ -39,11 +37,14 @@ def _segment(data: dict, op: dict) -> dict:
     raise OperationError(f"there is no segment {sid!r}")
 
 
-def _trim(data, op, key):
+def _trim(data, op, key, notes=None):
     if not _is_int(op.get("frames")):
         raise OperationError(f"operation {op['op']!r} needs 'frames', a whole number")
     seg = _segment(data, op)
+    old_in, old_out = seg["in"], seg["out"]
     seg[key] += op["frames"]
+    if 0 <= seg["in"] < seg["out"]:          # a trim that breaks a rule is refused by the validator
+        words.retime_segment(data, seg["id"], old_in, old_out, notes)
 
 
 def _set_enabled(data, op):
@@ -60,6 +61,7 @@ def _move(data, op):
                              f"{len(data['segments']) - 1}")
     data["segments"].remove(seg)
     data["segments"].insert(to, seg)
+    words.sort_cues(data)
 
 
 def _set_label(data, op):
@@ -89,20 +91,31 @@ def _reset_offset(data, op):
     _clip(data, op).pop("audio_offset_hand_s", None)
 
 
+def _plain(fn):
+    """An operation that has no notes to give, in the form every operation has: (data, op, notes)."""
+    return lambda d, o, n=None: fn(d, o)
+
+
 OPERATIONS = {
-    "trim_in": lambda d, o: _trim(d, o, "in"),
-    "trim_out": lambda d, o: _trim(d, o, "out"),
-    "set_enabled": _set_enabled,
-    "move": _move,
-    "set_label": _set_label,
-    "set_offset": _set_offset,
-    "reset_offset": _reset_offset,
+    "trim_in": lambda d, o, n=None: _trim(d, o, "in", n),
+    "trim_out": lambda d, o, n=None: _trim(d, o, "out", n),
+    "set_enabled": _plain(_set_enabled),
+    "move": _plain(_move),
+    "set_label": _plain(_set_label),
+    "set_offset": _plain(_set_offset),
+    "reset_offset": _plain(_reset_offset),
 }
 
 
-def apply_operations(data: dict, operations) -> dict:
+def all_operations() -> dict:
+    """Every operation the page and the commands may send: those of this module and those of words.py."""
+    return {**OPERATIONS, **words.OPERATIONS}
+
+
+def apply_operations(data: dict, operations, notes=None) -> dict:
     """A copy of `data` with the operations applied in order. Raises OperationError
-    (and changes nothing) if any operation is unknown or malformed."""
+    (and changes nothing) if any operation is unknown or malformed. `notes`, a list, collects
+    what the operations did on their own (a cue that was shortened, scene text that is too long)."""
     if not isinstance(operations, list) or not operations:
         raise OperationError("'operations' must be a list with at least one operation")
     out = copy.deepcopy(data)
@@ -112,9 +125,10 @@ def apply_operations(data: dict, operations) -> dict:
         name = op.get("op")
         if not isinstance(name, str):
             raise OperationError("each operation needs the field 'op' (its name)")
-        if name not in OPERATIONS:
-            raise OperationError(f"unknown operation {name!r}; known: {', '.join(OPERATIONS)}")
-        OPERATIONS[name](out, op)
+        known = all_operations()
+        if name not in known:
+            raise OperationError(f"unknown operation {name!r}; known: {', '.join(known)}")
+        known[name](out, op, notes)
     return out
 
 
@@ -175,7 +189,7 @@ def summary(tl, file_hash: str = None, review: dict = None) -> dict:
             "film_start_s": None if start is None else float(start / fps),
             "source_frames": src.get("frames"),
             "label": seg.get("label", ""), "origin": seg.get("origin", ""),
-            "note": seg.get("note", "")}
+            "note": seg.get("note", ""), "text": seg.get("text", "")}
         if review and review.get(seg["id"]):
             row["review"] = review[seg["id"]]
         rows.append(row)
