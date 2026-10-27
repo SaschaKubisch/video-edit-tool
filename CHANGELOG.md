@@ -2,6 +2,40 @@
 
 ## Unreleased (editor, step 2 in progress)
 
+### Added (step 6, vertical shorts)
+- `short`: plans a vertical 9:16 short from the film and renders it from the `.braw` files with the film's renderer (look,
+  loudness -14 LUFS with a true peak of at most -1 dBTP, 1 s fade-in, 2 s fade-out), as MP4, H.264, 1080 x 1920,
+  29.97 frames per second, about 8 Mbit/s, AAC 192 kbit/s at 48 kHz. `--length` (default 60 s, decision D15), `--output`,
+  `--size`, `--prefer`, `--only`, `--exclude`, `--subtitles`, `--dry-run` (the plan: kept scenes with film and short
+  times, kept and dropped subtitles, notes and warnings), `--no-render`, `--stills` (one still per scene and a contact
+  sheet), `--detach`. The plan is a timeline file of kind `short` next to the output (`short-60.json`); `short --file
+  short-60.json` renders it as it is. The film is not changed.
+- The rule (`shorts.py`): about one scene per 4 s; one scene from each equal part of the film, chosen by importance
+  (pinned or named, then scene text or subtitles, then the longest); time in proportion to the length of the scene, at
+  least 2.0 s (the last scene at least 2.25 s), at most 8 s, the sum exact to the frame; the window of the scene that
+  holds whole subtitles and does not cut one, else the middle. The cap is raised, with a note, when the scenes cannot
+  reach the length. A film shorter than the length becomes the whole short.
+- Subtitles of the film laid out again for 9:16 (two lines of 24 characters, a long one split), kept when at least
+  max(1.0 s, 0.8 of the cue) of them stays inside the window; titles follow their scene.
+- `scenes pin` and `scenes unpin` (`priority` `must`), `scenes crop SCENE --x X | --from A --to B | --clear` and
+  `scenes crop SCENE --still [--at S]`, a picture of a frame with the 9:16 window outlined and what it shows, for Claude
+  Code to look at (decision D16: by hand or by prompt, no subject tracking). `CLAUDE.md` tells Claude Code how to make a
+  short from a request such as "make a 30 second short of the salad".
+- The preset `short` for `export add`.
+- The first real runs (2026-10-28, `SPECS.md` 11.10): a short of 60 s from the first shoot, 15 scenes, 1798 frames, 59.993 s,
+  1080 x 1920, 60.1 MB, 8.02 Mbit/s, -14.2 LUFS, true peak -1.2 dBTP, rendered in 178 s (0.353 times real time) with a busy
+  machine; the same with the 44 subtitles of the first shoot in 173 s. No black bar. With the window centred about 3 of
+  15 scenes need a hand crop.
+
+### Fixed (step 6)
+- The `lower_third` title lay at 72 percent of the height, inside the bottom 35 percent of a 9:16 frame that the
+  safe-zone rule keeps free (y = 1382 against the limit of 1248 at 1080 x 1920). Titles are now kept inside the safe area
+  of the frame; in 16:9 nothing moves.
+- A film that keeps a `crop` (the window of its shorts) no longer gets the warning V13 that the crop has no effect;
+  a short whose own `fit` is `fit` still does.
+- `export-shotcut` refuses a short (the project has no 9:16 window) instead of writing a letterboxed one.
+- SPECS 11.1 and check 6.3 named ASS files and libass; the tool has neither (it draws text with Pillow).
+
 ### Removed (D4, 2026-10-27: the Resolve push and the audio copy step)
 - The commands `sync` (copy the recorder's files next to the videos, with `--undo`) and `resolve` (push a timeline into
   DaVinci Resolve), the modules `syncer.py` and `resolve_integration.py`, the endpoints `/api/sync` and `/api/resolve`,

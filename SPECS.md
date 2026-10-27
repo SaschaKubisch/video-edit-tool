@@ -4,7 +4,7 @@
 **Date:** 2026-10-28
 Companion to `PRD.md`. Sections 1 to 17 specify the planned editor. Appendix A describes the system built as v1.1.0, which the plan reuses. Appendix B lists the sources.
 
-Of sections 1 to 17, step 2 is built on the branch `editor-step2`, except the contact sheets of 7.4: the Python 3.12 move, the `convert` command (section 6, with `decoder.py`, `safety.py`, `tools.py`), the timeline file's loader, validator and saver with `timeline validate` and `timeline summary` (section 3, rules V0 to V23), the clap finder with `analyse --clap` (section 7.2), the drift measurement with `analyse --drift` (7.3), the steady-scene finder with `analyse --scenes` (7.4), the assembly with `assemble` (7.5), the film preview with `preview` (5.5; the render plan of 5.1 and the sound path of 5.4 are built, the final film of 5.3 is not), saving with snapshots, the hash check, `timeline undo`, `timeline history` and `timeline frames` (4.1, 4.3), the page's operations (4.4), the owner's sync offset per clip (3.2, V23, 7.6) and the Film tab with its endpoints (7.6, section 12). Of step 3 (section 8) the following is built on the same branch: the levelling of every segment and of the film with the true-peak limiter (5.4, 8.4), the creative LUT (`look`, 8.2, 8.3), the final film from the `.braw` files with the presets and the checks (`render`, `export`, 5.3, 5.6, 5.7, 8.5) and the ProRes master. The Shotcut project (`export-shotcut`) and its read-back (`import-shotcut`, 8.6) are built too; the page's part of step 3 (8.7) is not built unless a line there says so. Of step 4 (section 9) the following is built on the same branch: the text box of a scene, the cleaning, splitting and spreading of its words, cues and titles on the film with their rules (V19, V24 to V26), Whisper (`subtitles auto`, with `whisper-cli` and the model large-v3-turbo), the SRT file and the form of each export, text drawn into the film preview and the final film with Pillow and ffmpeg's `overlay` filter, the commands `subtitles` and `title`, the Subtitles, Translations and Titles cards of the Film tab, and the translations through OpenRouter. 9.11 lists what is not built. Of step 5 (section 10) the following is built on the same branch: the scene index and the still sheets (`scenes index`, `scenes sheets`, `scenes frames`), the commands `scenes remove`, `scenes keep`, `scenes restore` and `scenes cut` with `--dry-run`, the section of `CLAUDE.md` that tells Claude Code how to handle an edit request, and the Restore button of the Film tab; D14 is settled (section 16). The module table in section 2.3 says which module is built. Where the build found the plan wrong, the text says "changed in the build". The test of step 1 was run by hand with scripts that are not in the repository (section 6.1). Every other interface named here (commands, endpoints, file names, module names) is planned, and names may change when the code is written.
+Of sections 1 to 17, step 2 is built on the branch `editor-step2`, except the contact sheets of 7.4: the Python 3.12 move, the `convert` command (section 6, with `decoder.py`, `safety.py`, `tools.py`), the timeline file's loader, validator and saver with `timeline validate` and `timeline summary` (section 3, rules V0 to V23), the clap finder with `analyse --clap` (section 7.2), the drift measurement with `analyse --drift` (7.3), the steady-scene finder with `analyse --scenes` (7.4), the assembly with `assemble` (7.5), the film preview with `preview` (5.5; the render plan of 5.1 and the sound path of 5.4 are built, the final film of 5.3 is not), saving with snapshots, the hash check, `timeline undo`, `timeline history` and `timeline frames` (4.1, 4.3), the page's operations (4.4), the owner's sync offset per clip (3.2, V23, 7.6) and the Film tab with its endpoints (7.6, section 12). Of step 3 (section 8) the following is built on the same branch: the levelling of every segment and of the film with the true-peak limiter (5.4, 8.4), the creative LUT (`look`, 8.2, 8.3), the final film from the `.braw` files with the presets and the checks (`render`, `export`, 5.3, 5.6, 5.7, 8.5) and the ProRes master. The Shotcut project (`export-shotcut`) and its read-back (`import-shotcut`, 8.6) are built too; the page's part of step 3 (8.7) is not built unless a line there says so. Of step 4 (section 9) the following is built on the same branch: the text box of a scene, the cleaning, splitting and spreading of its words, cues and titles on the film with their rules (V19, V24 to V26), Whisper (`subtitles auto`, with `whisper-cli` and the model large-v3-turbo), the SRT file and the form of each export, text drawn into the film preview and the final film with Pillow and ffmpeg's `overlay` filter, the commands `subtitles` and `title`, the Subtitles, Translations and Titles cards of the Film tab, and the translations through OpenRouter. 9.11 lists what is not built. Of step 5 (section 10) the following is built on the same branch: the scene index and the still sheets (`scenes index`, `scenes sheets`, `scenes frames`), the commands `scenes remove`, `scenes keep`, `scenes restore` and `scenes cut` with `--dry-run`, the section of `CLAUDE.md` that tells Claude Code how to handle an edit request, and the Restore button of the Film tab; D14 is settled (section 16). Of step 6 (section 11) the following is built on the same branch: `shorts.py` and the command `short` (plan, dry run, render, stills), `scenes pin`, `scenes unpin` and `scenes crop` (with `--still`), the preset `short`, and the corrections in 9.5 (titles) and 11.1; 11.9 says where the build differs from the plan and 11.11 what is not built. The module table in section 2.3 says which module is built. Where the build found the plan wrong, the text says "changed in the build". The test of step 1 was run by hand with scripts that are not in the repository (section 6.1). Every other interface named here (commands, endpoints, file names, module names) is planned, and names may change when the code is written.
 
 Version 2.5 records the owner's answers of 2026-10-27 to the open decisions D4, D11 (audio form), D14, D15 and D16, in his words: "Yes, delete the old test files and for the other decisions apply your recommended answers". Section 16 says what each answer is. The Resolve push and the audio copy step are removed (section 12), and step 6 is built to the answers of D15 and D16 (section 11).
 
@@ -157,7 +157,7 @@ Originals stay where they are. The tool opens them read-only and never writes in
 | `translate.py` | OpenRouter: translate the cues, SRT per language, cache (9.9). Not in the plan before the build | New, built | 4 |
 | `sceneindex.py` | The scene index (`index.json`, `index.md`), one still sheet per scene, overview pages, finer looks inside a scene (10.2). Planned as `index.py`; built under this name (changed in the build) | New, built | 5 |
 | `sceneedit.py` | `scenes remove`, `keep`, `restore` and `cut` as functions on the timeline data, and the report of what a change does (10.4). Not in the plan before the build | New, built | 5 |
-| `shorts.py` | Build a vertical timeline | New | 6 |
+| `shorts.py` | Plan a vertical short from the film (`plan_short`, a function of its arguments), the window numbers and the picture of the window on a frame (`window_info`, `draw_window_still`), the stills and the contact sheet of a rendered short (`scene_stills`), the dry-run text (`format_plan`) (section 11). | New, built | 6 |
 | `thumbnails.py` | Frame grabs | Kept, reads preview copies | 2 |
 | `server.py`, `ui.html`, `main.py`, `config.py` | Page, API, commands, constants. Built for step 2: the Film tab and its endpoints (section 12), `analyse --scenes`, `assemble`, `preview`, `timeline summary`, `app --timeline --work --no-browser`. | Kept, extended | 2 to 6 |
 | `renamer.py` | Legacy rename | Kept, untouched | - |
@@ -267,10 +267,10 @@ Types: `int` integer, `num` decimal number, `str` string, `bool` true or false. 
 | `origin` | str | no | `assembly`, `manual`, `prompt` or `short`. How the segment came to be. |
 | `note` | str | no | Longer remark, for example "starts 0.5 s after the clap". |
 | `text` | str | no | **Added in step 4.** The words of the scene, as the owner typed or dictated them into the scene's text box (section 9.4). The tool cleans the text, splits it into cues and spreads them across the scene. A trim of the scene spreads them again. |
-| `crop` | object | no | `{"x": 0..1}` or `{"x_from": 0..1, "x_to": 0..1}`. Horizontal place of the window. 0 is the left edge, 1 the right edge, 0.5 the centre (default). With `x_from` and `x_to` the window moves slowly from one to the other over the segment. |
+| `crop` | object | no | `{"x": 0..1}` or `{"x_from": 0..1, "x_to": 0..1}`. Horizontal place of the window. 0 is the left edge, 1 the right edge, 0.5 the centre (default). With `x_from` and `x_to` the window moves slowly from one to the other over the segment. **Built in step 6:** `scenes crop` sets it in the film, and a short copies it (11.5). |
 | `audio_join` | `{duration_s, curve}` | no | Crossfade into this segment from the one before. Overrides `film.audio_join`. |
 | `gain_db_adjust` | num | no | Extra gain after loudness levelling, in dB. Default 0. |
-| `priority` | str | no | `normal` (default), `must` or `drop`. Read by the short builder only (section 11). |
+| `priority` | str | no | `normal` (default), `must` or `drop`. Read by the short builder only (section 11). **Built in step 6:** `scenes pin` writes `must`, `scenes unpin` takes the key away; `must` is the top importance tier (a pinned scene is always kept), `drop` leaves the scene out of shorts. |
 
 **`look`**
 
@@ -441,7 +441,7 @@ The values are an illustration. The frame rate, frame sizes, frame counts and th
 | V10 | At least one enabled segment. | error |
 | V11 | Each enabled segment is long enough for its fades and joins: its length in seconds is at least half the duration of the join before it plus half the duration of the join after it. For the first segment the film fade-in replaces the half join before it, and the film fade-out replaces the half join after the last segment. The film fades count in full. | error |
 | V12 | Join durations lie between 0 and 5 s. The curve is `equal_power` or `linear`. An `audio_join` on the first enabled segment is ignored. | error, warning for the ignored one |
-| V13 | `crop` uses `x` alone or `x_from` with `x_to`; values lie between 0 and 1. A `crop` in a film whose `fit` is `fit` has no effect. | error, warning for the unused one |
+| V13 | `crop` uses `x` alone or `x_from` with `x_to`; values lie between 0 and 1. A `crop` in a short whose `fit` is `fit` has no effect. (**Changed in step 6:** a film may keep a crop in any `fit`: it is the window of the shorts made from it, `scenes crop`.) | error, warning for the unused one |
 | V14 | `gain_db_adjust` lies between -30 and 30. | error |
 | V15 | Every anchor is `film` or an existing segment id. `start_s < end_s`. A cue or title interval that reaches outside its segment is a warning, and the part outside is not shown. | error, warning |
 | V16 | File checks: the `sha256` of each LUT equals the file's hash. `look.lut.interp` is `tetrahedral`. A source whose `copy_lut_sha256` differs from `look.base.sha256` gets a warning: its preview copy carries another base LUT, so the film preview shows it wrongly. The final render is not affected, because it applies the base LUT itself. | error, warning |
@@ -692,7 +692,7 @@ An entry in `exports[]` sets one output. Version 1 accepts the codecs of rule V2
 | Master | ProRes 422 HQ in a `.mov` file, 10-bit 4:2:2, 24-bit PCM audio. Only when the owner ticks it (E6). | Owner decision. |
 | Master size | About 3.9 MB per frame at 4096 x 2160: Apple's 354 GB per hour at 25 frames per second is 98 MB per second, which is 3.9 MB per frame [arithmetic from Src10]. That is 118 GB for 20 minutes at 25 frames per second and 141 GB at 29.97. The estimate given with the decision was about 130 GB. | `render` refuses to start a master when the free space is less than 1.1 times the estimate (E6). |
 | Master speed | Not measured [unverified]. ProRes 422 LT through `prores_videotoolbox` at full size ran at 5.6 to 18.4 fps in step 1, with the load noted in section 6.1. | Check 3.10. |
-| Vertical short | MP4, H.264, 1080 x 1920, AAC. Starting value 8 Mbit/s (YouTube's 1080p figure at 24 to 30 frames per second [documented, Src11]), same encoder as the film. | The owner named the format and size; the data rate is a starting value, not a decision. |
+| Vertical short | MP4, H.264, 1080 x 1920, AAC. Starting value 8 Mbit/s (YouTube's 1080p figure at 24 to 30 frames per second [documented, Src11]), same encoder as the film. **Built in step 6:** the preset `short` (`export add --preset short`, and what `short` writes into the plan): `h264_videotoolbox` at 8 Mbit/s (the encoder of the film's first MP4 export when that is `libx264`), AAC-LC at 192 kbit/s and 48 kHz (YouTube asks for 384 kbit/s for stereo; 128 to 192 kbit/s is enough for the three platforms [inference]), the subtitle form `burned`. | The owner named the format and size; the data rate is a starting value, not a decision. |
 | Custom resolution | Any even `width` x `height` with the shape of `film.frame` | A different shape is rejected (rule V5); the tool does not add black bars to an export. |
 
 ### 5.7 Checks the renderer runs on its own output
@@ -1261,7 +1261,7 @@ The film preview and the final file use the same render plan.
 
 **As built** (`export.py`, `main.py export` and `main.py render`).
 
-- `export list` shows the exports of the timeline file with the state, size, codec, an estimate of the file's size and the last render. `export add --preset film-4k|film-4k-x264|film-master [--name N] [--width W --height H] [--output-dir D] [--replace]` adds an entry (the files go to `<work>/renders/` by default; a custom size must have the shape of the film frame, rule V5); `export enable NAME` and `export disable NAME` switch an entry. The presets: `film-4k` is MP4, H.264 High, the `h264_videotoolbox` encoder at 45 Mbit/s, AAC 384 kbit/s at 48 kHz; `film-4k-x264` is the same with `libx264`, preset `slow`, 45 Mbit/s; `film-master` is `.mov`, ProRes 422 HQ through `prores_videotoolbox`, 24-bit PCM sound, written with `enabled: false`.
+- `export list` shows the exports of the timeline file with the state, size, codec, an estimate of the file's size and the last render. `export add --preset film-4k|film-4k-x264|film-master|short [--name N] [--width W --height H] [--output-dir D] [--replace]` adds an entry (the files go to `<work>/renders/` by default; a custom size must have the shape of the film frame, rule V5); `export enable NAME` and `export disable NAME` switch an entry. The presets: `film-4k` is MP4, H.264 High, the `h264_videotoolbox` encoder at 45 Mbit/s, AAC 384 kbit/s at 48 kHz; `film-4k-x264` is the same with `libx264`, preset `slow`, 45 Mbit/s; `film-master` is `.mov`, ProRes 422 HQ through `prores_videotoolbox`, 24-bit PCM sound, written with `enabled: false`.
 - `render --export NAME` renders one export and `render --all` every export that is switched on. A switched-off export is refused with the command that switches it on (`--force` renders it anyway). Exit code 0 when every file passed its checks, 1 when one failed or was refused, 2 for wrong options or a missing timeline file, 130 after SIGTERM or Ctrl+C. `render --detach` starts the same command as a process of its own session, with the log `<work>/reports/render-<name>.log` and the pid file `<work>/reports/render-<name>.pid`, and prints how to watch, stop and restart it.
 - When the timeline file's `look.lut` has a `credit`, the render writes the credit line as plain text (a Markdown link `[text](url)` becomes `text (url)`) into `<film>.credit.txt` next to the film, for the YouTube description, and prints the path.
 - The render report is `reports/render-report.json`: `renders`, a list of the newest 30, each with the export, the times, the timeline hash, the tools and the Python version, the export entry as rendered, frames, seconds, elapsed time per stage (`mix_s`, `audio_s`, `video_s`, `check_s`), the speed (`video_fps`, `realtime_factor`), the load average at the start and the end, the peak memory of the render process, the file size and data rate, the loudness (mode, target, the film before and after levelling as built by 5.4, and as measured on the finished file), the capped and the silent segments, the warnings (shortened crossfades among them), the problems and the checks.
@@ -1641,6 +1641,8 @@ Whether Claude Code identifies a scene from stills and a transcript is [unverifi
 | `index zoom ...` | A denser contact sheet for one time range. |
 | `preview --range A:B` | Render part of the preview. |
 
+**Step 6 adds three commands that mark scenes for the shorts and do not change the film:** `scenes pin ID[,ID...]` and `scenes unpin ID[,ID...]` (`priority` `must`, 11.3) and `scenes crop SCENE --x X | --from A --to B | --clear [--still] [--at S]` (`crop`, 11.5). Each has `--dry-run`, makes one snapshot and goes through the validator.
+
 **One prompt, one snapshot.** `cut` and `keep` write one snapshot each. For edits made by hand in the file, `timeline validate` makes the snapshot (section 4.1), so the rule is: edit, validate once, report the snapshot number to the owner. `timeline undo` returns to the version before.
 
 **As built** (`main.py cmd_scenes`, `sceneedit.py`; changed in the build). The commands are `scenes ...` and not `timeline cut` and `timeline keep`, because they work on scenes by id; the cut by a film time range over several scenes is not built (Claude Code names the scenes, or cuts inside one scene).
@@ -1705,69 +1707,161 @@ The film is a copy of `timeline-full-subs.json` named `timeline-prompt-test.json
 
 ### 11.1 Purpose and outputs
 
-From a 16:9 film with subtitles, build a 9:16 short of a chosen length (S1 to S5).
+From a 16:9 film, with or without subtitles, build a 9:16 short of a chosen length and render it from the `.braw` files (S1 to S5). Decisions of 2026-10-27, in the owner's words ("Yes, delete the old test files and for the other decisions apply your recommended answers"): D15, a short is 60 s when `--length` is not given; D16, the window is centred unless a scene sets it, a per-scene offset is set by hand or by prompt and stored in the timeline file, there is no subject tracking, and importance goes pinned scenes and scenes named in a prompt first, then scenes with scene text or subtitles, then the rest. The shortening numbers (about one kept scene per 4 s, time in proportion to the length of the scene, floor 2.0 s and 2.25 s for the last scene, cap 8 s, the film's fades) are the main session's recommendation, accepted with the same words.
 
-Command: `python3 main.py short --from timeline.json --length 45 --name sausage`. Outputs: `short-sausage.json` (a timeline file of kind `short`) and, when rendered, `renders/short-sausage.mp4`, and its SRT file when the subtitle form of the export asks for one (9.6). There is no ASS file: the installed ffmpeg has no libass, and the tool draws the text itself with Pillow (9.6).
+Status: built on the branch `editor-step2` (`shorts.py`, `main.py short`, `scenes pin`, `scenes unpin`, `scenes crop`). 11.10 gives the run on the first shoot. The owner has not watched a short yet.
 
-Status: not built. Needs steps 3 and 4. D15 and D16 are settled (section 16): the default length is 60 s, the window is centred unless set per scene, and the importance order is pinned or named in a prompt, then scene text or subtitles, then the rest. Sections 11.3 and 11.4 below are the plan of version 2.4 and are replaced when step 6 is built.
+Command: `python3 main.py short --file timeline.json --work DIR [--length 60] [--output FILE.mp4] [--size 1080x1920] [--prefer IDS] [--only IDS] [--exclude IDS] [--subtitles srt|burned|both|none] [--dry-run] [--no-render] [--stills] [--detach]`. (Changed in the build: the plan wrote `--from` and `--name`; `--file` is the option every command has, `--from` is kept as another spelling of it, and `--output` takes the place of `--name`.) Outputs, next to `--output` (default `<work>/exports/short-<length>.mp4`):
+
+| File | What |
+|------|------|
+| `short-60.mp4` | The short. |
+| `short-60.json` | The plan: a timeline file of kind `short` (11.2). It can be edited, validated (`timeline validate`), changed with the `scenes`, `subtitles` and `title` commands, and rendered again with `short --file short-60.json`. Planning again over an existing plan keeps the old one as a snapshot (`timeline undo --file short-60.json`). |
+| `short-60.credit.txt` | The credit line of the creative LUT, as for the film. |
+| `short-60.en.srt` | Only when the export's subtitle form is `srt` or `both`. |
+| `short-60.stills/<scene>.jpg`, `short-60.contact.jpg` | With `--stills`: the middle frame of each scene of the finished file, and a sheet of them with the scene, the scene of the film it came from, its length and its crop. For Claude Code and the owner to look at. |
+
+There is no ASS file (changed in the build; the plan said "ASS and SRT files"): the installed ffmpeg has no libass, and the tool draws the text with Pillow (9.6). The render report is `<work>/reports/short-report.json` (the same form as `render-report.json`).
+
+`short --file FILE` where FILE is a short (kind `short`) renders it as it is: the options of a new short (`--length`, `--size`, `--prefer`, `--only`, `--exclude`, `--output`, `--subtitles`) are refused with exit code 2 and the reason. `--dry-run` prints the plan (11.4) and writes nothing. `--no-render` writes the plan file and stops. `--detach` plans and saves, then starts the render in a session of its own (`<work>/reports/short-<name>.log` and `.pid`).
 
 ### 11.2 What the builder writes
 
-A new timeline file with `kind: short`, `film.frame` 1080 x 1920, `film.fit` `fill`, `derived_from` (the film file, the length, the settings), the same `sources`, `look` and `audio` as the film, and segments copied from the film's enabled segments with new ids. Cues and titles are copied with their anchors, and those outside a shortened segment drop out. One export entry is added: MP4, 1080 x 1920, H.264 with the encoder of the film's delivery export, the starting values of section 5.6 (8 Mbit/s). A custom resolution is another export entry.
+`shorts.plan_short(film, ...)` is a function of its arguments: it reads no media and writes no file, so the same film and settings give the same plan. It returns a `ShortPlan` whose `data` is the timeline data of the short:
 
-### 11.3 How important a moment is (S2)
+- `kind` `short`, `film.frame` the size (1080 x 1920; `--size` takes any even vertical size), `film.fit` `fill`, `film.fps`, `fade_in_s`, `fade_out_s` and `audio_join` as in the film (decision: the short copies the film's fades, 1 s in and 2 s out), `film.title` the film's with " (short, N s)".
+- `sources`: only the clips the short uses. `look` and `audio` (with the loudness settings) as in the film.
+- `segments`: new ids `s001`, `s002`, ... in film order, `origin` `short`, `in` and `out` the window inside the scene of the film, `label`, `gain_db_adjust` and `crop` from the scene (a pan cut to the window, 11.5), a `note` that says which scene of the film and why. Free keys (`x_` keys, kept and ignored by the validator) record where each scene came from: `x_film_segment` (the id in the film), `x_film_in_s` and `x_film_out_s` (the film seconds of the window). The scene's text box (`text`) is not copied: a later trim of the scene in the Film tab would spread the whole text over the short.
+- `subtitles` (when the film has them) and `titles`: 11.6.
+- `exports`: one entry, 11.7.
+- `derived_from`: `film` (the absolute path of the film file), `target_length_s`, `settings` (`aim_scene_s`, `min_scene_s`, `max_scene_s`, `size`, `prefer`, `only`, `exclude`, `film_sha256`, the hash of the film file the plan was made from).
 
-The builder gives every second of the film a score (starting weights are [inference]; D16):
+### 11.3 How important a scene is (S2, D16)
 
-| Signal | How it is measured | Weight |
-|--------|--------------------|--------|
-| Speech | The second lies inside a cue. | 3.0 |
-| Sound event | The onset strength of the second (the measure of section 7.2) is above `SHORT_SOUND_ONSET`. A sizzle starting or a knock shows as an onset. | 1.0 |
-| Picture activity | The mean absolute difference between the 5-per-second frames of section 7.4 inside the second, scaled to 0 to 1. | 1.0 |
-| Prompt | The second lies in a film range given with `--keep A:B`. Claude Code supplies the ranges after the owner describes what matters. | 3.0 |
-| Pinned | The segment has `priority: must`: never shortened. `priority: drop`: left out. | - |
+Three tiers (`shorts.Cand.tier`), highest first:
 
-### 11.4 Shortening (S2)
+| Tier | Which scenes |
+|------|--------------|
+| 3 | A scene with `priority` `must` (`scenes pin`) or named with `--prefer` (the scenes the owner's request names, which Claude Code finds from the index and the sheets). |
+| 2 | A scene with scene text (`segments[].text`) or with subtitles. |
+| 1 | The rest. |
 
-A deterministic procedure, pure and testable:
+Within a tier: more seconds of subtitles first, then the longer scene, then the earlier one. `priority` `drop` and `--exclude` take a scene out; `--only` limits the scenes the short may be made from. **Changed in the build:** the plan's score per second (speech 3.0, sound events 1.0, picture activity 1.0, prompt range 3.0) is not built. The owner's answer names the tiers, not weights; sound events and picture activity are not measured by any part of the tool, and the first shoot has speech only in 27 scenes. **Changed in the build:** a pinned scene is always kept but is not "never shortened" (the plan's `must`): it follows the time rule of 11.4, so that the cap of 8 s holds for every scene. `--prefer` and `scenes pin` have the same effect on one short and on every short.
 
-1. Start with every enabled segment except `drop`, whole. Let `L` be the total length.
-2. If `L` is not above the target, change no segment.
-3. Otherwise repeat until `L` equals the target to the frame: of all segment edges (the first and the last second of each segment that is not `must`), cut the edge second with the lowest score; ties go to the longer segment. In the last step cut only the part that brings `L` to the target.
-4. A segment that would fall below `SHORT_MIN_SCENE_SEC` (starting value 2.0) is removed whole.
-5. If the `must` segments alone are longer than the target, stop with an error that names both lengths.
-6. The order of segments does not change.
+### 11.4 Choosing the scenes and giving them time (S2)
 
-Cutting only at edges means no cut is made inside a scene, so no new jump cut appears [Design]. The joins, the film fades and the loudness are made for the short as for any film. The score step is a rule for a first draft. The owner and Claude Code can change the result by editing the short's file.
+The plan's rule (cut the lowest-scoring second from the edge of a scene until the length fits) is replaced. A run of it on the first shoot (171 scenes in 3514.7 s, speech-only scores) ended with 18 scenes of 2.1 to 2.9 s each: a fast montage whose coverage of the film follows from a tie rule [measured by simulation, 2026-10-27]. The rule as built, in frames of the film (29.97 fps), all deterministic:
+
+1. **The scenes it may use.** The enabled scenes without `priority` `drop` and `--exclude`, only `--only` and `--prefer` if `--only` is given. If together they are not longer than the target `T = round(seconds x fps)`, the short is the whole film (a note says it is shorter than asked).
+2. **How many.** `A = round(T / 4 s)`, at most the number of scenes that fit at their floors, at most the number of scenes available.
+3. **The floors** (rule V11): an inner scene `SHORT_MIN_SCENE_SEC`, 2.0 s (60 frames); the first scene the fade-in and half a join (1.25 s, so 2.0 s); the last scene half a join and the fade-out (2.25 s, 68 frames); a single scene the two fades (3.0 s, 90 frames). `shorts.position_floors`. A short shorter than 3.0 s is an error.
+4. **Which.** The pool is cut, in film order, into `A` parts of equal film length (a scene belongs to the part that holds its middle). Every tier-3 scene is kept. In each part without one, the scene with the highest importance is kept; a scene too short for its place (the first or last part) is not a candidate. If the floors of the kept scenes do not fit `T`, the least important scene that is not tier 3 is dropped, until they do; if the tier-3 scenes alone do not fit, ShortError names both lengths. If the kept scenes cannot reach `T` at the cap, `A` grows by one until they can; at the most scenes that fit, the cap is raised to the smallest value that works and a note says so.
+5. **How much time.** Scene `i` gets `min(cap_i, max(floor_i, r x length_i))` frames for the one number `r` for which they add up to `T` (bisection), rounded by the largest remainder so the sum is `T` exactly. `cap_i = min(8 s, length_i)`. So the short is `T` frames to the frame; the crossfades do not change the length (they overlap handles).
+6. **Where in the scene.** The window of that many frames with the best score (`shorts.best_window`): the seconds of subtitles it holds whole, less 1.5 s for each cue it cuts (kept or dropped) and 0.5 s for each cue it comes within a quarter second of without cutting; ties go to the window nearest the middle, then the earlier one. Without subtitles the window is the middle of the scene (the assembly already took 0.3 s off both ends). The window is one piece, so no new cut appears inside a scene.
+
+`short --dry-run` prints one row per kept scene (short id, film id, film in and out, short in and out, length, crop, cues kept and dropped, why) and the notes and warnings.
 
 ### 11.5 Crop (S3)
 
-The window is 1216 x 2160 pixels for a `brlt` clip (reduced to 1080 x 1920) and 968 x 1720 pixels for a `brhq` clip (enlarged by 12 percent to 1080 x 1920) (section 5.2). `crop.x` places it in each segment. The default is `SHORT_CROP_X` (0.5, the centre; a technical default, not a decision). The owner or Claude Code sets it per segment after looking at frames, or gives `x_from` and `x_to` for a slow pan. The vertical short is cut from the full-size picture decoded from the `.braw` file, which is the 4K source (decision).
+The window is the largest 9:16 rectangle inside the picture at full height: 1216 x 2160 for a 4096 x 2160 clip (29.7 percent of the width, reduced by 0.888 to 1080 x 1920), 968 x 1720 for a 4096 x 1720 clip (23.6 percent, enlarged by 1.116) (5.2). The short is cut from the full-size picture decoded from the `.braw` file, after both LUTs. There is no letterbox bar: a bar exists only in `fit` mode, and the window has the full height of the picture [measured on the first shoot, 11.10].
+
+`segments[].crop` places it: `x` (0 left edge, 0.5 centre, 1 right edge; the default `SHORT_CROP_X` is 0.5) or `x_from` and `x_to` for a pan. The unit is the share of the free travel (3128 px for a wide clip, 2880 px for the other), so the same `x` means different columns in the two kinds of clips. The crop is stored in the scene of the film, and the short copies it. When the window is a part of a scene, a pan is cut to it so that the window keeps the position it had at each frame and the speed of the pan (the render moves the window by `n / (length - 1)` of the way).
+
+Commands (the plan had none; D16 says "by hand or by prompt"):
+
+- `scenes crop SCENE --x X`, `--from A --to B` or `--clear`: writes the crop into the film, with `--dry-run`, one snapshot and the numbers of the window ("window 968 x 1720 of 4096 x 1720 (23.6 percent of the width), left edge at pixel 938 of 3128; enlarged by 1.116 to 1080 x 1920").
+- `scenes crop SCENE --still [--at S] [--size WxH]` (also with `--dry-run`, to try a place without saving): writes `<work>/stills/crop-<scene>-<crop>-at<S>s.jpg`, a picture of a frame of the scene cut from the preview copy (with the creative LUT) with the window outlined in yellow and the rest dimmed, and beside it what the window shows, under a strip with the numbers. For a pan, the window at the second `--at`, and thin outlines of its start and end. Claude Code looks at this picture and chooses the place.
+- `scenes pin ID[,ID...]` and `scenes unpin ID[,ID...]`: set and take away `priority` `must` (11.3). The film does not change.
+
+The validator no longer warns (V13) that a crop does nothing in a film whose `fit` is `fit`: a film keeps the crops of its scenes for the shorts made from it. A short whose own `fit` is `fit` still gets the warning.
 
 Automatic subject tracking is not included. The tools the research found for it are young, need installs the owner has not allowed, and the older one is described by its successor as no longer supported [documented, research B9] (D16).
 
-### 11.6 Subtitles for 9:16 (S4)
+### 11.6 Subtitles and titles for 9:16 (S4)
 
-The frame is 1080 x 1920. Third-party guidance for short-video platforms says to keep text out of the top 15 percent (288 px), the bottom 35 percent (672 px), the left 4 percent (43 px) and the right 18 percent (194 px) [documented, secondary, Src14]. That leaves a box from x = 43 to 886 (843 px wide) and from y = 288 to 1248. (Changed in step 4: the plan wrote 48 px and 192 px, which are not 4 and 18 percent of 1080; the code takes the percentages, `config.TEXT_LAYOUTS`.)
+The frame is 1080 x 1920. Third-party guidance for short-video platforms says to keep text out of the top 15 percent (288 px), the bottom 35 percent (672 px), the left 4 percent (43 px) and the right 18 percent (194 px) [documented, secondary, Src14]. That leaves a box from x = 43 to 886 (843 px wide) and from y = 288 to 1248. (Changed in step 4: the plan wrote 48 px and 192 px, which are not 4 and 18 percent of 1080; the code takes the percentages, `config.TEXT_LAYOUTS`.) Platform figures are for advertisements or from guides, not for organic posts: Google 10 / 25 / - / 10 percent, Meta 14 / 35 / 6 / 6 percent for Reels ads; the project is as strict or stricter on the top, bottom and right and looser than Meta on the left (4 against 6 percent) [documented, secondary; the owner should check one real upload on a phone]. The size is fixed by the layout (3.3 percent of the height, 64 px at 1080 x 1920), the lines are wrapped by the measured width with the real font, and a cue that does not fit two lines is split into more cues (9.3). No libass is involved.
 
-- Cues are re-wrapped to two lines of about 24 characters (starting value [inference]), and long cues are split with the time shared by characters (section 9.3).
-- **Changed in step 4 (the owner's rule: never shrink the font per cue):** the size is fixed by the layout (3.3 percent of the height, `config.TEXT_LAYOUTS`), the lines are wrapped by the measured width with the real font, and a cue that does not fit two lines is split into more cues (9.3). No libass is involved.
-- Titles are scaled by the same factor. The `lower_third` template sits above y = 1248. **Changed in step 6:** the plan was right and the code was wrong: the template lay at 72 percent of the height (y = 1382), inside the bottom 35 percent. `textlayer.title_place` now keeps every title inside the safe area (9.5).
+What the builder does with a cue of the film (`shorts.keep_cue`, `shorts.lay_cue`):
+
+- **Inside the window:** kept, times moved to the new scene.
+- **Cut by the window:** kept, cut to the window, only if at least `max(1.0 s, 0.8 x the length of the cue)` of it stays (`SHORT_CUE_KEEP_MIN_SEC`, `SHORT_CUE_KEEP_FRACTION`); a cue shorter than 1.0 s stays whole or not at all. The existing trim rule (0.5 s left) would show the full text for half a second and break the 17 characters per second limit.
+- **Outside:** dropped. The plan lists every dropped cue with the reason (`short --dry-run`).
+- **Laid out again:** the text is flattened and wrapped to two lines of the 9:16 width (24 characters, 833 px at 64 px). A text that does not fit is split with `words.split_cues` and the time is shared by characters with `words.spread` (at least 1.0 s a piece where the time allows). If the pieces need more time than the cue has, they are shortened in proportion and a warning says they are shorter than a person can read. Nothing is drawn smaller.
+- The cues get new ids (`c001`, ...) in film order and are anchored to the new scenes.
+
+Titles: a title anchored to a scene is kept if its interval is kept by the same rule; a title anchored to `film` goes to the scene that held its start, if that scene is in the short and the title is kept by the same rule; otherwise it is dropped and the plan says which. Titles keep their template and size. **Changed in step 6 (found by the research):** the plan and the code disagreed about the `lower_third` title: SPECS 11.6 said it sits above y = 1248, the code put it at 72 percent of the height (y = 1382), inside the bottom 35 percent. The rule decides, so the code was wrong; `textlayer.title_place` now keeps every title inside the safe area (9.5). The form of the subtitles is a setting of the export (D13): `burned` for a short unless the export says otherwise.
+
+Burned-in Chinese, Japanese and Thai need other fonts (9.11). The short's cues are English: the timeline file holds English cues only.
 
 ### 11.7 Export (S5)
 
-MP4, H.264 and AAC as in section 5.6, at 1080 x 1920. A short that is longer than 180 seconds gets a warning (rule V22), because YouTube allows Shorts up to 3 minutes since 2024-10-15 [documented, secondary, Src14].
+`export.preset_entry("short", ...)`, the preset `short`: MP4, H.264 with `h264_videotoolbox` at 8 Mbit/s (YouTube's figure for 1080p at 24 to 30 frames per second [documented, Src11]; the starting value of 5.6), AAC-LC at 192 kbit/s and 48 kHz (the film's 384 kbit/s is more than the platforms need [inference]), the colour tags, the timecode and `faststart` as for the film, the subtitle form `burned`. The builder takes the encoder of the film's first MP4 export instead when it is `libx264`. A custom size is the `--size` of the plan: the frame and the export have it (V5 asks that an export has the shape of the film frame). The render is `export.render_export`, the same function as the film's: the decoder writes the frames `in` to `out - 1` of each scene, a segment filter applies both LUTs, the window (`crop` and `scale`) and the conversion to BT.709 video levels, one encoder process lays the text over the picture (`overlay`), applies the fades, and muxes the sound that was made first (levelled per scene, then the film to -14 LUFS, true peak at most -1 dBTP, limiter, one AAC encode, read back). The checks of 5.7 apply, with the frame count of the plan. A short longer than 180 s gets the V22 warning, because YouTube allows Shorts up to 3 minutes since 2024-10-15 [documented, secondary, Src14].
+
+Speed: the film rendered at 0.375 times real time on the first shoot (5.3); the 60 s short at 0.353 and 0.363 times real time (11.10).
 
 ### 11.8 Checks for step 6
 
 | Check | Command | Passes when |
 |-------|---------|-------------|
-| 6.1 | `python3 -m unittest tests.test_short_trim -v` | With given scores: the result length equals the target to the frame; kept segments are contiguous; the highest-scoring seconds are kept; a `must` segment is never shortened; `must` longer than the target is an error that names both lengths; `drop` segments are absent; segments below the minimum are removed; a film not longer than the target is unchanged; the order is unchanged. |
-| 6.2 | `python3 -m unittest tests.test_short_crop -v` | For a 4096 x 2160 source the window is 1216 x 2160; `x` of 0, 0.5 and 1 give X of 0, 1440 and 2880. For a 4096 x 1720 source the window is 968 x 1720 and X is 0, 1564 and 3128. A moving window moves in a straight line. |
-| 6.3 | `python3 -m unittest tests.test_short_subtitles -v` | Twenty cues of different lengths, drawn by `textlayout` and laid over the picture (9.6; no libass), all have their lit-pixel box inside the safe area. Cue splits add up to the original times. |
-| 6.4 | `python3 -m unittest tests.test_short_export -v` | The MP4 is 1080 x 1920, H.264, AAC. Its length is within one frame of the target. A short longer than 180 s gives the V22 warning. |
-| 6.5 | `python3 main.py short --from timeline.json --length 45 --name test`, then render | On the first shoot: exit 0, the file passes the checks of section 5.7. **The owner** watches it: are the important moments there, do the subtitles fit, is the crop right. The owner sets the pass level after the first attempt. |
+| 6.1 | `python3 -m unittest tests.test_shorts -v` | The plan: the length equals the target to the frame for 15 to 180 s; the floors of V11 hold; the cap holds; one scene from each equal part of the film; the order is unchanged; importance (pinned, named, scene text, subtitles, longest); `--only`, `--exclude`, `drop`; pinned scenes that do not fit are an error that names both lengths; a film shorter than the target is taken whole; the window does not cut a cue; the file is valid and the film is not changed; two runs give the same file. |
+| 6.2 | `python3 -m unittest tests.test_scene_marks tests.test_window_still -v` | `scenes pin`, `unpin` and `crop` (values, snapshot, undo, dry run, errors); the numbers of the window for both kinds of clips (1216 x 2160 and 968 x 1720; X of 0, 1440, 2880 and 0, 1564, 3128 for x of 0, 0.5, 1); the still shows the window where the crop puts it; a pan moves in a straight line. |
+| 6.3 | `python3 -m unittest tests.test_shorts.CueTests tests.test_short_render.SubtitleTests tests.test_textlayer -v` | Cues of different lengths laid out again for 9:16 have at most two lines of 24 characters and add up to the original text; a cut cue stays only with most of it; the lit pixels of burned subtitles lie inside the safe area; every title lies inside the safe area of a 9:16 frame and the lower third ends at y = 1248. |
+| 6.4 | `python3 -m unittest tests.test_short_render -v` | The short rendered with a decoder that makes gradients: H.264 High 4:2:0, the size of the plan, AAC 48 kHz, as many frames as the plan, the sound as long as the picture within a frame, the loudness near -14 LUFS with the true peak under -1 dBTP, the window at the left, at the right, centred and panning where the crop says, no bar in a wide clip, the stills; the command plans, renders, writes the plan, refuses the options of a new short for a plan, keeps the old plan as a snapshot, leaves the film and the originals untouched. |
+| 6.5 | `python3 main.py short --file timeline.json --work DIR --length 60 --stills` on the first shoot | Exit 0, the file passes the checks of 5.7, the contact sheet. **The owner** watches it: are the important moments there, do the subtitles fit, is the crop right. The owner sets the pass level after the first attempt. |
 | 6.6 | `python3 -m unittest discover -s tests -v` | All earlier tests still pass. |
+
+### 11.9 Where the build differs from the plan
+
+- **The command.** `--file` (with `--from` as another spelling) instead of only `--from`, `--output` instead of `--name`, and `--length` has a default (60 s, D15) instead of being required. A short that is already planned is rendered by giving its plan as `--file`.
+- **The choice of scenes** is the rule of 11.4, not the plan's edge cutting; the **importance** is the three tiers of 11.3, not a score per second. A pinned scene is kept but follows the time rule.
+- **No ASS file.** The plan named ASS and libass in 11.1 and in check 6.3; the tool has neither.
+- **The `lower_third` title** is kept above y = 1248 in a 9:16 frame (11.6); the plan and the code disagreed.
+- **New commands** `scenes pin`, `scenes unpin`, `scenes crop` (with `--still`) and the option `--stills` of `short`, which the plan did not have; V13 no longer warns about a crop in a film.
+- **The left margin** of the 9:16 layout stays at 4 percent. Meta's figure for Reels ads is 6 percent; a change to `TEXT_LAYOUTS["9:16"]` would cost nothing for the usual 24-character line (about 694 px in a box of 843 px) [arithmetic, research of 2026-10-27], and is the owner's to decide after one real upload.
+- **AAC at 192 kbit/s** instead of the film's 384.
+- **No Shotcut project of a short** (`export-shotcut` refuses it).
+- **Not measured:** the sound events and the picture activity of the plan's score (11.3). **Not built:** burned-in Chinese, Japanese and Thai (9.11), a short in a translated language, resume of an interrupted render (a short of 60 s took 3 minutes, so a restart is cheap; the whole first shoot took 2 h 36 min, 5.3).
+
+### 11.10 The run on the first shoot (2026-10-28)
+
+Two copies of films of the first shoot, each with the creative LUT `slay-04-film.cube`: `step3/timeline-short-test.json` (a copy of `timeline-full.json`: 171 scenes, 3514.7 s, no subtitles, no titles; 114 scenes from 4096 x 1720 clips, 57 from 4096 x 2160 clips) and `step3/timeline-short-subs-test.json` (a copy of `timeline-full-subs.json`: the same scenes with 44 automatic subtitles on 27 scenes). The film files were not changed. The machine ran other work: the load average was 5.2 at the start of the first render and 17.6 at its end [measured].
+
+| | 60 s | 45 s |
+|---|------|------|
+| Command | `short --file timeline-short-test.json --work DIR --length 60 --output exports/short-60.mp4 --stills` | the same with `--length 45 --output exports/short-45.mp4 --dry-run` |
+| Scenes | 15 (one from each of 15 parts of the film), 2.30 s to 8.01 s; 10 from wide clips, 5 from the others | 11, 2.64 s to 7.67 s |
+| Length of the plan | 1798 frames, 59.993 s | 1349 frames, 45.012 s |
+
+Measured on `exports/short-60.mp4` [measured: `ffprobe` and ffmpeg `ebur128` on the finished file]:
+
+| Measure | Value |
+|---------|-------|
+| Duration | 59.993267 s of picture and 59.993 s of sound; 1798 frames (asked: round(60 x 30000 / 1001) = 1798) |
+| Format | 1080 x 1920, H.264 High, yuv420p, 30000/1001 frames per second, BT.709 tags, timecode 00:00:00:00, `faststart`; AAC-LC 48 kHz stereo at 193 kbit/s |
+| File | 60 109 634 bytes (60.1 MB), 8.02 Mbit/s over the file (video 7.81 Mbit/s) |
+| Loudness | integrated -14.2 LUFS (the mix before the encode: -14.05 LUFS); loudness range 23.0 LU |
+| True peak | -1.2 dBTP (the render's own read-back: -1.24) |
+| Render | 178.2 s: the sound 6.9 s (the mix 5.3 s, one AAC encode 1.6 s), the picture 170.0 s at 10.57 frames per second (0.353 times real time), 0.5 s of checks; peak memory 2.75 GB. The command with the plan and the stills took 3 min 0.6 s. |
+| Warnings | 12 scenes are quiet: levelling them would need 17.9 to 36.2 dB and the cap is 12 dB (the film has the same scenes). The render reported nothing else, and its own checks passed. |
+
+The second file, `exports/short-subs-60.mp4` (the film with subtitles, 60 s): 1798 frames, 59.993267 s, 60.8 MB, 8.1 Mbit/s, integrated -14.1 LUFS, true peak -1.4 dBTP, rendered in 172.7 s (the picture 165.4 s at 10.87 frames per second), 3 min 0.0 s with the plan and the stills [measured]. Its plan (`short --dry-run`): 11 of the 15 scenes were chosen because they have scene text or subtitles; the kept scenes hold 22 of the film's cues, 8 of them stay (10 cues after the layout for 9:16, in 7 scenes) and 14 do not fit the 2 to 8 s of their scene. The validator warns (V19) of three cues read at 19 characters per second (more than 17) and one that lasts 0.90 s [measured, listed in the plan].
+
+Seen in the contact sheets `exports/short-60.contact.jpg` and `short-subs-60.contact.jpg`, the stills `short-60.stills/s001.jpg` to `s015.jpg` (the middle frame of each scene) and `short-subs-60.stills/`, and in the pictures of `scenes crop SCENE --still` for five film scenes (s002, s011, s046, s125, s128) [seen by the author on 2026-10-28; the owner has not watched the short]:
+
+- **Black bars: none.** The window has the full height of the picture and the chain has no `pad` filter. Two stills (s002, s006 of the first short) have rows of near-black pixels at the top: a black shirt in the picture, which the still of the film scene shows up to the top edge.
+- **Subtitles** (second short): white, outlined, one or two lines of about 24 characters in Inter SemiBold at 64 px, centred at about x = 464 (the middle of the safe box, not of the frame). The line box ends at y = 1248; the white letters of the last line end at y = 1239 to 1251 (descenders), and the outline and the shadow reach about 8 px further. So the text lies above the bottom 35 percent except for the outline of the descenders [measured on the stills s006, s007, s008, s010, s015; the layout is the one of step 4, 9.5].
+- **The subject in the window with the window centred**, judged from the contact sheet for all 15 scenes and from the full frame for the five scenes named above. In the picture: hands, knife and fruit (s002, full frame seen), the cook at the counter, a mortar with a plate, a salad plate, two people at a table (both in the window), a dragon fruit being cut, a hand with a bowl and a dessert (s003 to s010, s013 to s015). Not in the window, or cut by it: s001 (a garden; no person or action in the picture), s005 (the person at the sink stands left of the window; the plate of vegetables is cut by its right edge), s011 (a man bending over; the window has his back and legs, his head is left of it) and s012 (a man with a drill; the window cuts him at the waist; with `--x 0.17` his body is in and his head leaves at the right edge, so the right place lies between about 0.2 and 0.25; not saved). So with the centred window about 3 of 15 scenes need a hand crop and 1 more is doubtful. The window shows 23.6 percent of the width of a wide clip, so the position matters; nothing finds it.
+- The 10 scenes from wide clips are enlarged by 11.6 percent. At the size of the contact sheet (270 px wide) and of one full-size still no softness stands out; the owner judges the file.
+
+### 11.11 Not built, and limits
+
+- **Which scene shows what** is read by Claude Code from the sheets (step 5); the tool measures no sound event and no picture activity (11.3).
+- **No subject tracking** (D16). On the first shoot about 3 of 15 scenes need a hand crop with the window centred (11.10).
+- **Subtitles of a scene are laid out for the whole scene by the text box**, so a window of 2 to 8 s of a long scene keeps few of them (8 of 22 on the first shoot). A short that is meant to carry words needs scenes whose text is short, or `--prefer` for the scenes that have them.
+- **Burned-in Chinese, Japanese and Thai** need other fonts (9.11); the short is English.
+- **The Shotcut project** refuses a short.
+- **Platform figures** (safe zones, loudness) are from guides and advertisement pages, not for organic posts; the owner checks one upload on a phone.
+- **A render is not resumed** (5.3). A short of 60 s took 3 minutes, so it starts over.
 
 ---
 
@@ -1930,6 +2024,9 @@ Every statement tagged [unverified] above, and a few [inference] ones that the d
 | Claude Code finds scenes from sheets and a transcript. | Check 5.5 with the owner. Tried once by the author on the first shoot (10.7): the sheets found the scenes of three requests, the transcript added nothing, and the verb of a request could not be checked from stills. |
 | All H2N files are stereo at 96 kHz (one was checked). | Check 1.9 (the probe of every WAV) |
 | A file made with the "Film to Video" LUT and tagged BT.709 as in section 5.6 displays with the right brightness in QuickTime Player, the browser and YouTube. | Check 3.8 |
+| The safe-zone figures of the 9:16 layout (top 15, bottom 35, left 4, right 18 percent) keep text clear of the buttons of YouTube Shorts, Instagram Reels and TikTok in an organic upload. The figures are from advertisement pages and guides (11.6). | The owner uploads one short and looks at it on a phone. |
+| The shorts show the important moments, the crop shows the subject, the subtitles read well, the length feels right. The author looked at stills only (11.10). | Check 6.5: the owner watches `short-60.mp4` and `short-subs-60.mp4`. |
+| The loudness of -14 LUFS with a true peak of -1 dBTP suits the three platforms. None of them states a target on the pages that could be read (research of 2026-10-27). | The owner's ear on a phone; the platforms' own help pages if they say more later. |
 
 ---
 
