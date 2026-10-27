@@ -363,7 +363,8 @@
   .film-table td { padding: 6px 8px; border-bottom: 1px solid #1a1a2e; vertical-align: middle; }
   .film-row { cursor: pointer; }
   .film-row:hover { background: #16213e; }
-  .film-row.off { opacity: 0.45; }
+  .film-row.off td { opacity: 0.45; }
+  .film-row.off td.film-in-film { opacity: 1; }
   .film-row.playing { background: #0f3460; }
   .film-btn { padding: 2px 7px; font-size: 0.85em; margin-right: 2px; }
   .film-label { width: 100%; min-width: 140px; padding: 3px 6px; background: #0a0a2e; border: 1px solid #333;
@@ -624,10 +625,10 @@
       </div>
       <div class="card" id="filmSegmentsCard" style="display:none">
         <h2>Scenes</h2>
-        <p>Move the start or the end of a scene by one second or one frame, remove a scene (and
-           restore it), or change the order. Every change is saved to the timeline file at once and
-           the old file is kept. Click a row to jump to it in the preview. After a change, render the
-           preview again.</p>
+        <p>Move the start or the end of a scene by one second or one frame, remove a scene (untick
+           "In film"), or change the order. A removed scene stays in the list, greyed, with a Restore
+           button. Every change is saved to the timeline file at once and the old file is kept. Click a
+           row to jump to it in the preview. After a change, render the preview again.</p>
         <table class="film-table" id="filmTable"></table>
       </div>
       <div class="card" id="filmSubtitlesCard" style="display:none">
@@ -1347,8 +1348,10 @@ function renderFilmTable() {
       <td class="film-mono">${fmtDur(r.length_s)}</td>
       <td><span class="film-mono">${r.in} (${fmtDur(r.in / fps)})</span><br>${buttons(r.id, "in")}</td>
       <td><span class="film-mono">${r.out} (${fmtDur(r.out / fps)})</span><br>${buttons(r.id, "out")}</td>
-      <td><input type="checkbox" ${r.enabled ? "checked" : ""} onclick="event.stopPropagation()"
-           onchange="filmOp(event, [{op:'set_enabled', segment:'${escapeHtml(r.id)}', enabled:this.checked}])"></td>
+      <td class="film-in-film"><input type="checkbox" ${r.enabled ? "checked" : ""} onclick="event.stopPropagation()"
+           onchange="filmOp(event, [{op:'set_enabled', segment:'${escapeHtml(r.id)}', enabled:this.checked}])">
+        ${r.enabled ? "" : `<button class="btn btn-secondary film-btn film-restore"
+           onclick="filmRestore(event, '${escapeHtml(r.id)}')">Restore</button>`}</td>
       <td>
         <button class="btn btn-secondary film-btn" ${i === 0 ? "disabled" : ""}
           onclick="filmOp(event, [{op:'move', segment:'${escapeHtml(r.id)}', to_index:${i - 1}}])">up</button>
@@ -1359,6 +1362,11 @@ function renderFilmTable() {
     </tr>`;
   }).join("");
   document.getElementById("filmTable").innerHTML = head + body;
+}
+
+// Put a removed scene back into the film (the button of a removed row).
+function filmRestore(event, id) {
+  return filmOp(event, [{ op: "set_enabled", segment: id, enabled: true }]);
 }
 
 // Send operations to the server with the hash the page started from. Returns the answer when the

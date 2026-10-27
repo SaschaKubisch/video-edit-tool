@@ -744,6 +744,14 @@ class PageLogicTests(TimelineFileCase):
                          [["s001", True], ["s002", False], ["s003", True]])
         self.assertIsNone(out["afterRemove"][1][2])
         self.assertIn("removed", out["tableAfterRemove"])
+        # a removed scene is greyed and has a Restore button; the scenes that are in the film have none
+        removed_row = out["tableAfterRemove"].split('id="filmRow_s002"')[1].split("</tr>")[0]
+        self.assertIn("film-row off", out["tableAfterRemove"])
+        self.assertIn("filmRestore(event, 's002')", removed_row)
+        self.assertIn("Restore", removed_row)
+        self.assertEqual(out["tableAfterRemove"].count("filmRestore("), 1)
+        self.assertEqual([r[:2] for r in out["afterRestore"]], [["s001", True], ["s002", True], ["s003", True]])
+        self.assertNotIn("filmRestore(", out["tableAfterRestore"])
         self.assertEqual(out["afterMove"], ["s003", "s001", "s002"])
         # an invalid change is refused with the field path, and the table keeps the saved values
         self.assertIn("segments[1].out", out["errorInvalid"])

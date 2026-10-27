@@ -59,6 +59,12 @@ const out = {};
   out.afterRemove = JSON.parse(run("JSON.stringify(film.summary.rows.map(r => [r.id, r.enabled, r.film_start_frame]))"));
   out.tableAfterRemove = element("filmTable").innerHTML;
 
+  // the Restore button of a removed scene puts it back with one set_enabled operation
+  await run("filmRestore(null, 's002')");
+  out.afterRestore = JSON.parse(run("JSON.stringify(film.summary.rows.map(r => [r.id, r.enabled, r.film_start_frame]))"));
+  out.tableAfterRestore = element("filmTable").innerHTML;
+  await run("filmOp(null, [{op: 'set_enabled', segment: 's002', enabled: false}])");
+
   await run("filmOp(null, [{op: 'move', segment: 's003', to_index: 0}])");
   out.afterMove = JSON.parse(run("JSON.stringify(film.summary.rows.map(r => r.id))"));
 
