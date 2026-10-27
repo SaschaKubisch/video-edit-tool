@@ -241,7 +241,21 @@ TRANSLATE_TRIES = 3                # requests per batch before the run stops
 # this many characters is not asked for: the cue is too short for a sentence, and the warning stays.
 TRANSLATE_SHORTEN_MIN_CHARS = 4
 TRANSLATE_TIMEOUT_SEC = 120
-TRANSLATE_RETRY_WAIT_SEC = (1.0, 3.0)
+TRANSLATE_RETRY_WAIT_SEC = (1.0, 3.0)    # waits between the tries of a request, for every error but the next two
+# A provider that is rate limited (HTTP 429) or busy (503) stays so longer than 4 s [measured, first real follow-up,
+# 2026-10-27]: those two wait for the Retry-After header of the answer (seconds or an HTTP date, at most
+# TRANSLATE_RETRY_AFTER_MAX_SEC), or, without one, TRANSLATE_RATE_WAIT_SEC, and make up to TRANSLATE_RATE_TRIES tries.
+TRANSLATE_RATE_TRIES = 4
+TRANSLATE_RATE_WAIT_SEC = (5.0, 15.0, 30.0)
+TRANSLATE_RETRY_AFTER_MAX_SEC = 60.0
+# max_tokens of a request, from the cues in it: BASE + PER_CUE x cues, at least FLOOR. The first real follow-up was
+# billed 65538 tokens out for 9 short cues because the model ran on without a limit. Starting values [Design]: a
+# translation of a cue of 84 characters is far below 160 tokens in the six languages, a shorter text far below 100.
+TRANSLATE_MAX_TOKENS_BASE = 128
+TRANSLATE_MAX_TOKENS_PER_CUE = {"translate": 160, "shorten": 100}
+TRANSLATE_MAX_TOKENS_FLOOR = 512
+# An answer that ended at max_tokens is tried once more; a second one ends the request (it would be the same answer).
+TRANSLATE_CUTOFF_TRIES = 2
 
 
 # ── Prompt edits (step 5, SPECS section 10): the scene index and the still sheets ──

@@ -275,7 +275,8 @@ class SaveRawCommandTests(FollowUpCase):
 
 
 class RateLimitTests(FollowUpCase):
-    """HTTP 429 is tried again for the follow-up as for the first request: the same waits, 3 tries."""
+    """HTTP 429 is tried again for the follow-up as for the first request: the same waits and tries (the waits and
+    the number of tries are in tests/test_translate_requests.py)."""
 
     def setUp(self):
         super().setUp()
@@ -285,30 +286,30 @@ class RateLimitTests(FollowUpCase):
     def test_the_first_request_waits_and_tries_again(self):
         self.server.script = ["http429", "http429"]
         self.go(self.tl, "zh-Hans")
-        self.assertEqual(self.waits, list(config.TRANSLATE_RETRY_WAIT_SEC))
+        self.assertEqual(self.waits, list(config.TRANSLATE_RATE_WAIT_SEC[:2]))
         self.assertEqual(self.server.count, 3)
 
     def test_the_follow_up_waits_and_tries_again_the_same_way(self):
         self.server.script = ["ok", "http429", "http429", "ok"]
         report = self.go(self.tl, "ja")
-        self.assertEqual(self.waits, list(config.TRANSLATE_RETRY_WAIT_SEC))
+        self.assertEqual(self.waits, list(config.TRANSLATE_RATE_WAIT_SEC[:2]))
         self.assertEqual(self.server.count, 4)
         self.assertEqual(report["follow_up_requests"], 3)
         self.assertIn(JA_SHORT["c001"], {c["text"].replace("\n", "") for c in self.srt("ja")})
         self.assertEqual(report["warnings"], [])
 
-    def test_a_follow_up_that_stays_rate_limited_fails_after_three_tries_and_says_so(self):
-        self.server.script = ["ok", "http429", "http429", "http429"]
+    def test_a_follow_up_that_stays_rate_limited_fails_after_its_tries_and_says_so(self):
+        self.server.script = ["ok"] + ["http429"] * config.TRANSLATE_RATE_TRIES
         report = self.go(self.tl, "ja")
-        self.assertEqual(self.server.count, 1 + config.TRANSLATE_TRIES)
-        self.assertEqual(self.waits, list(config.TRANSLATE_RETRY_WAIT_SEC))          # no wait after the last try
+        self.assertEqual(self.server.count, 1 + config.TRANSLATE_RATE_TRIES)
+        self.assertEqual(self.waits, list(config.TRANSLATE_RATE_WAIT_SEC))          # no wait after the last try
         message = [w for w in report["warnings"] if w.startswith("ja c001: no shorter")][0]
-        self.assertIn(f"after {config.TRANSLATE_TRIES} tries", message)
+        self.assertIn(f"after {config.TRANSLATE_RATE_TRIES} tries", message)
         self.assertIn("HTTP 429", message)
         self.assertIn(JA["c001"], {c["text"].replace("\n", "") for c in self.srt("ja")})
 
     def test_a_rate_limited_follow_up_does_not_stop_the_other_languages(self):
-        self.server.script = ["ok", "http429", "http429", "http429"]
+        self.server.script = ["ok"] + ["http429"] * config.TRANSLATE_RATE_TRIES
         report = self.go(self.tl, "ja,zh-Hans")
         self.assertTrue((self.out.parent / "film.zh-Hans.srt").is_file())
         self.assertEqual(sorted(report["languages"]), ["ja", "zh-Hans"])

@@ -27,9 +27,12 @@ the files line up.
   the cost and is cached under a key of its own (the maximum is part of the key). `shorten=False` or
   `--no-shorten` switches it off.
 - The answer of the model is read by `parse_answer`: the one JSON object that maps every id to a text, also among
-  prose or in a fence that is not the whole text; nothing is repaired. A request is tried 3 times (an unreadable
-  answer, a network error, HTTP 429 and 5xx alike). With `save_raw` (`--save-raw DIR`) the text of every answer that
-  cannot be read is written to a file there, for finding out what the model sent.
+  prose or in a fence that is not the whole text; nothing is repaired. With `save_raw` (`--save-raw DIR`) the text of
+  every answer that cannot be read is written to a file there, for finding out what the model sent.
+- Every request has `max_tokens` (`max_tokens_for`). An answer that ended at that limit is a failed try even when its
+  JSON can be read; it is tried once more, a second one ends the request. A request makes up to 3 tries, waiting 1 s and
+  3 s; HTTP 429 and 503 wait for Retry-After (at most 60 s) or 5, 15 and 30 s and make up to 4 tries (`_ask`). The report
+  lists every try (`requests`) with its tokens.
 - Each translation is wrapped again for its language: 42 characters per line for pt-BR, de and ru, 35 for Thai
   (tone marks and vowel marks not counted), 16 for Simplified Chinese, 13 full-width characters for Japanese;
   two lines at most. A line of Chinese, Japanese or Thai has no spaces, so it is cut at the phrase boundaries that
@@ -37,6 +40,8 @@ the files line up.
   those of the Netflix Timed Text Style Guide of each language (config.TRANSLATE_LANGUAGE_RULES).
 """
 
+import collections
+import email.utils
 import hashlib
 import json
 import math
@@ -64,7 +69,17 @@ class _Fatal(TranslateError):
 
 
 class _Retry(Exception):
-    """A request that failed in a way that may pass: a network error, a server error, an unusable answer."""
+    """A request that failed in a way that may pass: a network error, a server error, an unusable answer.
+    `rate` is set for HTTP 429 and 503 (waits of their own), `retry_after` is the wait the answer asked for, in
+    seconds (already cut at config.TRANSLATE_RETRY_AFTER_MAX_SEC), `cut_off` for an answer that ended at max_tokens."""
+
+    def __init__(self, message: str = "", rate: bool = False, retry_after=None, cut_off: bool = False):
+        super().__init__(message)
+        self.rate, self.retry_after, self.cut_off = rate, retry_after, cut_off
+
+
+CUT_OFF = "the answer was cut off at max_tokens"
+_now = time.time                           # the clock for an HTTP date in Retry-After; the tests replace it
 
 
 # ── Settings ────────────────────────────────────────────────────
@@ -310,6 +325,35 @@ def flat(text: str) -> str:
 
 # ── The service ─────────────────────────────────────────────────
 
+def retry_after_seconds(value):
+    """The wait in a Retry-After header: a number of seconds or an HTTP date, cut at config.TRANSLATE_RETRY_AFTER_MAX_SEC
+    (60 s). None when there is no header or it is not a time (an empty text, a word, a negative number, a number that
+    is not finite); a date in the past is 0."""
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        seconds = float(text)
+        if seconds < 0:
+            return None
+    except ValueError:
+        try:
+            seconds = max(0.0, email.utils.parsedate_to_datetime(text).timestamp() - _now())
+        except (TypeError, ValueError, IndexError, OverflowError):
+            return None
+    if not math.isfinite(seconds):
+        return None
+    return min(seconds, config.TRANSLATE_RETRY_AFTER_MAX_SEC)
+
+
+def max_tokens_for(kind: str, n_cues: int) -> int:
+    """The output limit of a request with `n_cues` cues: "translate" (the first request) or "shorten" (the follow-up)."""
+    size = config.TRANSLATE_MAX_TOKENS_BASE + config.TRANSLATE_MAX_TOKENS_PER_CUE[kind] * n_cues
+    return max(config.TRANSLATE_MAX_TOKENS_FLOOR, size)
+
+
 class Client:
     """OpenRouter's chat completions API. The key goes into one header and nowhere else."""
 
@@ -322,9 +366,12 @@ class Client:
         """`text` without the key, for a text that is written to a file."""
         return text.replace(self._key, "***") if self._key else text
 
-    def chat(self, model: str, messages: list) -> dict:
-        body = json.dumps({"model": model, "messages": messages, "temperature": 0,
-                           "response_format": {"type": "json_object"}, "usage": {"include": True}}).encode("utf-8")
+    def chat(self, model: str, messages: list, max_tokens: int = None) -> dict:
+        request = {"model": model, "messages": messages, "temperature": 0,
+                   "response_format": {"type": "json_object"}, "usage": {"include": True}}
+        if max_tokens:
+            request["max_tokens"] = int(max_tokens)
+        body = json.dumps(request).encode("utf-8")
         req = urllib.request.Request(self.url + "/chat/completions", data=body, method="POST", headers={
             "Authorization": f"Bearer {self._key}", "Content-Type": "application/json",
             "X-Title": "video-edit-tool"})
@@ -343,6 +390,9 @@ class Client:
                 raise _Fatal(f"OpenRouter rejected the key (HTTP {e.code}). Check OPENROUTER_API_KEY or the keychain item.")
             if e.code == 402:
                 raise _Fatal("OpenRouter says there is no credit left (HTTP 402). Add credit to the account.")
+            if e.code in (429, 503):
+                raise _Retry(f"HTTP {e.code} {detail}".strip(), rate=True,
+                             retry_after=retry_after_seconds(e.headers.get("Retry-After") if e.headers else None))
             raise _Retry(f"HTTP {e.code} {detail}".strip())
         except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as e:
             raise _Retry(f"network error: {type(e).__name__}")
@@ -548,33 +598,76 @@ def _save_raw(save_raw, client, content, lang: str, kind: str, ids: list, attemp
     return path
 
 
+Asked = collections.namedtuple("Asked", "answer why tries")
+
+
+def _cut_off(finish, native, tokens_out: int, max_tokens: int) -> bool:
+    """Did the answer end because it reached max_tokens? `finish_reason` "length", the provider's own reason
+    ("MAX_TOKENS"), or, when the answer names no reason, as many tokens out as max_tokens allowed."""
+    if str(finish).lower() == "length":
+        return True
+    if str(native).lower() in ("max_tokens", "length", "max_output_tokens"):
+        return True
+    return finish is None and native is None and bool(max_tokens) and tokens_out >= max_tokens
+
+
 def _ask(client, model: str, messages: list, ids: list, report: dict, follow_up: bool = False, lang: str = "",
-         kind: str = "translate", save_raw=None):
-    """One request, tried config.TRANSLATE_TRIES times, with a wait between the tries (an unusable answer, a network
-    error, HTTP 429 and 5xx are all tried again the same way). Returns (the answer {id: text}, "") or (None, why the
-    last try failed). The tokens of every answer that comes back are added to the report, also those of an answer
-    that cannot be read; a rejected key or no credit raises TranslateError at once. The text of every answer that
-    cannot be read goes to `save_raw` (see _save_raw)."""
-    why = ""
-    for attempt in range(config.TRANSLATE_TRIES):
+         kind: str = "translate", save_raw=None) -> Asked:
+    """One request with its tries. Returns Asked(answer {id: text} or None, why the last try failed, tries made).
+    Each request carries max_tokens (max_tokens_for). A try fails on an answer that cannot be read, a network error,
+    an HTTP error, or an answer that ended at max_tokens even when the JSON in it can be read (CUT_OFF).
+    - HTTP 429 and 503 wait for Retry-After, or config.TRANSLATE_RATE_WAIT_SEC (5, 15, 30 s) without one, and make up
+      to config.TRANSLATE_RATE_TRIES (4) tries. Any other failure waits config.TRANSLATE_RETRY_WAIT_SEC (1, 3 s) and
+      makes up to config.TRANSLATE_TRIES (3) tries; once a 429 or 503 has come, the limit of 4 holds.
+    - A second cut-off ends the request at once (config.TRANSLATE_CUTOFF_TRIES): the answer would be the same.
+    There is no wait after the last try. The tokens of every answer that comes back are added to the report, also
+    those of an answer that cannot be read, and every try is listed in report["requests"]. A rejected key or no
+    credit raises TranslateError at once. The text of every answer that cannot be read goes to `save_raw`."""
+    max_tokens = max_tokens_for(kind, len(ids))
+    why, tries, cut_offs, rate_failures = "", 0, 0, 0
+    while True:
+        tries += 1
         if follow_up:
             report["follow_up_requests"] += 1
+        entry = {"lang": lang, "kind": kind, "cues": len(ids), "try": tries, "max_tokens": max_tokens,
+                 "tokens_in": 0, "tokens_out": 0, "finish_reason": None, "native_finish_reason": None, "result": ""}
+        report["requests"].append(entry)
+        failure = None
         try:
-            resp = client.chat(model, messages)
+            resp = client.chat(model, messages, max_tokens)
             usage = resp.get("usage") or {}
-            report["tokens_in"] += int(usage.get("prompt_tokens") or 0)
-            report["tokens_out"] += int(usage.get("completion_tokens") or 0)
-            content = (resp.get("choices") or [{}])[0].get("message", {}).get("content")
+            entry["tokens_in"] = int(usage.get("prompt_tokens") or 0)
+            entry["tokens_out"] = int(usage.get("completion_tokens") or 0)
+            report["tokens_in"] += entry["tokens_in"]
+            report["tokens_out"] += entry["tokens_out"]
+            choice = (resp.get("choices") or [{}])[0]
+            entry["finish_reason"] = choice.get("finish_reason")
+            entry["native_finish_reason"] = choice.get("native_finish_reason")
+            content = (choice.get("message") or {}).get("content")
             try:
-                return parse_answer(content, ids), ""
+                if _cut_off(entry["finish_reason"], entry["native_finish_reason"], entry["tokens_out"], max_tokens):
+                    raise _Retry(CUT_OFF, cut_off=True)
+                answer = parse_answer(content, ids)
             except _Retry as e:
-                _save_raw(save_raw, client, content, lang, kind, ids, attempt, report, str(e))
+                _save_raw(save_raw, client, content, lang, kind, ids, tries - 1, report, str(e))
                 raise
+            entry["result"] = "ok"
+            return Asked(answer, "", tries)
         except _Retry as e:
-            why = str(e)
-            if attempt + 1 < config.TRANSLATE_TRIES:
-                time.sleep(config.TRANSLATE_RETRY_WAIT_SEC[min(attempt, len(config.TRANSLATE_RETRY_WAIT_SEC) - 1)])
-    return None, why
+            failure = e
+        why = entry["result"] = str(failure)
+        cut_offs += failure.cut_off
+        rate_failures += failure.rate
+        if cut_offs >= config.TRANSLATE_CUTOFF_TRIES or tries >= (config.TRANSLATE_RATE_TRIES if rate_failures
+                                                                  else config.TRANSLATE_TRIES):
+            return Asked(None, why, tries)
+        if failure.rate:
+            waits = config.TRANSLATE_RATE_WAIT_SEC
+            wait = failure.retry_after if failure.retry_after is not None else waits[min(rate_failures - 1, len(waits) - 1)]
+        else:
+            waits = config.TRANSLATE_RETRY_WAIT_SEC
+            wait = waits[min(tries - 1, len(waits) - 1)]
+        time.sleep(wait)
 
 
 def _shorten(client, model: str, lang: str, spans: list, firsts: dict, cache: dict, work_dir: str, report: dict,
@@ -603,13 +696,14 @@ def _shorten(client, model: str, lang: str, spans: list, firsts: dict, cache: di
                  for s, english, limit, key in batch]
         ids = [i["id"] for i in items]
         saved_before = len(report["raw_answers"])
-        answer, why = _ask(client, model, build_shorten_messages(lang, items), ids, report, follow_up=True, lang=lang,
-                           kind="shorten", save_raw=save_raw)
+        asked = _ask(client, model, build_shorten_messages(lang, items), ids, report, follow_up=True, lang=lang,
+                     kind="shorten", save_raw=save_raw)
+        answer = asked.answer
         on_batch(f"{lang}: asked for shorter texts of {min(b + len(batch), len(pending))} of {len(pending)} cues")
         report["follow_up_cues"] += len(batch)
         if answer is None:
             for s, english, limit, key in batch:
-                failed[key] = why
+                failed[key] = (asked.why, asked.tries)
             files = [e["file"] for e in report["raw_answers"][saved_before:]]
             if files:
                 report["warnings"].append(f"{lang}: the follow-up request for {len(batch)} cue(s) failed; the answers "
@@ -621,8 +715,9 @@ def _shorten(client, model: str, lang: str, spans: list, firsts: dict, cache: di
     for s, english, limit, key, found in plan:
         cid = s["id"]
         if key not in cache:
+            why, tries = failed.get(key, ("no answer", 0))
             report["warnings"].append(f"{lang} {cid}: no shorter translation, the follow-up request failed after "
-                                      f"{config.TRANSLATE_TRIES} tries ({failed.get(key, 'no answer')})")
+                                      f"{tries} tries ({why})")
             continue
         candidate = cache[key]["text"]
         duration = max(1e-6, s["end_s"] - s["start_s"])
@@ -653,7 +748,7 @@ def translate_film(tl, work_dir: str, entry: dict, langs: list, model: str = Non
     report = {"version": 1, "model": model, "export": entry["name"], "languages": {}, "written": [], "warnings": [],
               "sent_cues": 0, "cached_cues": 0, "to_send_cues": sum(len(v) for v in todo.values()),
               "tokens_in": 0, "tokens_out": 0, "cost_usd": 0.0, "estimate_usd": None, "dry_run": dry_run,
-              "follow_up_requests": 0, "follow_up_cues": 0, "shortened": [], "raw_answers": []}
+              "follow_up_requests": 0, "follow_up_cues": 0, "shortened": [], "raw_answers": [], "requests": []}
     report["estimate_usd"] = _estimate_todo(todo, model)
     if dry_run:
         for lang in langs:
@@ -684,12 +779,13 @@ def translate_film(tl, work_dir: str, entry: dict, langs: list, model: str = Non
             messages = build_messages(lang, batch, before, after)
             ids = [c["id"] for c in batch]
             saved_before = len(report["raw_answers"])
-            answer, why = _ask(client, model, messages, ids, report, lang=lang, kind="translate", save_raw=save_raw)
+            asked = _ask(client, model, messages, ids, report, lang=lang, kind="translate", save_raw=save_raw)
+            answer, why = asked.answer, asked.why
             if answer is None:
                 files = [e["file"] for e in report["raw_answers"][saved_before:]]
                 saved = f" The answers that could not be read are saved in: {', '.join(files)}." if files else ""
                 raise TranslateError(
-                    f"The translation into {lang} stopped: {config.TRANSLATE_TRIES} tries failed for the cues "
+                    f"The translation into {lang} stopped: {asked.tries} tries failed for the cues "
                     f"{', '.join(ids)} ({why}).{saved} The cues translated before are kept; run the command again. "
                     f"No file of {lang} was written.")
             for c in batch:
@@ -800,6 +896,11 @@ def cli(args, timeline_path: str, work_dir_of) -> None:
         return
     print(f"{report['sent_cues']} cue(s) sent, {report['cached_cues']} taken from the cache; {report['tokens_in']} "
           f"tokens in, {report['tokens_out']} out" + (f", about ${report['cost_usd']:.4f}" if report["cost_usd"] else ""))
+    failed = [r for r in report["requests"] if r["result"] != "ok"]
+    if failed:
+        print(f"{len(failed)} of {len(report['requests'])} tries failed (every try is in the report): "
+              + "; ".join(f"{r['lang']} {r['kind']} try {r['try']}: {r['result']} ({r['tokens_out']} tokens out)"
+                          for r in failed))
     if report["follow_up_cues"]:
         print(f"{report['follow_up_cues']} cue(s) asked for a shorter text in {report['follow_up_requests']} request(s) "
               f"(counted in the tokens above)")

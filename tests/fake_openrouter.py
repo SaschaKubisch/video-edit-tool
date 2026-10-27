@@ -15,7 +15,13 @@ text (SPECS 9.9). `translations` maps (language code, English text) to the trans
 translation cut to max_chars, a model that obeys), "same" (the translation unchanged, a model that cannot shorten),
 "longer" (the translation with a tail, a model that makes it worse) or "given" (the text in `shortenings`, a map from
 (language code, English text) to the shorter text, else the translation cut). `usage` lists the (prompt, completion)
-tokens that each answer reported."""
+tokens that each answer reported.
+
+Limits of a request (SPECS 9.9): every answer says why it ended in `finish_reason` ("stop"). The behaviour "length" is a
+model that ran on until its output limit: the right JSON, `finish_reason` "length" and 65536 tokens out. "native_length"
+is a provider that says "MAX_TOKENS" in `native_finish_reason` while `finish_reason` says "stop". "full" is an answer that
+has no finish reason but used exactly the `max_tokens` of the request. "http503" is a busy provider. `retry_after`, a
+text such as "7" or an HTTP date, is sent as the Retry-After header of every error answer (429, 500, 503)."""
 
 import json
 import threading
@@ -31,6 +37,7 @@ class FakeOpenRouter:
         self.shortenings = dict(shortenings or {})
         self.usage = []
         self.contents = []                  # the text of every answer, as sent
+        self.retry_after = None             # the Retry-After header of an error answer, or None
         self.requests = []
         self.lock = threading.Lock()
         outer = self
@@ -52,9 +59,11 @@ class FakeOpenRouter:
                 if self.headers.get("Authorization") != f"Bearer {outer.key}" or behaviour == "http401":
                     return self._send(401, {"error": {"message": "No auth credentials found"}})
                 if behaviour == "http500":
-                    return self._send(500, {"error": {"message": "upstream error"}})
+                    return self._send(500, {"error": {"message": "upstream error"}}, outer.retry_after)
                 if behaviour == "http429":
-                    return self._send(429, {"error": {"message": "rate limited"}})
+                    return self._send(429, {"error": {"message": "rate limited"}}, outer.retry_after)
+                if behaviour == "http503":
+                    return self._send(503, {"error": {"message": "provider busy"}}, outer.retry_after)
                 user = json.loads(body["messages"][-1]["content"])
                 lang = user["target_language"]
                 if "shorten" in user:
@@ -96,16 +105,31 @@ class FakeOpenRouter:
                 with outer.lock:
                     outer.contents.append(content)
                 tokens = max(1, len(json.dumps(user)) // 4)
+                choice = {"message": {"role": "assistant", "content": content}, "finish_reason": "stop",
+                          "native_finish_reason": "STOP"}
+                if behaviour == "length":
+                    choice.update(finish_reason="length", native_finish_reason="MAX_TOKENS")
+                    out_tokens = 65536
+                elif behaviour == "native_length":
+                    choice.update(finish_reason="stop", native_finish_reason="MAX_TOKENS")
+                    out_tokens = tokens
+                elif behaviour == "full":
+                    del choice["finish_reason"], choice["native_finish_reason"]
+                    out_tokens = int(body.get("max_tokens") or tokens)
+                else:
+                    out_tokens = tokens
                 with outer.lock:
-                    outer.usage.append((tokens + 100, tokens))
-                self._send(200, {"choices": [{"message": {"role": "assistant", "content": content}}],
-                                 "usage": {"prompt_tokens": tokens + 100, "completion_tokens": tokens}})
+                    outer.usage.append((tokens + 100, out_tokens))
+                self._send(200, {"choices": [choice],
+                                 "usage": {"prompt_tokens": tokens + 100, "completion_tokens": out_tokens}})
 
-            def _send(self, status, payload):
+            def _send(self, status, payload, retry_after=None):
                 data = json.dumps(payload).encode()
                 self.send_response(status)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(data)))
+                if retry_after is not None:
+                    self.send_header("Retry-After", str(retry_after))
                 self.end_headers()
                 self.wfile.write(data)
 
