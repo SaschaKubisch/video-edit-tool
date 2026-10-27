@@ -305,24 +305,6 @@
   }
   .tl-remove:hover { color: #e74c3c; }
 
-  /* ── Sync settings ── */
-  .setting-row {
-    display: flex; align-items: center; gap: 12px;
-    margin-bottom: 10px;
-  }
-  .setting-row label { font-size: 0.85em; color: #888; width: 140px; }
-  .setting-input {
-    padding: 8px 12px;
-    background: #0f0f1a;
-    border: 1px solid #2a2a4a;
-    border-radius: 6px;
-    color: #e0e0e0;
-    font-size: 0.9em;
-    flex: 1;
-    max-width: 300px;
-  }
-  .setting-input:focus { outline: none; border-color: #e94560; }
-
   /* ── Results ── */
   .result-list { list-style: none; }
   .result-list li {
@@ -342,13 +324,7 @@
   .total-bar .actions { display: flex; align-items: center; gap: 10px; }
   .hint { font-size: 0.8em; color: #888; }
   .timeline-tools { display: flex; gap: 8px; margin-top: 12px; }
-  .sync-summary { font-size: 0.9em; color: #ccc; margin-bottom: 12px; }
-  .sync-summary.empty { color: #e9a845; }
-  .link-btn {
-    background: none; border: none; padding: 0; margin-left: 6px;
-    color: #e94560; cursor: pointer; font-size: inherit; text-decoration: underline;
-  }
-  /* ── Film (step 4) ── */
+  /* ── Film (tab 3) ── */
   .film-player { width: 100%; max-width: 960px; background: #000; border-radius: 6px; display: block; }
   .film-head { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 10px 0; }
   .film-head .grow { flex: 1; min-width: 200px; }
@@ -432,10 +408,7 @@
         <span class="num">2</span>Select &amp; Order
       </div>
       <div class="step-tab" data-step="3" onclick="showStep(3)">
-        <span class="num">3</span>Sync &amp; Export
-      </div>
-      <div class="step-tab" data-step="4" onclick="showStep(4)">
-        <span class="num">4</span>Film
+        <span class="num">3</span>Film
       </div>
     </div>
 
@@ -514,58 +487,8 @@
       </div>
     </div>
 
-    <!-- STEP 3: Sync & Export -->
+    <!-- STEP 3: Film -->
     <div class="step-panel" id="step3">
-      <div class="card">
-        <h2>Copy Audio &amp; Push to Resolve</h2>
-        <p>Copies H2N audio files into your video folder, renamed to match their video counterpart
-           (e.g. ZOOM0042.WAV becomes IMG_2237.WAV). Then both get pushed to DaVinci Resolve
-           with the detected offset. You can correct offsets in Resolve if needed.</p>
-
-        <div class="setting-row">
-          <label>Output folder</label>
-          <div class="dir-input-row" style="flex:1; max-width: 400px;">
-            <input type="text" class="dir-input" id="outputDirInput"
-                   value="" placeholder="(defaults to video folder)">
-            <button class="btn btn-browse btn-small" onclick="openBrowser('output')">Browse</button>
-          </div>
-        </div>
-
-        <div class="setting-row">
-          <label>Resolve project name</label>
-          <input type="text" class="setting-input" id="resolveProjectInput"
-                 value="Ambient Video Project">
-        </div>
-        <div class="setting-row">
-          <label>Timeline name</label>
-          <input type="text" class="setting-input" id="resolveTimelineInput"
-                 value="Main Timeline">
-        </div>
-
-        <div class="sync-summary" id="syncSummary"></div>
-
-        <div class="progress-bar" id="syncProgress" style="display:none">
-          <div class="progress-fill" id="syncProgressFill"></div>
-        </div>
-
-        <div style="display: flex; gap: 10px; margin-top: 8px;">
-          <button class="btn btn-primary" id="syncBtn" onclick="startSync()">
-            Copy &amp; Rename Audio Files
-          </button>
-          <button class="btn btn-secondary" id="resolveBtn" onclick="pushToResolve()">
-            Push to DaVinci Resolve
-          </button>
-        </div>
-      </div>
-
-      <div class="card" id="syncResults" style="display:none">
-        <h2>Results</h2>
-        <div id="syncResultsContent"></div>
-      </div>
-    </div>
-
-    <!-- STEP 4: Film -->
-    <div class="step-panel" id="step4">
       <div class="card">
         <h2>Film preview</h2>
         <p>The film is built from the timeline file: the clips in recording order, the clap and the
@@ -702,11 +625,9 @@
 let currentStep = 1;
 let project = { matches: [], selection: [], selection_trims: {} };
 let timeline = [];
-let savedSelection = { count: 0, total: 0 };
 let browserTarget = null;
 let browserCurrentPath = "";
 let pollTimer = null;
-const SYNC_LABEL = "Copy & Rename Audio Files";
 
 // ── API helpers ──
 async function api(method, path, body) {
@@ -743,8 +664,7 @@ function showStep(n) {
     p.classList.toggle("active", i + 1 === n);
   });
   if (n === 2) renderScenes();
-  if (n === 3) refreshSyncControls();
-  if (n === 4) loadFilm();
+  if (n === 3) loadFilm();
 }
 
 function markStepCompleted(n) {
@@ -781,16 +701,8 @@ function updateStatus(s) {
     const hasMatches = project.matches && project.matches.length > 0;
     document.getElementById("matchBtn").disabled = false;
     document.getElementById("matchBtn").textContent = hasMatches ? "Re-match Files" : "Match Files";
-    document.getElementById("syncBtn").disabled = false;
-    document.getElementById("syncBtn").textContent = SYNC_LABEL;
-    document.getElementById("resolveBtn").disabled = false;
-    refreshSyncControls();
-    ["matchProgress", "syncProgress"].forEach(id => {
-      document.getElementById(id).style.display = "none";
-    });
-    ["matchProgressFill", "syncProgressFill"].forEach(id => {
-      document.getElementById(id).style.width = "0%";
-    });
+    document.getElementById("matchProgress").style.display = "none";
+    document.getElementById("matchProgressFill").style.width = "0%";
     return;
   }
 
@@ -803,32 +715,12 @@ function updateStatus(s) {
       document.getElementById("matchBtn").textContent = "Re-match Files";
       // The server resets the selection on every match, so reset the timeline too
       timeline = [];
-      savedSelection = { count: 0, total: 0 };
       document.querySelector('.step-tab[data-step="2"]').classList.remove("completed");
       renderTimeline();
       renderScenes();
-      refreshSyncControls();
-      const outInput = document.getElementById("outputDirInput");
-      if (!outInput.value.trim()) outInput.value = project.video_dir || "";
       showMatchResults();
       markStepCompleted(1);
     }
-  }
-  if (s.step.startsWith("sync")) {
-    document.getElementById("syncProgress").style.display = "block";
-    document.getElementById("syncProgressFill").style.width = s.progress + "%";
-    if (s.progress >= 100) {
-      document.getElementById("syncBtn").disabled = false;
-      document.getElementById("syncBtn").textContent = SYNC_LABEL;
-      markStepCompleted(3);
-      refreshSyncControls();
-      showSyncResults(s.message);
-    }
-  }
-  if (s.step === "resolve_done") {
-    document.getElementById("resolveBtn").disabled = false;
-    refreshSyncControls();
-    showSyncResults(s.message);
   }
 }
 
@@ -1071,65 +963,14 @@ async function saveSelection() {
 
   const resp = await api("POST", "/api/select", { selection, selection_trims: trims });
   if (resp.error) { showRequestError(resp.error); return; }
-  savedSelection = { count: selection.length, total: timelineTotal(timeline) };
   markStepCompleted(2);
   showStep(3);
-}
-
-// ── Step 3: Sync ──
-function fmtClock(sec) {
-  const t = Math.max(0, Math.round(sec));
-  return Math.floor(t / 60) + ":" + String(t % 60).padStart(2, "0");
-}
-
-// Summary of the saved selection; disables the actions while it is empty
-function refreshSyncControls() {
-  const box = document.getElementById("syncSummary");
-  const none = savedSelection.count === 0;
-  box.classList.toggle("empty", none);
-  if (none) {
-    box.innerHTML = 'No scenes selected yet. <button class="link-btn" onclick="showStep(2)">Go to Step 2</button>';
-  } else {
-    const n = savedSelection.count;
-    box.textContent = n + (n === 1 ? " scene" : " scenes") + " selected (" + fmtClock(savedSelection.total) + " total)";
-  }
-  document.getElementById("syncBtn").disabled = none;
-  document.getElementById("resolveBtn").disabled = none;
-}
-
-async function startSync() {
-  const outputDir = document.getElementById("outputDirInput").value.trim() || "";
-  document.getElementById("syncBtn").disabled = true;
-  document.getElementById("syncBtn").textContent = "Copying...";
-  document.getElementById("syncProgress").style.display = "block";
-  document.getElementById("syncProgressFill").style.width = "5%";
-
-  const resp = await api("POST", "/api/sync", { output_dir: outputDir || undefined });
-  if (resp.error) { showRequestError(resp.error); return; }
-  startPolling();
-}
-
-async function pushToResolve() {
-  const projectName = document.getElementById("resolveProjectInput").value.trim() || "Ambient Video Project";
-  const timelineName = document.getElementById("resolveTimelineInput").value.trim() || "Main Timeline";
-  document.getElementById("resolveBtn").disabled = true;
-
-  const resp = await api("POST", "/api/resolve", { project_name: projectName, timeline_name: timelineName });
-  if (resp.error) { showRequestError(resp.error); return; }
-  startPolling();
-}
-
-function showSyncResults(message) {
-  document.getElementById("syncResults").style.display = "block";
-  document.getElementById("syncResultsContent").innerHTML =
-    `<p style="color:#2ecc71">${escapeHtml(message)}</p>`;
 }
 
 // ── File Browser ──
 function openBrowser(target) {
   browserTarget = target;
-  const input = target === "video" ? "videoDirInput"
-    : target === "audio" ? "audioDirInput" : "outputDirInput";
+  const input = target === "video" ? "videoDirInput" : "audioDirInput";
   const startPath = document.getElementById(input).value || "~";
   navigateBrowser(startPath.startsWith("~") ? "" : startPath);
   document.getElementById("browserModal").classList.add("open");
@@ -1166,13 +1007,12 @@ async function navigateBrowser(path) {
 }
 
 function selectCurrentDir() {
-  const input = browserTarget === "video" ? "videoDirInput"
-    : browserTarget === "audio" ? "audioDirInput" : "outputDirInput";
+  const input = browserTarget === "video" ? "videoDirInput" : "audioDirInput";
   document.getElementById(input).value = browserCurrentPath;
   closeBrowser();
 }
 
-// ── Step 4: Film ──
+// ── Step 3: Film ──
 let film = null;            // the last answer of GET /api/timeline
 let filmBusy = false;       // a change is on its way to the server
 let filmJob = false;        // assemble or preview is running
@@ -1936,7 +1776,6 @@ function fmtDur(sec) {
       project = data;
       document.getElementById("videoDirInput").value = data.video_dir || "";
       document.getElementById("audioDirInput").value = data.audio_dir || "";
-      document.getElementById("outputDirInput").value = data.output_dir || data.video_dir || "";
       document.getElementById("matchBtn").textContent = "Re-match Files";
       showMatchResults();
       markStepCompleted(1);
@@ -1951,16 +1790,11 @@ function fmtDur(sec) {
         });
         renderTimeline();
         renderScenes();
-        if (timeline.length > 0) {
-          savedSelection = { count: timeline.length, total: timelineTotal(timeline) };
-          markStepCompleted(2);
-        }
+        if (timeline.length > 0) markStepCompleted(2);
       }
     }
-    refreshSyncControls();
   } catch(e) { /* no project yet */ }
   renderTimeline();
-  refreshSyncControls();
 })();
 </script>
 </body>

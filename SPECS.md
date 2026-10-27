@@ -49,7 +49,7 @@ Tags: **[measured]** checked on the owner's machine or files on 2026-10-26; **[d
 
 ## 1. Overview
 
-Version 1.1.0 matches camera clips with recorder files and prepares them for Resolve. The plan adds six steps. They turn the matched pairs into a finished film inside the tool.
+Version 1.1.0 matches camera clips with recorder files and prepared them for Resolve (copies of the recorder's files and a Resolve push, both removed on 2026-10-27, D4). The plan adds six steps. They turn the matched pairs into a finished film inside the tool.
 
 1. **Conversion test (done).** A test by hand on two clips showed that the decoder works and measured speed, size and colour (section 6.1). Its method becomes the `convert` command, which makes one small H.264 preview copy of each `.braw` clip on the SSD. That command is built first in step 2.
 2. **Preview copies, timeline file and assembly.** The tool makes the preview copies, finds the clap and the steady scenes, writes the timeline file and renders a film preview.
@@ -126,7 +126,7 @@ Originals stay where they are. The tool opens them read-only and never writes in
 
 ### 2.3 Modules
 
-"Kept" modules exist in v1.1.0 (Appendix A). Section 12 lists what changes in them.
+"Kept" modules exist in v1.1.0 (Appendix A). Section 12 lists what changes in them. The v1.1.0 modules `syncer.py` and `resolve_integration.py` were removed on 2026-10-27 (D4).
 
 | Module | Job | Status | Step |
 |--------|-----|--------|------|
@@ -160,7 +160,6 @@ Originals stay where they are. The tool opens them read-only and never writes in
 | `shorts.py` | Build a vertical timeline | New | 6 |
 | `thumbnails.py` | Frame grabs | Kept, reads preview copies | 2 |
 | `server.py`, `ui.html`, `main.py`, `config.py` | Page, API, commands, constants. Built for step 2: the Film tab and its endpoints (section 12), `analyse --scenes`, `assemble`, `preview`, `timeline summary`, `app --timeline --work --no-browser`. | Kept, extended | 2 to 6 |
-| `syncer.py`, `resolve_integration.py` | Audio copy, Resolve push | Kept only if D4 says so | - |
 | `renamer.py` | Legacy rename | Kept, untouched | - |
 
 The code stays flat in the repository folder, as today.
@@ -1176,7 +1175,7 @@ Synthetic fixtures are made inside the tests with `ffmpeg` and `numpy`, so no me
 | 2.5 | `python3 -m unittest tests.test_drift -v` | A WAV made by resampling a track by +50 ppm gives a measured drift within 15 ppm of 50. A 100-second clip is skipped. **As built:** the recorder's events are placed at `t * (1 + ppm * 1e-6) + offset` (the same as a resampled track for the method, which looks at claps); +50, -50, 0 and +200 ppm are measured (the last is over the limit); the limit is half a frame of the clip's frame rate; a clip of 120 s is measured, one of 100 s skipped; a last minute with nothing in common is `not_measurable`; an extraction that fails is `error`; the windows are the last 60 s and the recorder window follows the offset; `_extract_audio_raw` with a start; over a project the files, the counts, the clips over the limit, `--limit`, `--only`, the frame rate from `conversion.json`, the originals untouched, the command line and its report names. |
 | 2.6 | `python3 -m unittest tests.test_stable tests.test_stable_video -v` | On the synthetic clip of section 7.4 (still 0 to 4 s, moving 4 to 6 s, still 6 to 10 s) the runs lie inside 0 to 4 s and 6 to 10 s, each run's edge next to the moving part is between 0.1 s and 0.8 s away from it (the guard of 0.3 s plus the 0.2 s sample step), and the moving part is outside every run. On the clip with a moving block over a static texture, no movement is found. A clip that moves throughout gives no run. **As built:** the tests listed in 7.4, with people moving in a still shot, a zoom, a bump, a cut, a slow creep and a flat picture as well; real clips in `tests/test_steady_real.py`. |
 | 2.7 | `python3 -m unittest tests.test_assemble tests.test_assemble_project -v` | With analysis results given as data: clips in recording order; a clip with two runs gives two segments; the clap cut raises the first segment's `in`; a clip with no run is left out and reported; an existing timeline is not overwritten without `--replace`; the assembled file validates. **As built:** also the order from the project's selection, the film fields, the fades shortened when they do not fit, the report, the originals and `conversion.json` unchanged, and the command line. |
-| 2.8 | `python3 -m unittest tests.test_audio_place -v` | The cases of `PlanTests` in `tests/test_resolve_integration.py` (back-to-back, trims, positive offset, negative offset, clamped length), restated for the audio span function, give the same sample positions. A crossfade of two uncorrelated noise segments keeps the power within 1 dB at the join (`equal_power`; for `linear` the same holds for two parts of the same sound, see 5.4: changed in the build). A shortened handle shortens the crossfade and is reported. The first and last 10 ms of the film are silent when the fades are on. |
+| 2.8 | `python3 -m unittest tests.test_audio_place -v` | The cases of the plan of the removed Resolve push (back-to-back, trims, positive offset, negative offset, clamped length), restated for the audio span function, give the same sample positions. A crossfade of two uncorrelated noise segments keeps the power within 1 dB at the join (`equal_power`; for `linear` the same holds for two parts of the same sound, see 5.4: changed in the build). A shortened handle shortens the crossfade and is reported. The first and last 10 ms of the film are silent when the fades are on. |
 | 2.9 | `python3 -m unittest tests.test_render_plan -v` | The placements of the table in section 5.2 come out: no bars for a 4096 x 2160 source in a 4096 x 2160 frame, bars of 220 pixels for a 4096 x 1720 source, and the windows 1216 x 2160 and 968 x 1720 with the positions of section 5.2 for a 1080 x 1920 `fill` frame. The film start frames and sample positions follow section 3.4, with no drift over 150 segments at 24000/1001 frames per second. |
 | 2.10 | `python3 -m unittest tests.test_sync_marker -v` | A fixture clip has a white frame at frame 100 and a WAV with a click at `100/fps + offset`. After building a timeline for the fixture and rendering it, the first bright frame and the click in the output lie within 1 ms of each other. |
 | 2.11 | `python3 -m unittest tests.test_seek_exact -v` | On a synthetic H.264 file made like a preview copy (`-g 30`, each frame a different grey value) and, when `VET_WORK_DIR` has a preview copy, on a real one: the frames the film preview reads for `in` and `out` equal the frames selected by number. With `VET_REAL_BRAW` set: the decoder process of section 5.3 returns for a segment exactly the frames `in` to `out - 1` (the first and last frame equal the frames the decoder gives when it reads the whole clip). **As built:** the synthetic part with and without B-frames (`tests/test_seek_exact.py`), and the real part in `tests/test_steady_real.py` (needs `VET_REAL_PROJECT` and `VET_WORK_DIR`): a 24-frame segment of a real preview copy is compared with the copy's own frames, each frame matches its own number better than its neighbours. **Not built:** the part with the decoder process, which belongs to the final render (step 3). |
@@ -1779,14 +1778,14 @@ Appendix A describes each part as built in v1.1.0. This table says what the plan
 | Part | Fate | What changes |
 |------|------|--------------|
 | `matcher.py` | **Kept.** | `_extract_audio_raw` gets an optional start time (section 7.3). `clap.py` imports `_extract_audio_raw`, `_highpass`, `_onset_envelope` and `_find_offset` from it. Matching already works on `.braw`: ffprobe reads the container and ffmpeg reads the scratch audio [measured: 105 pairs in the first shoot]. |
-| `Project`, `SceneMatch`, `project.json` | **Kept.** | New field `work_dir`. `selection` stays and means "the clips that go into the film, in order" (M7). `trim_start`, `trim_end`, `selection_trims` and `get_ordered_scenes` are still read, for old files and for the Resolve option. Assembly ignores them. The `offset` contract is unchanged. |
-| `build_timeline_plan` in `resolve_integration.py` | **Its rule is reused; the function belongs to the Resolve option.** | The way it applies the offset (advance the audio in-point for a positive offset, delay and clamp for a negative one, clamp to the file length) is the reference for the audio span in section 5.4. Its tests are restated in check 2.8. |
-| `syncer.py` (copy and rename the WAV, manifest, undo) | **Kept only if D4 says so** (R1). | Its job, giving Resolve a file with the video's name, is not needed by the tool's own render. For Shotcut the tool writes `audio-synced/` in the work directory instead (section 8.6). Copies made earlier stay in the video folders and `sync --undo` still removes them. |
-| `resolve_integration.py` (push, `apply_plan`, name suffixes) | **Kept only if D4 says so** (R2). | Not extended. If D4 drops it: delete the module, the `resolve` command, `/api/resolve` and the Resolve part of the third tab. Its `Project` tests move to `tests/test_project.py`. Its other tests are deleted. |
+| `Project`, `SceneMatch`, `project.json` | **Kept.** | New field `work_dir`. `selection` stays and means "the clips that go into the film, in order" (M7). `trim_start`, `trim_end`, `selection_trims` and `get_ordered_scenes` are still read, for old files. Assembly ignores them. `output_dir` (the folder of the audio copies) is no longer a field; an old file that has it still loads. The `offset` contract is unchanged. |
+| `build_timeline_plan` in `resolve_integration.py` | **Removed with the Resolve push (D4, 2026-10-27).** | Its rule for the offset (advance the audio in-point for a positive offset, delay and clamp for a negative one, clamp to the file length) lives on in the audio span of section 5.4; its cases are restated in check 2.8. |
+| `syncer.py` (copy and rename the WAV, manifest, undo) | **Removed (D4, 2026-10-27; requirement R1).** | Its job, giving Resolve a file with the video's name, is not needed by the tool's own render. For Shotcut the tool writes `audio-synced/` in the work directory instead (section 8.6). Copies made earlier stay in the video folders; there is no command that removes them (the manifest `ambient_audio_copies.json` lists them). The git history keeps the code. |
+| `resolve_integration.py` (push, `apply_plan`, name suffixes) | **Removed (D4, 2026-10-27; requirement R2).** | The module, the `resolve` command, `/api/resolve`, `/api/sync` and the third tab of the page are deleted. Its `Project` tests moved to `tests/test_project.py`; its other tests are deleted. `tests/test_removed.py` keeps them gone. The git history keeps the code. |
 | `renamer.py` | **Kept, untouched.** | Legacy. |
 | `thumbnails.py` | **Changed.** | Reads the preview copy when one exists, so `.braw` clips get thumbnails. Also serves the stills and frame requests of the later steps. |
 | `server.py` | **Extended.** | Keeps the Host and Origin checks, the one-job rule and the 127.0.0.1 binding. Adds the endpoints below and range requests for video. |
-| `ui.html` | **Extended.** | Tabs Match and Clips (the old Select and Order, with the trim inputs removed, because trims move into the timeline file) stay. New tabs Film, Look and Export. The Resolve tab stays only if D4 says so. |
+| `ui.html` | **Extended.** | Tabs Match and Clips (the old Select and Order, with the trim inputs removed, because trims move into the timeline file) stay. New tabs Film, Look and Export. The Sync & Export tab (copy and Resolve push) is removed (D4), so the page has three tabs: Match, Select & Order and Film. |
 | `main.py` | **Extended.** | New subcommands: `tools check`, `convert`, `analyse`, `assemble`, `timeline` (`summary`, `validate`, `frames`, `cut`, `keep`, `history`, `undo`, `migrate`), `preview`, `look` (`stills`, `set`), `render`, `export-shotcut`, `import-shotcut`, `words`, `subtitles build`, `title add`, `index`, `find`, `short`. Built in step 3: `look` (`list`, `set`), `loudness` (`set`, `show`), `export` (`list`, `add`, `enable`, `disable`), `render`, `export-shotcut`, `import-shotcut`. Built in step 4 (changed in the build: `subtitles auto` takes the place of `words` and `subtitles build`): `subtitles` (`list`, `add`, `edit`, `remove`, `shift`, `sort`, `text`, `import`, `export`, `check`, `auto`, `translate`), `title` (`list`, `add`, `edit`, `remove`, `import`), `export set`, `render --subtitles`. |
 | `config.py` | **Extended.** | The settings named in sections 7 to 11. Settings for open decisions have no default value. |
 | `requirements.txt` | **Extended.** | `vapoursynth` and `vapoursynth-brawsource` (D3). Step 4: `Pillow` 13.0.0 (draws the text; the brief for step 4 named it). |
@@ -1940,7 +1939,7 @@ This appendix keeps the description of the built system, with the original wordi
 
 ### A.0 Process model
 
-Everything runs in one Python process. Long operations (match, sync, resolve) run on daemon threads, one at a time; the UI polls `/api/status`. The plan keeps this (section 2.5).
+Everything runs in one Python process. Long operations (match, assemble, preview, render, subtitles) run on daemon threads, one at a time; the UI polls `/api/status`. The plan keeps this (section 2.5).
 
 Terminology: the code and this appendix call a matched pair of one video file and one audio file a "scene" (`SceneMatch`). Sections 1 to 17 call it a clip, and use "scene" for a steady stretch of a clip.
 
@@ -1998,7 +1997,7 @@ class Project:
 ```
 
 - **Offset contract:** `offset = t_audio - t_video`. `offset > 0`: the same event occurs later in the audio file than in the video (recorder started `offset` s before the camera); the audio clip's source in-point is advanced by `offset`. `offset < 0`: the audio is placed `|offset|` s later on the timeline.
-- **Trim semantics:** `trim_start` / `trim_end` are seconds cut from the start / end of the clip, not in/out timestamps. They are stored only and applied in Resolve. `selection_trims` may be keyed by int or str; its values override the per-match trims. `get_ordered_scenes()` returns `dataclasses.replace` copies, so stored matches are never mutated.
+- **Trim semantics:** `trim_start` / `trim_end` are seconds cut from the start / end of the clip, not in/out timestamps. They are stored only; nothing applies them any more (the Resolve push that did was removed, D4). `selection_trims` may be keyed by int or str; its values override the per-match trims. `get_ordered_scenes()` returns `dataclasses.replace` copies, so stored matches are never mutated.
 - **Atomic save:** `save()` writes a temp file in the target directory and `os.replace`s it, so a crash never leaves a half-written `project.json`.
 - **Unknown-key tolerance:** `load()` drops keys that `SceneMatch` does not know, so older or newer project files still open.
 - Numeric fields are native `float`/`int` before `json.dump` (numpy scalars are not serialisable).
@@ -2049,18 +2048,7 @@ Videos ffmpeg cannot decode (e.g. `.braw`) make `extract_thumbnail` raise `Runti
 
 ### A.5 `syncer.py` - audio copy/rename
 
-*Plan: kept only if D4 says so (requirement R1).*
-
-```python
-def sync_all_scenes(project, output_dir=None) -> list[dict]
-def remove_copied_audio(output_dir) -> list[str]
-```
-- `out_dir = output_dir or project.video_dir`.
-- For each ordered scene: `new_name = Path(video).stem + Path(audio).suffix`; `shutil.copy2(audio, out_dir / new_name)` unless source == destination. If the destination exists with a different size (`os.path.getsize`) a warning is logged before it is overwritten.
-- Returns `[{order, scene_index, video_path, audio_original, audio_copy, offset, trim_start, trim_end}, ...]`.
-- **Manifest:** every copy is listed in `ambient_audio_copies.json` in the output folder (`{"copies": [file names]}`), merged with an existing manifest and written atomically.
-- **Undo:** `remove_copied_audio(output_dir)` deletes only files named in the manifest (plain file names; entries with path components are skipped), then the manifest, and returns the removed paths. CLI: `python3 main.py sync --undo [--output DIR]` (output folder defaults to the project's output/video folder). Satisfies PRD F14 for copies. The server has no undo endpoint yet.
-- **Never** invokes ffmpeg. Trims are stored only; they are applied in Resolve.
+*Removed on 2026-10-27 (D4, requirement R1). Version 1.1.0 copied each matched WAV next to its video as `<video stem><audio suffix>` and listed the copies in `ambient_audio_copies.json` (`{"copies": [file names]}`) in the output folder; `sync --undo` deleted exactly the listed files. The git history keeps the code.*
 
 
 ### A.6 `renamer.py`
@@ -2072,28 +2060,7 @@ Legacy, CLI-only helper that renames *both* files of a pair to `scene_NN.*` and 
 
 ### A.7 `resolve_integration.py`
 
-*Plan: kept only if D4 says so (requirement R2). The offset rule of `build_timeline_plan` is reused (section 5.4).*
-
-```python
-def build_timeline_plan(scenes, fps) -> list[dict]     # pure, no Resolve import
-def resolve_media_paths(project, scenes) -> list[tuple]
-def apply_plan(resolve, project_name, timeline_name, scenes, plan=None, media_paths=None, fps=None) -> dict
-def create_resolve_project(project, project_name, timeline_name, fps=None) -> dict
-def list_resolve_projects() -> list
-```
-1. `build_timeline_plan()` is pure and unit-tested. Per scene it returns `{"index", "video": clipInfo, "audio": clipInfo | None}` with `clipInfo = {startFrame, endFrame, recordFrame, trackIndex, mediaType}`. Video: `trackIndex=1, mediaType=1`; audio: `trackIndex=2, mediaType=2`. Source frames come from trims; audio `startFrame = video start + round(offset*fps)`, a negative result becomes a `recordFrame` delay; audio is clamped to the file length. Scenes are laid back-to-back; `recordFrame` is 0-based relative to the timeline start.
-2. `resolve_media_paths()` prefers the renamed sibling `<video_stem><audio suffix>` in the video folder or `project.output_dir`, falling back to the original `audio_path`.
-3. `apply_plan()` does the API calls: `_get_resolve()` imports `DaVinciResolveScript` (auto-detects the Modules path, raises `ConnectionError` with setup steps); loads or creates the project; optionally sets `timelineFrameRate`; imports media; creates the timeline; ensures two audio tracks; reads the timeline frame rate if none was given; builds the plan if needed; offsets `recordFrame` by `timeline.GetStartFrame()`; calls `AppendToTimeline`. Files not found in the Media Pool are skipped and reported.
-4. **Timeline name suffix:** if the timeline name already exists in the project, ` 2`, ` 3`, ... is appended instead of failing.
-
-**Flagged API assumptions** (not verifiable without Resolve; check when first run against a real install):
-- `endFrame` in `AppendToTimeline` clip infos is treated as exclusive.
-- `mediaType` 1 = video, 2 = audio, and `trackIndex` 2 for audio places clips on A2.
-- `timelineFrameRate` only takes effect before the project's first timeline exists.
-- Media Pool items are matched back to files by their `File Path` property after `ImportMedia`.
-- `recordFrame` is absolute: the plan's 0-based frames are shifted by `timeline.GetStartFrame()` (typically 86400 at 24 fps for 01:00:00:00).
-
-**Constraint:** external invocation may require Resolve **Studio**. For the free edition the same logic must be executed from inside Resolve. The script planned for that, `resolve_import.py`, was never written; whether it will be depends on D4.
+*Removed on 2026-10-27 (D4, requirement R2). Version 1.1.0 built a pure plan of the timeline (video on V1, audio on A2, offset and trims applied) and pushed it into a running DaVinci Resolve through its scripting module. The offset rule of that plan is now the audio span of section 5.4. The git history keeps the code.*
 
 
 ### A.8 `server.py` - HTTP API
@@ -2104,16 +2071,14 @@ def list_resolve_projects() -> list
 
 | Method | Path | Body / Query | Effect |
 |--------|------|--------------|--------|
-| GET | `/api/status` | - | `{step, message, progress}` of the current background job (`step`: idle, matching, thumbnails, matched, syncing, synced, resolve, resolve_done, error) |
+| GET | `/api/status` | - | `{step, message, progress}` of the current background job (`step`: idle, matching, thumbnails, matched, assembling, previewing, rendering, error and the others of section 12) |
 | GET | `/api/project` | - | Project as JSON; each match gains `video_file`, `audio_file`, `has_thumbnail`, `thumb_version` |
 | GET | `/api/browse` | `?path=` | `{current, entries:[{name, path, is_dir, size}]}` for the folder picker |
 | GET | `/api/thumbnail/<index>` | - | Image bytes (`Cache-Control: no-cache`) |
 | POST | `/api/match` | `{video_dir, audio_dir}` | Validates folders (400), starts matcher + thumbnail thread |
 | POST | `/api/select` | `{selection:[idx...], selection_trims:{idx:{start,end}}}` | Saves order/trims to `project.json` |
-| POST | `/api/sync` | `{output_dir?}` | Starts `sync_all_scenes` thread (defaults to the video dir) |
-| POST | `/api/resolve` | `{project_name, timeline_name}` | Starts `create_resolve_project` thread (legacy keys `name`, `timeline` still accepted) |
 
-- **Job guard:** match, sync and resolve share one slot; starting a second returns **409** `Another job is already running`. The slot is released in `finally`.
+- **Job guard:** match, assemble, preview, render and the subtitle jobs share one slot; starting a second returns **409** `Another job is already running`. The slot is released in `finally`.
 - **Host/Origin check (403):** every request must carry `Host: localhost:<port>` or `127.0.0.1:<port>`; POSTs with an `Origin` header must be `http://` plus one of those. See A.15.
 - **No CORS headers** are sent; browsers block cross-origin reads by default.
 - **No `/api/rename`:** renaming is CLI-only (legacy).
@@ -2126,11 +2091,11 @@ def list_resolve_projects() -> list
 
 *Plan: extended with new tabs (section 12).*
 
-Single file, vanilla JS, no build step. Three tabs:
+Single file, vanilla JS, no build step. Three tabs (version 1.1.0 had a third tab, Copy Audio & Push to Resolve, which was removed with D4; the Film tab is the third now):
 
 1. **Match** - folder picker modal (uses `/api/browse`), Match button, result table (video, audio, deltaduration, offset, confidence).
 2. **Select & Order** - thumbnail grid (click to toggle), ordered timeline strip with HTML5 drag-and-drop, per-scene trim inputs.
-3. **Copy Audio & Push to Resolve** - output folder (prefilled with video dir), *Copy & Rename Audio Files* button, Resolve project/timeline name fields, *Push to Resolve* button.
+3. **Film** - section 12 and 7.6.
 
 Polling loop (1 s) calls `loadProject()` **before** `updateStatus()` so result views never render stale data.
 
@@ -2142,14 +2107,11 @@ Polling loop (1 s) calls `loadProject()` **before** `updateStatus()` so result v
 ```
 python3 main.py                     # same as `app`
 python3 main.py [-p FILE] app [--port N]
-python3 main.py match   --video DIR --audio DIR [--output DIR]
-python3 main.py sync    [--selection JSON | --selection-file FILE] [--output DIR]
-python3 main.py sync    --undo [--output DIR]       # remove the audio copies
-python3 main.py resolve [--project-name N] [--timeline N] [--fps F] [--list]
+python3 main.py match   --video DIR --audio DIR
 python3 main.py rename  [--pattern P] [--dry-run] [--undo rename_log.json]   # legacy
 ```
 
-`-p/--project` is a global option (before the subcommand). `match` writes `project.json` and thumbnails; `sync` falls back to the selection stored in `project.json`; there is no `select` subcommand (selection happens in the UI).
+`-p/--project` is a global option (before the subcommand). `match` writes `project.json` and thumbnails; there is no `select` subcommand (selection happens in the UI). Version 1.1.0 also had `sync` and `resolve`; both were removed (D4).
 
 
 ### A.11 Data flow and persistence
@@ -2162,7 +2124,6 @@ python3 main.py rename  [--pattern P] [--dry-run] [--undo rename_log.json]   # l
 {
   "video_dir": "/.../video",
   "audio_dir": "/.../audio",
-  "output_dir": "",
   "matches": [ { "index": 0, "video_path": "...IMG_2231.MOV", "audio_path": "...ZOOM0012.WAV",
                  "video_duration": 182.4, "audio_duration": 183.1, "offset": 0.65,
                  "confidence": 0.996, "thumbnail_path": "/.../thumbnails/thumb_000.jpg",
@@ -2172,7 +2133,7 @@ python3 main.py rename  [--pattern P] [--dry-run] [--undo rename_log.json]   # l
 }
 ```
 
-Thumbnails live in `thumbnails/` next to `project.json`. The only other state is `ambient_audio_copies.json` (copy manifest) in the output folder and, for the legacy rename, `rename_log.json` in the video folder.
+Thumbnails live in `thumbnails/` next to `project.json`. The only other state is, for the legacy rename, `rename_log.json` in the video folder. (Version 1.1.0 also wrote `ambient_audio_copies.json`, the manifest of the audio copies, into the output folder; that step was removed with D4.)
 
 
 ### A.12 External dependencies
@@ -2186,7 +2147,6 @@ Thumbnails live in `thumbnails/` next to `project.json`. The only other state is
 | scipy | 1.10 | " |
 | tqdm | 4.65 | " |
 | ffmpeg + ffprobe | any recent | `brew install ffmpeg` |
-| DaVinci Resolve | 18+ (free or Studio) | optional, for A.7 |
 
 
 ### A.13 Error handling
@@ -2197,10 +2157,7 @@ Thumbnails live in `thumbnails/` next to `project.json`. The only other state is
 - `ffprobe` failure on a single file -> warning, file skipped from matching and listed as skipped.
 - No readable video or audio at all -> `RuntimeError`.
 - Audio extraction failure during the ambiguity check -> duration match kept for that row, logged; offset detection failure -> offset 0.0 with a warning.
-- Destination exists with a different size during copy -> warning, file overwritten (recorded in the manifest, so `sync --undo` removes it).
 - Legacy rename target collision -> `FileExistsError` before any file is touched.
-- Missing audio copy when pushing to Resolve -> falls back to the original audio path, otherwise the audio is skipped with a warning.
-- Resolve unreachable -> `ConnectionError` with the setup steps; the copy step is unaffected.
 - A second job while one runs -> HTTP 409. Bad Host/Origin -> 403. Invalid JSON -> 400.
 - All worker exceptions are caught and reported through `/api/status`; the server never dies on a job failure.
 
@@ -2209,16 +2166,16 @@ Thumbnails live in `thumbnails/` next to `project.json`. The only other state is
 
 *Plan: all of these tests stay (section 12); new checks are in sections 6 to 11 and 13.*
 
-Run: `python3 -m unittest discover -s tests -v` (stdlib `unittest`, no extra dependencies, no ffmpeg or Resolve needed).
+Run: `python3 -m unittest discover -s tests -v` (stdlib `unittest`, no extra dependencies).
 
 | File | Covers |
 |------|--------|
 | `tests/test_matcher.py` | Offset sign and precision (positive/negative shift, loud ambience), correlation score ordering, correlation-adjusted Hungarian re-solve (chained reassignment, partial scores, unequal counts), margin-based confidence, end-to-end pairing |
-| `tests/test_resolve_integration.py` | `build_timeline_plan` (back-to-back, trims, positive/negative offset, clamping), project save/load round trip and unknown-key tolerance, `apply_plan` against fake Resolve objects |
-| `tests/test_syncer.py` | Byte-identical copies, default output dir, manifest write/merge, `remove_copied_audio` removes exactly the copies, overwrite warning |
+| `tests/test_project.py` | Project save/load round trip, unknown-key tolerance, the selection trims, the field `work_dir` (the tests of the removed Resolve module moved here) |
+| `tests/test_removed.py` | The Resolve push and the audio copy step stay removed (D4): no module, command, endpoint, page element or help text |
 | `tests/test_renamer.py` | Collision and duplicate-target abort without renaming, dry run, rename + undo round trip |
 
-Not covered: the HTTP server (Host/Origin checks, job guard), the UI, real ffmpeg extraction and a real Resolve connection; these are verified manually (26-scene shoot, 2026-10: all pairs matched once the correlation tiebreaker was added).
+Not covered: the HTTP server (Host/Origin checks, job guard), the UI, real ffmpeg extraction; these are verified manually (26-scene shoot, 2026-10: all pairs matched once the correlation tiebreaker was added).
 
 
 ### A.15 Security and privacy

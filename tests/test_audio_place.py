@@ -1,8 +1,8 @@
 """Check 2.8: the sound path (SPECS 5.4, 3.4). Where each segment's sound comes from
 in the WAV, the crossfade at a join, the film fades. The mix is built in numpy, so the
-tests hand it arrays instead of files. The cases of PlanTests in
-tests/test_resolve_integration.py (back-to-back, trims, positive offset, negative
-offset, clamped length) are restated for the audio span."""
+tests hand it arrays instead of files. The cases of
+the plan of the Resolve push, which was removed with D4 (back-to-back, trims, positive
+offset, negative offset, clamped length), are restated for the audio span."""
 
 import copy
 import unittest

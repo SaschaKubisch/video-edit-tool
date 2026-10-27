@@ -25,7 +25,8 @@ class SceneMatch:
     placed |offset| seconds later on the timeline relative to its video.
 
     trim_start / trim_end are seconds cut from the start / end of the clip.
-    Trims are only stored here; they are applied in Resolve.
+    Trims are only stored here (D4, 2026-10-27: the Resolve push that applied them is removed);
+    the assembly ignores them.
     """
     index: int
     video_path: str
@@ -66,7 +67,6 @@ class Project:
     """Full project state."""
     video_dir: str = ""
     audio_dir: str = ""
-    output_dir: str = ""
     matches: list = field(default_factory=list)   # list of SceneMatch dicts
     selection: list = field(default_factory=list)  # ordered list of scene indices
     selection_trims: dict = field(default_factory=dict)  # {index: {start, end}}
@@ -77,7 +77,6 @@ class Project:
         data = {
             "video_dir": self.video_dir,
             "audio_dir": self.audio_dir,
-            "output_dir": self.output_dir,
             "work_dir": self.work_dir,
             "matches": [asdict(m) if isinstance(m, SceneMatch) else m for m in self.matches],
             "selection": self.selection,
@@ -106,7 +105,6 @@ class Project:
         proj = cls(
             video_dir=data.get("video_dir", ""),
             audio_dir=data.get("audio_dir", ""),
-            output_dir=data.get("output_dir", ""),
             work_dir=data.get("work_dir", ""),
             selection=data.get("selection", []),
             selection_trims=data.get("selection_trims", {}),

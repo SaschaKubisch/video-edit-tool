@@ -5,12 +5,8 @@ Dual-System Audio Video Automation
 Automates the BMPCC 4K + Zoom H2N ambient video workflow.
 
 Commands:
-  app      Web app (default): match, pick/order/trim scenes, sync, Resolve
+  app      Web app (default): match, pick and order scenes, the film
   match    Audio-fingerprint match video files to audio files
-  sync     Copy audio renamed to the video's stem (into the video folder
-           by default), using the selection saved in project.json;
-           `sync --undo` removes those copies again
-  resolve  Push the ordered timeline (V1 video, A2 audio) into DaVinci Resolve
   rename   (legacy) rename both files of each pair to scene_NN.*, with undo
   convert  make a small preview copy of every matched .braw clip in the work folder
   analyse  find the sync clap at the start of each clip, find the steady scenes (reports in the work folder)
@@ -29,8 +25,6 @@ Commands:
 Usage:
   python main.py
   python main.py match --video ./video/ --audio ./audio/
-  python main.py sync
-  python main.py resolve --project-name "My Project" --timeline "Cut 1"
 """
 
 import argparse
@@ -86,7 +80,6 @@ def cmd_match(args):
     project = Project(
         video_dir=video_dir,
         audio_dir=audio_dir,
-        output_dir=args.output or "",
         matches=matches,
     )
 
@@ -140,122 +133,6 @@ def cmd_rename(args):
     if not args.dry_run:
         project.save(project_file)
         print(f"\nProject updated: {project_file}")
-
-
-def cmd_sync(args):
-    """Copy the matched audio next to the video, renamed to the video's stem."""
-    from syncer import sync_all_scenes, remove_copied_audio
-
-    project_file = args.project or config.PROJECT_FILE
-
-    if args.undo:
-        out_dir = args.output
-        if not out_dir:
-            if not Path(project_file).exists():
-                print(f"Error: Project file not found: {project_file}")
-                print("Pass --output DIR to name the folder holding the copies.")
-                sys.exit(1)
-            proj = Project.load(project_file)
-            out_dir = proj.output_dir or proj.video_dir
-        removed = remove_copied_audio(out_dir)
-        for path in removed:
-            print(f"  Removed: {path}")
-        print(f"Removed {len(removed)} copied audio file(s) from {out_dir}")
-        return
-
-    if not Path(project_file).exists():
-        print(f"Error: Project file not found: {project_file}")
-        print("Run 'python main.py match' first.")
-        sys.exit(1)
-
-    project = Project.load(project_file)
-
-    # Load selection from argument or file
-    selection_data = None
-    if args.selection:
-        selection_data = json.loads(args.selection)
-    elif args.selection_file:
-        with open(args.selection_file) as f:
-            selection_data = json.load(f)
-    elif project.selection:
-        # Use previously saved selection
-        selection_data = {
-            "selection": project.selection,
-            "selection_trims": project.selection_trims,
-        }
-    else:
-        print("Error: No selection provided.")
-        print("Pick scenes in the app first (python main.py app), or pass:")
-        print("  python main.py sync --selection '{\"selection\":[0,2,1]}'")
-        print("  python main.py sync --selection-file selection.json")
-        sys.exit(1)
-
-    # Apply selection to project
-    project.selection = selection_data.get("selection", [])
-    project.selection_trims = selection_data.get("selection_trims", {})
-
-    print("=" * 60)
-    print("Copying audio renamed to the video names")
-    print("=" * 60)
-    print(f"Selection: {project.selection}")
-    if project.selection_trims:
-        print(f"Trims: {project.selection_trims}")
-
-    output_dir = args.output or project.output_dir or None
-    outputs = sync_all_scenes(project, output_dir)
-    shown_dir = output_dir or project.video_dir
-
-    # Save selection back to project
-    project.save(project_file)
-
-    print(f"\n{'=' * 60}")
-    print(f"Done! {len(outputs)} renamed audio files saved to: {shown_dir}/")
-    print(f"Next: python main.py resolve")
-    print(f"{'=' * 60}")
-
-
-def cmd_resolve(args):
-    """Create a DaVinci Resolve project with synced clips on a timeline."""
-    from resolve_integration import create_resolve_project, list_resolve_projects
-
-    project_file = args.project or config.PROJECT_FILE
-
-    # List projects mode
-    if args.list:
-        print("Projects in current Resolve database:")
-        try:
-            projects = list_resolve_projects()
-            for p in projects:
-                print(f"  - {p}")
-            if not projects:
-                print("  (none)")
-        except ConnectionError as e:
-            print(f"Error: {e}")
-        return
-
-    if not Path(project_file).exists():
-        print(f"Error: Project file not found: {project_file}")
-        print("Run 'python main.py match' (or the app) first.")
-        sys.exit(1)
-    proj = Project.load(project_file)
-
-    print("=" * 60)
-    print("Creating DaVinci Resolve project")
-    print("=" * 60)
-
-    try:
-        result = create_resolve_project(
-            project=proj,
-            project_name=args.project_name or "Ambient Video Project",
-            timeline_name=args.timeline or "Main Timeline",
-            fps=args.fps,
-        )
-    except ConnectionError as e:
-        print(f"\nError: {e}")
-        sys.exit(1)
-    except (RuntimeError, ValueError, FileNotFoundError) as e:
-        print(f"\nError: {e}")
-        sys.exit(1)
 
 
 def install_graceful_stop():
@@ -1477,8 +1354,6 @@ def build_parser():
         help="Directory containing BMPCC video files")
     p_match.add_argument("--audio", "-a", required=True,
         help="Directory containing Zoom H2N audio files")
-    p_match.add_argument("--output", "-o",
-        help="Directory for renamed audio copies (default: the video folder)")
     p_match.set_defaults(func=cmd_match)
 
     # ── rename ──
@@ -1491,33 +1366,6 @@ def build_parser():
     p_rename.add_argument("--undo",
         help="Path to rename_log.json to undo previous renames")
     p_rename.set_defaults(func=cmd_rename)
-
-    # ── sync ──
-    p_sync = subparsers.add_parser("sync",
-        help="Copy matched audio next to the video, renamed to the video's stem")
-    p_sync.add_argument("--selection", "-s",
-        help='Selection JSON (default: the selection saved in project.json)')
-    p_sync.add_argument("--selection-file", "-f",
-        help="Path to a selection JSON file")
-    p_sync.add_argument("--output", "-o",
-        help="Directory for renamed audio copies (default: the video folder)")
-    p_sync.add_argument("--undo", action="store_true",
-        help="Delete the audio copies made by a previous sync (listed in "
-             "ambient_audio_copies.json) and exit")
-    p_sync.set_defaults(func=cmd_sync)
-
-    # ── resolve ──
-    p_resolve = subparsers.add_parser("resolve",
-        help="Create a Resolve project with video + audio on a timeline")
-    p_resolve.add_argument("--project-name", "-n", dest="project_name",
-        help='Resolve project name (default: "Ambient Video Project")')
-    p_resolve.add_argument("--timeline", "-t",
-        help='Timeline name (default: "Main Timeline")')
-    p_resolve.add_argument("--fps", type=float,
-        help="Override timeline frame rate (default: Resolve's timeline rate)")
-    p_resolve.add_argument("--list", action="store_true",
-        help="List existing projects in Resolve and exit")
-    p_resolve.set_defaults(func=cmd_resolve)
 
     # ── convert ──
     p_convert = subparsers.add_parser("convert",

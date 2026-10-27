@@ -24,7 +24,7 @@ _project_lock = threading.Lock()
 _status = {"step": "idle", "message": "Ready", "progress": 0}
 _status_lock = threading.Lock()
 
-# Only one background job (match, sync, resolve, assemble, preview) may run at a time
+# Only one background job (match, assemble, preview, render, subtitles) may run at a time
 _job_running = False
 _job_lock = threading.Lock()
 
@@ -227,10 +227,6 @@ class AppHandler(BaseHTTPRequestHandler):
                 self._handle_match()
             elif path == "/api/select":
                 self._handle_select()
-            elif path == "/api/sync":
-                self._handle_sync()
-            elif path == "/api/resolve":
-                self._handle_resolve()
             elif path == "/api/timeline/edit":
                 self._handle_timeline_edit()
             elif path == "/api/assemble":
@@ -379,91 +375,6 @@ class AppHandler(BaseHTTPRequestHandler):
             _project.save()
 
         _json_response(self, {"status": "saved", "count": len(selection)})
-
-    # ── Sync ──
-
-    def _handle_sync(self):
-        body = _read_body(self)
-
-        if not _try_start_job():
-            _json_response(self, {"error": "Another job is already running"}, 409)
-            return
-
-        _set_status("syncing", "Copying and renaming audio files...", 10)
-
-        def do_sync():
-            try:
-                from syncer import sync_all_scenes
-
-                # Work on a copy so the in-memory project stays the single source of truth
-                with _project_lock:
-                    proj_copy = copy.deepcopy(_project)
-
-                if not proj_copy.selection:
-                    _set_status("error", "No scenes selected.", 0)
-                    return
-
-                # Default output to video directory
-                output_dir = body.get("output_dir") or proj_copy.video_dir
-                outputs = sync_all_scenes(proj_copy, output_dir)
-
-                with _project_lock:
-                    _project.output_dir = output_dir
-                    _project.save()
-
-                _set_status("synced",
-                            f"Copied {len(outputs)} audio files to video folder.", 100)
-
-            except Exception as e:
-                traceback.print_exc()
-                _set_status("error", f"Sync failed: {e}", 0)
-            finally:
-                _end_job()
-
-        thread = threading.Thread(target=do_sync, daemon=True)
-        thread.start()
-
-        _json_response(self, {"status": "started"})
-
-    # ── Resolve ──
-
-    def _handle_resolve(self):
-        body = _read_body(self)
-
-        if not _try_start_job():
-            _json_response(self, {"error": "Another job is already running"}, 409)
-            return
-
-        _set_status("resolve", "Creating DaVinci Resolve project...", 10)
-
-        def do_resolve():
-            try:
-                from resolve_integration import create_resolve_project
-
-                with _project_lock:
-                    proj_copy = copy.deepcopy(_project)
-
-                result = create_resolve_project(
-                    project=proj_copy,
-                    project_name=(body.get("project_name") or body.get("name")
-                                  or "Ambient Video Project"),
-                    timeline_name=(body.get("timeline_name") or body.get("timeline")
-                                   or "Main Timeline"),
-                )
-
-                _set_status("resolve_done",
-                            f"Resolve project created with {result['clips_imported']} clips.", 100)
-
-            except Exception as e:
-                traceback.print_exc()
-                _set_status("error", f"Resolve failed: {e}", 0)
-            finally:
-                _end_job()
-
-        thread = threading.Thread(target=do_resolve, daemon=True)
-        thread.start()
-
-        _json_response(self, {"status": "started"})
 
     # ── The film: timeline, edits, preview ──
 
@@ -1086,7 +997,6 @@ class AppHandler(BaseHTTPRequestHandler):
         return {
             "video_dir": _project.video_dir,
             "audio_dir": _project.audio_dir,
-            "output_dir": _project.output_dir,
             "matches": matches,
             "selection": _project.selection,
             "selection_trims": _project.selection_trims,

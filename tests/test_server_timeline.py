@@ -681,7 +681,7 @@ class PageTests(TimelineFileCase):
         self.assertEqual(status, 200)
         page = content.decode()
         for needle in ('id="filmPlayer"', 'id="filmTable"', "/api/timeline", "/api/timeline/edit",
-                       "/api/preview", "/api/assemble", 'data-step="4"'):
+                       "/api/preview", "/api/assemble", 'data-step="3"'):
             self.assertIn(needle, page)
 
     def test_the_script_of_the_page_is_valid_javascript(self):

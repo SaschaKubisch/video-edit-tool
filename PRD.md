@@ -244,7 +244,7 @@ Priority: Must, Should, Could. "Built" means released in v1.1.0.
 | M6 | Browser page to choose folders, run matching and show the result. (Part of old F6.) | Must | Built |
 | M7 | Choose which clips go into the film and in which order. The default is all clips in recording order. (Old F6, F7; trims move into the timeline file.) | Should | Step 2 |
 | M8 | One thumbnail per clip, taken from its preview copy. (Old F5; `.braw` had no thumbnail.) | Should | Step 2 |
-| M9 | Never modify or delete the `.braw` and WAV originals. Derived files go to the work directory on the SSD. The only exception is the audio copy of R1, if D4 keeps it. | Must | Step 2 |
+| M9 | Never modify or delete the `.braw` and WAV originals. Derived files go to the work directory on the SSD. No exception is left: the audio copy of R1 was removed (D4). | Must | Step 2 |
 | M10 | A command-line subcommand for every step. (Old F13.) | Should | All |
 
 **C - Preview copies (the `convert` command, built first in step 2)**
@@ -347,12 +347,9 @@ Step 1 tested this method on two clips (section 5.1). These requirements describ
 | S4 | Lay out the subtitles for the 9:16 frame and scale them to fit its safe area. | Must |
 | S5 | Export the short to MP4, H.264, at a custom resolution (default 1080 x 1920). | Must |
 
-**R - Resolve option (kept only if D4 says so)**
+**R - Resolve option (removed)**
 
-| ID | Requirement | Priority |
-|----|-------------|----------|
-| R1 | Copy the matched WAV next to its video under the video's name, with undo. (Old F8, F14.) | Could |
-| R2 | Push the ordered timeline into DaVinci Resolve. (Old F11, F12.) | Could |
+The requirements R1 (copy the matched WAV next to its video under the video's name, with undo; old F8, F14) and R2 (push the ordered timeline into DaVinci Resolve; old F11, F12) are removed (D4, 2026-10-27). The git history keeps the code.
 
 ## 10. Non-Functional Requirements
 
@@ -419,7 +416,7 @@ Step 1 tested this method on two clips (section 5.1). These requirements describ
 | Duration-first matching with an order-preserving alignment. | Kept | Pure audio correlation of all pairs. | Camera microphone against H2N gave weak scores (8 to 18 percent) and many extractions; durations are cheap and near-identical for pairs [reported in the v1.1 PRD]. |
 | Correlation only as tiebreaker and for the offset. | Kept | Always correlate. | Keeps the common case fast. |
 | A single-file browser page on `http.server`, plain JavaScript. | Kept | Electron, Tkinter, Streamlit. | No extra dependency, easy to inspect. It now also plays video. |
-| The timeline refers to the original WAV with an offset. No copy of the WAV is made for the tool's own render. | Design | Copy and rename the WAV next to the video (v1.1). | The copy existed to feed Resolve's auto-sync by filename. Kept only if D4 keeps the Resolve option. |
+| The timeline refers to the original WAV with an offset. No copy of the WAV is made for the tool's own render. | Design | Copy and rename the WAV next to the video (v1.1). | The copy existed to feed Resolve's auto-sync by filename. It was removed with the Resolve option (D4). |
 | Analysis is written with `numpy` and `scipy`. OpenCV is allowed but not required. | Design | OpenCV (`cv2.phaseCorrelate` could replace the hand-written phase correlation [inference]), PySceneDetect. | A prototype on synthetic video separated still from moving frames with `numpy` only [measured, synthetic]. The owner allowed OpenCV (D3), so the choice can change when the code is written. |
 | Replaced rows from v1.1: "Resolve script run from inside Resolve", "Copy and rename audio instead of muxing", "Output defaults to the video folder", "No re-encoding". | Replaced | - | Their reasons applied to the Resolve workflow. |
 
@@ -441,7 +438,6 @@ Step 1 tested this method on two clips (section 5.1). These requirements describ
 | A change on the page and a change by Claude Code collide. | T6 | Hash check on every page write; numbered versions. |
 | v1.1 was written and tested on Python 3.9; the tool now moves to 3.12 (D3, settled). Whether the 60 tests of v1.1 pass on 3.12 was not run [unverified]. | Step 2 | The first task of step 2 runs them on 3.12 in the new environment and fixes what breaks. |
 | Scene search by description depends on Claude Code reading still images correctly. | Step 5 | The owner checks the result in the preview; every edit is one version that can be undone. |
-| If the Resolve option stays, Resolve 21.1 limits scripting to Studio; reports differ on the free edition [documented, Src8]. | D4 | Decide D4 first. |
 
 ## 14. Open Decisions
 
@@ -458,13 +454,13 @@ One confirmation is still missing, and it is not a decision of the plan: the pac
 - Goal: "timeline open in DaVinci Resolve" is replaced by section 2.
 - "No re-encoding" is replaced by the originals-untouched rule (section 10).
 - Out of scope in v1.1, now in scope: scene detection within a clip, grading with a LUT, final render and export, subtitles.
-- The audio copy next to the video (old F8, F14) and the Resolve push (old F11, F12) become the optional requirements R1 and R2.
+- The audio copy next to the video (old F8, F14) and the Resolve push (old F11, F12) became the optional requirements R1 and R2. Both were removed in version 2.5 (D4).
 - Per-scene trims in seconds from the start and the end (`trim_start`, `trim_end`, `selection_trims`) are replaced by segment in-points and out-points in the timeline file. The owner's `project.json` has an empty selection and no trims, so nothing needs to move [measured].
-- The v1.1 open item "ship `resolve_import.py`" depends on D4.
+- The v1.1 open item "ship `resolve_import.py`" is closed: the Resolve push was removed (D4).
 
 **Changed in version 2.5 against version 2.4 (2026-10-28)**
 
-- Decisions moved from open to settled, with the owner's words of 2026-10-27 ("Yes, delete the old test files and for the other decisions apply your recommended answers"): D4 (remove the Resolve push, the audio copy step R1 and R2, and their tests), the audio form of D11 (separate audio clips per segment, shifted by the offset), D14 ("cut out" means remove, "keep only" also works), D15 (60 s when `--length` is not given) and D16 (centred window, per-scene offset by hand or prompt, no subject tracking, importance order). Section 3 has the rows, section 12 the reasons, section 14 has no open decision left.
+- Decisions moved from open to settled, with the owner's words of 2026-10-27 ("Yes, delete the old test files and for the other decisions apply your recommended answers"): D4 (remove the Resolve push, the audio copy step R1 and R2, and their tests; done: the commands `sync` and `resolve`, the modules `syncer.py` and `resolve_integration.py`, `/api/sync` and `/api/resolve`, and the Sync & Export tab of the page are gone, and the page has three tabs), the audio form of D11 (separate audio clips per segment, shifted by the offset), D14 ("cut out" means remove, "keep only" also works), D15 (60 s when `--length` is not given) and D16 (centred window, per-scene offset by hand or prompt, no subject tracking, importance order). Section 3 has the rows, section 12 the reasons, section 14 has no open decision left.
 - New rows in section 3 for the shortening details (about one kept scene per 4 s, time in proportion to the length of the scene, floor 2.0 s and 2.25 s for the last scene, cap 8 s, the film's fades), for the Portuguese speech of three clips (no special handling) and for the deleted ProRes test files.
 - The package `budoux`: the owner was told that it was added; he has not confirmed it explicitly (section 10).
 

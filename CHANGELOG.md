@@ -2,6 +2,18 @@
 
 ## Unreleased (editor, step 2 in progress)
 
+### Removed (D4, 2026-10-27: the Resolve push and the audio copy step)
+- The commands `sync` (copy the recorder's files next to the videos, with `--undo`) and `resolve` (push a timeline into
+  DaVinci Resolve), the modules `syncer.py` and `resolve_integration.py`, the endpoints `/api/sync` and `/api/resolve`,
+  the third tab of the page (Sync & Export; the Film tab is now tab 3), the option `match --output`, the project field
+  `output_dir`, and the tests of these parts. The owner's words: the tool "no longer needs DaVinci Resolve for these
+  films". The git history keeps the code. An old `project.json` with `output_dir` still loads. Copies made earlier stay
+  where they are; `ambient_audio_copies.json` lists them. The tests of `Project` moved to `tests/test_project.py`;
+  `tests/test_removed.py` keeps the removed parts removed.
+
+### Changed (decisions of 2026-10-27)
+- D4, the audio form of D11, D14, D15 and D16 are settled (`PRD.md` 2.5, `SPECS.md` 16). Step 6 follows them.
+
 ### Fixed (translations, limits of a request, waits, Japanese cuts)
 - Every request to the model carries `max_tokens`, sized from its cues. In the second real run two follow-up requests for
   9 short cues were billed 65538 tokens out because the model ran on without a limit. An answer that ends at the limit
