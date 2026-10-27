@@ -236,6 +236,24 @@ TRANSLATE_TIMEOUT_SEC = 120
 TRANSLATE_RETRY_WAIT_SEC = (1.0, 3.0)
 
 
+# ── Prompt edits (step 5, SPECS section 10): the scene index and the still sheets ──
+# Starting values, not decisions (D14 is open). A sheet is one image per scene for a vision model to
+# read; the sides stay under 2000 pixels, the size above which the Claude API scales an image down
+# (SPECS 10.2).
+SCENE_INDEX_DIR = "index"          # <work>/index/<timeline name>/: index.json, index.md, sheets/, frames/
+SHEET_WIDTH = 1600                 # pixels wide
+SHEET_COLUMNS = 3                  # stills per row on a sheet
+SHEET_GAP = 8                      # pixels between stills
+SHEET_LABEL_HEIGHT = 30            # the strip under a still that holds its label
+SHEET_FRAMES = ((6.0, 3), (30.0, 6), (None, 9))     # a scene up to 6 s gets 3 stills, up to 30 s 6, longer 9
+SHEET_JPEG_QUALITY = 88
+OVERVIEW_COLUMNS = 4               # the overview pages: one still per scene, 12 scenes on a page
+OVERVIEW_ROWS = 3
+FRAMES_PER_PAGE = 12               # `scenes frames`: 3 columns by 4 rows on a page
+FRAMES_MAX = 120                   # `scenes frames` refuses a finer look at more stills than this
+SPEECH_MIN_OVERLAP_SEC = 0.2       # a phrase belongs to a scene when this much of it is inside the scene
+
+
 def layout_key(width: int, height: int) -> str:
     """The key of TEXT_LAYOUTS for a frame: "9:16" for a frame that is higher than wide, else "16:9"."""
     return "9:16" if height > width else "16:9"
