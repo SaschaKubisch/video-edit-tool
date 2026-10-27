@@ -27,6 +27,11 @@
   machine; the same with the 44 subtitles of the first shoot in 173 s. No black bar. With the window centred about 3 of
   15 scenes need a hand crop.
 
+### Changed (step 6, hand crops)
+- The first short of 60 s was planned and rendered again with hand crops for four scenes (`scenes crop`: film scenes s125
+  `x 0.40`, s128 `x 0.29`, s046 `x 0.23`, s002 `x 0.78`), looked at on the stills and the new contact sheet
+  (`SPECS.md` 11.10, with what was awkward in the method). Work folder only; no code changed.
+
 ### Fixed (step 6)
 - The `lower_third` title lay at 72 percent of the height, inside the bottom 35 percent of a 9:16 frame that the
   safe-zone rule keeps free (y = 1382 against the limit of 1248 at 1080 x 1920). Titles are now kept inside the safe area
