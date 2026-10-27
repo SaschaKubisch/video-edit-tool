@@ -248,7 +248,9 @@ class TranscriptTests(FakeWhisperCase):
         wav = self.wav("a", 12, [(2.0, 5.0)])
         self.hears(12, phrase(2.0, 5.0, "Now the pan is hot enough."))
         transcribe.transcribe_clip(str(self.work), "A", wav)
+        before = os.stat(wav).st_mtime
         speechlike_wav(Path(wav), 12, [(2.0, 6.0)])
+        os.utime(wav, (before + 10, before + 10))             # a file system with coarse time stamps may give the same one
         transcribe.transcribe_clip(str(self.work), "A", wav)
         self.assertEqual(len(self.calls()), 2)
         other = self.root / "ggml-other.bin"
