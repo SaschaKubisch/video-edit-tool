@@ -484,14 +484,22 @@ class V13CropTests(RuleCase):
         d["segments"][0]["crop"] = {"x": 1.5}
         self.expect(d, "V13", "segments[0].crop.x")
 
-    def test_crop_in_a_fit_film_has_no_effect_and_warns(self):
+    def test_crop_in_a_film_is_the_window_of_the_shorts_made_from_it_and_is_clean(self):
+        """Changed in step 6: a film keeps the crop of its scenes for the shorts built from it (`scenes crop`), so the
+        film does not warn that the crop has no effect in its own 16:9 frame."""
         d = example()
         d["segments"][0]["crop"] = {"x": 0.5}
-        self.expect(d, "V13", "segments[0].crop", level="warning")
+        self.expect_clean(d)
 
-    def test_film_without_fit_key_counts_as_fit(self):
+    def test_film_without_fit_key_is_clean_too(self):
         d = example()
         del d["film"]["fit"]
+        d["segments"][0]["crop"] = {"x": 0.5}
+        self.expect_clean(d)
+
+    def test_crop_in_a_short_whose_fit_is_fit_has_no_effect_and_warns(self):
+        d = short_example()
+        d["film"]["fit"] = "fit"
         d["segments"][0]["crop"] = {"x": 0.5}
         self.expect(d, "V13", "segments[0].crop", level="warning")
 

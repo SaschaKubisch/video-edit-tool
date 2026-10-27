@@ -53,7 +53,7 @@ import words
 
 # ── Presets (SPECS 5.6, 8.5) ────────────────────────────────────
 
-PRESETS = ("film-4k", "film-4k-x264", "film-master")
+PRESETS = ("film-4k", "film-4k-x264", "film-master", "short")
 
 PRORES_MB_PER_FRAME_DCI4K = 3.9      # SPECS 5.6: about 3.9 MB per frame at 4096 x 2160
 SPACE_MARGIN = 1.1                   # E6: refuse when the free space is below 1.1 times the estimate
@@ -93,6 +93,15 @@ def preset_entry(preset: str, output_dir: str, film_frame: dict, name: str = Non
                 "width": w, "height": h,
                 "video": {"codec": "prores_videotoolbox", "profile": "hq"},
                 "audio": {"codec": "pcm_s24le", "sample_rate": config.AUDIO_SAMPLE_RATE}}
+    if preset == "short":
+        # A vertical short (SPECS 11.7): MP4, H.264, 8 Mbit/s (YouTube's figure for 1080p at 24 to 30 frames per
+        # second), AAC at 192 kbit/s and 48 kHz, the subtitles drawn into the picture (D13: the starting value for a short).
+        return {"name": name, "output": os.path.join(output_dir, f"{name}.mp4"), "width": w, "height": h,
+                "video": {"codec": "h264_videotoolbox",
+                          "rate_control": {"mode": "bitrate", "mbps": config.SHORT_VIDEO_MBPS}},
+                "audio": {"codec": "aac", "bitrate_kbps": config.SHORT_AUDIO_KBPS,
+                          "sample_rate": config.AUDIO_SAMPLE_RATE},
+                "subtitles": "burned"}
     video = {"codec": "h264_videotoolbox", "rate_control": {"mode": "bitrate", "mbps": 45}}
     if preset == "film-4k-x264":
         video = {"codec": "libx264", "rate_control": {"mode": "bitrate", "mbps": 45},

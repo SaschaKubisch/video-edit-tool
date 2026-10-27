@@ -276,6 +276,28 @@ FRAMES_MAX = 120                   # `scenes frames` refuses a finer look at mor
 SPEECH_MIN_OVERLAP_SEC = 0.2       # a phrase belongs to a scene when this much of it is inside the scene
 
 
+# ── Vertical shorts (step 6, SPECS section 11) ──
+# D15 (2026-10-27): a short is 60 s unless --length says otherwise. D16: the 9:16 window is centred unless a scene
+# sets it; importance goes pinned or named in a prompt, then scene text or subtitles, then the rest. The shortening
+# numbers (about one scene per 4 s, floor 2.0 s, cap 8 s) are the main session's recommendation, accepted with the
+# owner's words of 2026-10-27; the rest are starting values [Design].
+SHORT_DEFAULT_LENGTH_SEC = 60.0
+SHORT_FRAME = (1080, 1920)
+SHORT_AIM_SCENE_SEC = 4.0          # a short keeps about one scene per this many seconds
+SHORT_MIN_SCENE_SEC = 2.0          # no kept scene is shorter (the last one needs more: its fade-out)
+SHORT_MAX_SCENE_SEC = 8.0          # no kept scene is longer, unless the kept scenes cannot reach the length otherwise
+SHORT_CROP_X = 0.5                 # the centre of the picture
+SHORT_CUE_KEEP_MIN_SEC = 1.0       # a cue that is cut stays when this much of it, or ...
+SHORT_CUE_KEEP_FRACTION = 0.8      # ... this part of it, whichever is more, stays inside the window
+SHORT_CUT_PENALTY_SEC = 1.5        # the window search counts a cue that is cut as this much speech lost
+SHORT_EDGE_SEC = 0.25              # a join takes in this much sound on each side (half the 0.5 s crossfade)
+SHORT_EDGE_PENALTY_SEC = 0.5       # a window edge closer than that to a cue it does not cut counts as this much lost
+SHORT_VIDEO_MBPS = 8               # YouTube's figure for 1080p at 24 to 30 frames per second (SPECS 5.6)
+SHORT_AUDIO_KBPS = 192             # enough for the platforms; the film's 384 is more than they need
+SHORT_STILL_WIDTH = 1500           # width of the picture that shows the 9:16 window on a frame
+SHORT_CONTACT_COLUMNS = 5          # contact sheet of a rendered short: stills per row
+
+
 def layout_key(width: int, height: int) -> str:
     """The key of TEXT_LAYOUTS for a frame: "9:16" for a frame that is higher than wide, else "16:9"."""
     return "9:16" if height > width else "16:9"

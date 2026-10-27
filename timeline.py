@@ -667,7 +667,9 @@ class _Validator:
                     self.err("V13", f"{p}.{k}", f"{k} must be a number")
                 elif not 0 <= crop[k] <= 1:
                     self.err("V13", f"{p}.{k}", f"{k} {crop[k]} is outside 0 to 1")
-        if film["fit"] == "fit":
+        # A film keeps the crop of its scenes for the shorts made from it (`scenes crop`, step 6), so only a short
+        # whose own frame is 'fit' has a crop that does nothing.
+        if film["fit"] == "fit" and self.d.get("kind") == "short":
             self.warn("V13", p, "crop has no effect when film.fit is 'fit'",
                       "set film.fit to 'fill', or remove the crop")
 

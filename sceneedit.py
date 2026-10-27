@@ -126,6 +126,80 @@ def restore(data: dict, ids, notes=None) -> dict:
     return out
 
 
+# ── pin, unpin, crop (step 6: the marks the shorts read) ────────
+
+def pin(data: dict, ids, notes=None) -> dict:
+    """A copy of `data` in which the scenes have `priority` `must`: a short made from the film always keeps them.
+    The film itself does not change."""
+    ids = parse_ids(ids)
+    _check_ids(data, ids)
+    out = copy.deepcopy(data)
+    segs = _by_id(out)
+    for sid in ids:
+        seg = segs[sid]
+        was = seg.get("priority")
+        if was == "must":
+            if notes is not None:
+                notes.append(f"{sid} is already pinned")
+            continue
+        if was == "drop" and notes is not None:
+            notes.append(f"{sid} was marked drop (left out of shorts); it is pinned now")
+        if not _enabled(seg) and notes is not None:
+            notes.append(f"{sid} is removed from the film, so no short uses it until `scenes restore {sid}`")
+        seg["priority"] = "must"
+    return out
+
+
+def unpin(data: dict, ids, notes=None) -> dict:
+    """A copy of `data` in which the scenes have no `priority` mark (a pin or a drop mark is taken away)."""
+    ids = parse_ids(ids)
+    _check_ids(data, ids)
+    out = copy.deepcopy(data)
+    segs = _by_id(out)
+    for sid in ids:
+        if segs[sid].get("priority") in (None, "normal"):
+            if notes is not None:
+                notes.append(f"{sid} has no mark")
+            segs[sid].pop("priority", None)
+            continue
+        del segs[sid]["priority"]
+    return out
+
+
+def crop(data: dict, scene_id: str, x=None, x_from=None, x_to=None, clear=False, notes=None) -> dict:
+    """A copy of `data` in which the scene has the crop that places the 9:16 window of a short: `x` (0 is the left
+    edge of the picture, 0.5 the centre, 1 the right edge), or a pan from `x_from` to `x_to`; `clear` takes the crop
+    away (the window is centred). Shorts read the crop; the film (16:9) does not."""
+    _check_ids(data, [scene_id])
+    given = [v is not None for v in (x, x_from, x_to)]
+    if clear:
+        if any(given):
+            raise SceneEditError("--clear cannot come with --x or --from and --to")
+    elif x is not None and (x_from is not None or x_to is not None):
+        raise SceneEditError("give --x alone, or --from with --to, not both")
+    elif (x_from is None) != (x_to is None):
+        raise SceneEditError("--from and --to go together: a pan needs both ends")
+    elif x is None and x_from is None:
+        raise SceneEditError("say where the window goes: --x X (0 left, 0.5 centre, 1 right), or --from A --to B "
+                             "(a slow pan), or --clear")
+    for name, v in (("x", x), ("from", x_from), ("to", x_to)):
+        if v is not None and not 0.0 <= float(v) <= 1.0:
+            raise SceneEditError(f"--{name} {v:g} is not between 0 and 1")
+    out = copy.deepcopy(data)
+    seg = _by_id(out)[scene_id]
+    if clear:
+        if "crop" not in seg and notes is not None:
+            notes.append(f"{scene_id} has no crop; the window is already centred")
+        seg.pop("crop", None)
+    elif x is not None:
+        seg["crop"] = {"x": float(x)}
+    else:
+        seg["crop"] = {"x_from": float(x_from), "x_to": float(x_to)}
+    if seg.get("crop") == (_by_id(data)[scene_id].get("crop")) and notes is not None and not clear:
+        notes.append(f"{scene_id} already has this crop")
+    return out
+
+
 # ── cut ─────────────────────────────────────────────────────────
 
 def _nearest_frame(seconds: float, fps: Fraction) -> int:

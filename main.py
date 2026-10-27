@@ -1144,6 +1144,8 @@ def cmd_scenes(args):
     remove, keep, cut and restore scenes."""
     if args.scenes_command in ("remove", "keep", "restore", "cut"):
         return cmd_scenes_edit(args)
+    if args.scenes_command in ("pin", "unpin", "crop"):
+        return cmd_scenes_mark(args)
     return cmd_scenes_read(args)
 
 
@@ -1188,6 +1190,116 @@ def cmd_scenes_edit(args):
           f"`python main.py timeline undo` takes this change back.")
     print("Next: `python main.py timeline validate`; the film times after this change have moved, so run "
           "`python main.py scenes index` again before reading it.")
+
+
+def cmd_scenes_mark(args):
+    """pin, unpin and crop (SPECS 11.3, 11.5): the marks the shorts read. The film does not change. Each goes through the
+    validator and makes one snapshot; --dry-run writes nothing. `crop --still` draws a picture of the window on a frame."""
+    import sceneedit
+    import shorts
+    import store
+    import timeline
+    import words
+
+    def fail(message, code=1):
+        print(f"Error: {message}", file=sys.stderr)
+        sys.exit(code)
+
+    sub = args.scenes_command
+    tl, path = _load_timeline_or_exit(args)
+    notes = []
+    try:
+        if sub == "crop":
+            ids = [args.scene]
+            if args.still and not (args.x is not None or args.from_x is not None or args.to_x is not None or args.clear):
+                new_data = tl.data                              # only look at the window as it is
+            else:
+                new_data = sceneedit.crop(tl.data, args.scene, x=args.x, x_from=args.from_x, x_to=args.to_x,
+                                          clear=args.clear, notes=notes)
+            what = "--clear" if args.clear else f"--x {args.x:g}" if args.x is not None else \
+                f"--from {args.from_x:g} --to {args.to_x:g}" if args.from_x is not None else "--still"
+            command = f"scenes crop {args.scene} {what}"
+        else:
+            ids = sceneedit.parse_ids(args.scene_ids)
+            new_data = getattr(sceneedit, sub)(tl.data, ids, notes)
+            command = f"scenes {sub} {','.join(ids)}"
+    except sceneedit.SceneEditError as e:
+        fail(str(e), 2 if str(e).startswith(("name at least one", "say where")) else 1)
+    new = timeline.Timeline(new_data, tl.duplicates)
+    findings = new.validate(file_checks=False)
+    if timeline.has_errors(findings):
+        print(json.dumps([f.as_dict() for f in findings], indent=2))
+        fail("The change breaks a rule of the timeline file; nothing was saved." if not args.dry_run else
+             "The change would break a rule of the timeline file, so it would be refused. Nothing was written.")
+    segs_before = {s["id"]: s for s in tl.data["segments"]}
+    segs_after = {s["id"]: s for s in new.data["segments"]}
+    changed = tl.dumps() != new.dumps()
+    lines = [command + ("   [dry run: nothing was written]" if args.dry_run else "")]
+    rows = {r["seg"]["id"]: r for r in words.film_segments(new.data)}
+    for sid in ids:
+        before, after = segs_before[sid], segs_after[sid]
+        row = rows.get(sid)
+        where = f"film {edits_clock(row['start_s'])} - {edits_clock(row['start_s'] + row['length_s'])}" if row \
+            else "removed from the film"
+        if sub == "crop":
+            show = lambda s: "centre" if not s.get("crop") else (f"x {s['crop']['x']:g}" if "x" in s["crop"] else
+                                                                  f"pan from x {s['crop']['x_from']:g} to x {s['crop']['x_to']:g}")
+            lines.append(f"  {sid}  {where}  clip {after['source']}  crop: {show(before)} -> {show(after)}")
+            info = shorts.window_info(new.data["sources"][after["source"]]["size"], _short_size(args), after.get("crop"))
+            lines.append(f"      {shorts.describe_window(info)}")
+        else:
+            was = before.get("priority")
+            if sub == "pin":
+                state = "pinned (it was marked drop)" if was == "drop" else "pinned"
+            else:
+                state = {"must": "no longer pinned", "drop": "no longer marked drop"}.get(was, "had no mark")
+            lines.append(f"  {sid}  {where}  clip {after['source']}  {state}"
+                         + ("" if row else "  (removed from the film)"))
+    if sub in ("pin", "unpin"):
+        lines.append("The film itself does not change. A short made from it keeps the pinned scenes." if sub == "pin"
+                     else "The film itself does not change. Shorts treat these scenes like any other.")
+    if notes:
+        lines.append("Notes:")
+        lines += [f"  {n}" for n in notes]
+    print("\n".join(lines))
+    if sub == "crop" and args.still:
+        work = _work_dir_of(args, lambda m: fail(m, 2))
+        try:
+            made = shorts.draw_window_still(new, args.scene, work, _short_size(args), at_s=args.at)
+        except shorts.ShortError as e:
+            fail(str(e))
+        print(f"Still: {made['path']}")
+    if not changed or args.dry_run:
+        return
+    store.save(new, path)
+    snapshot = os.path.basename(store.list_snapshots(path)[-1])[:-5]
+    print(f"Saved {os.path.basename(path)}. The version before is snapshot {snapshot}: "
+          f"`python main.py timeline undo` takes this change back.")
+    if sub == "crop":
+        print("Next: `python main.py short --dry-run` shows the short; `python main.py scenes crop SCENE --still` "
+              "shows the window on a frame.")
+
+
+def edits_clock(seconds: float) -> str:
+    import edits
+    return edits.clock(seconds)
+
+
+def _short_size(args):
+    text = getattr(args, "size", None)
+    if not text:
+        return config.SHORT_FRAME
+    return parse_size(text)
+
+
+def parse_size(text: str):
+    """'1080x1920' -> (1080, 1920). Exits with 2 for anything else."""
+    try:
+        w, h = (int(v) for v in str(text).lower().replace("*", "x").split("x"))
+    except ValueError:
+        print(f"Error: the size must be WIDTHxHEIGHT, for example 1080x1920, not {text!r}", file=sys.stderr)
+        sys.exit(2)
+    return w, h
 
 
 def cmd_scenes_read(args):
@@ -1684,6 +1796,21 @@ def build_parser():
     sp.add_argument("scene", help="Scene id, for example s017")
     sp.add_argument("--from", dest="from_s", type=float, required=True, help="Film second where the cut moment starts")
     sp.add_argument("--to", dest="to_s", type=float, required=True, help="Film second where the cut moment ends")
+    sp = edit_cmd("pin", "Pin scenes: a short made from the film always keeps them (the film does not change)")
+    sp.add_argument("scene_ids", nargs="+", metavar="ID", help="Scene ids, for example s017 or s017,s018")
+    sp = edit_cmd("unpin", "Take the pin (or a drop mark) off scenes")
+    sp.add_argument("scene_ids", nargs="+", metavar="ID", help="Scene ids, for example s017 or s017,s018")
+    sp = scenes_cmd("crop", "Where the 9:16 window of a short sits in a scene (the film does not change)")
+    sp.add_argument("scene", help="Scene id, for example s017")
+    sp.add_argument("--x", type=float, help="Place of the window: 0 left edge, 0.5 centre, 1 right edge")
+    sp.add_argument("--from", dest="from_x", type=float, help="Start of a slow pan (with --to)")
+    sp.add_argument("--to", dest="to_x", type=float, help="End of a slow pan (with --from)")
+    sp.add_argument("--clear", action="store_true", help="Take the crop away: the window is centred")
+    sp.add_argument("--dry-run", action="store_true", help="Print what would change and write nothing")
+    sp.add_argument("--still", action="store_true",
+        help="Draw a picture of the window on a frame of the scene into <work>/stills/ (also with --dry-run, to try a place)")
+    sp.add_argument("--at", type=float, help="Film second of the frame for --still (default: the middle of the scene)")
+    sp.add_argument("--size", help=f"Size of the short for the window, WIDTHxHEIGHT (default {config.SHORT_FRAME[0]}x{config.SHORT_FRAME[1]})")
     p_scenes.set_defaults(func=cmd_scenes)
 
     # ── render ──
