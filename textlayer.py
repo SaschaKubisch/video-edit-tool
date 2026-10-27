@@ -208,6 +208,19 @@ def item_title_image(frame, item: Item):
     return image, title_place(frame, template, size, w, h)
 
 
+def title_box(frame, lines, size: int) -> tuple:
+    """(width, height) of the picture of a title, as render_lines makes it, found by measuring (no drawing, so no
+    font file is needed; without one the width is an estimate)."""
+    st = config.TEXT_STYLE
+    outline = max(1, round(size * st["outline_em"]))
+    shadow = max(1, round(size * st["shadow_offset_em"]))
+    blur = max(1, round(size * st["shadow_blur_em"]))
+    pad = outline + shadow + 2 * blur
+    m = textlayout.measurer("title", size)
+    width = int(math.ceil(max((m.width(s) for s in lines), default=0))) + 2 * pad
+    return width, round(size * st["line_height_em"]) * len(lines) + 2 * pad
+
+
 def title_place(frame, template: str, size: int, w: int, h: int) -> tuple:
     t = config.TITLE_TEMPLATES[template]
     W, H = frame
@@ -304,16 +317,14 @@ def build(data: dict, frame, first: int, last: int, rects: dict, burn_cues: bool
                 else:
                     items.append(Item("title", f - first, f - first + 1, lines, (template, size, t["id"]),
                                       alpha, t["id"]))
-            image_w = 0
             if not items:
                 continue
-            probe, pos = item_title_image(frame, items[0])
-            lane = Lane(x=pos[0], y=pos[1], width=probe.size[0], height=probe.size[1], items=items)
+            bw, bh = title_box(frame, lines, size)
+            pos = title_place(frame, template, size, bw, bh)
+            lane = Lane(x=pos[0], y=pos[1], width=bw, height=bh, items=items)
             plan.lanes.append(lane)
             plan.title_count += 1
-            x1, y1 = pos[0] + probe.size[0], pos[1] + probe.size[1]
-            g = textlayout.geometry(frame)
-            if pos[0] < 0 or pos[1] < 0 or x1 > W or y1 > H:
+            if pos[0] < 0 or pos[1] < 0 or pos[0] + bw > W or pos[1] + bh > H:
                 plan.warnings.append(f"title {t['id']} reaches outside the frame")
 
     plan.signature = _signature(plan)

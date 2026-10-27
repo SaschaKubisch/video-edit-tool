@@ -176,6 +176,8 @@ def break_cost(prev: str, nxt: str) -> float:
         cost -= 4.5
     elif bare and bare[-1] == ":":
         cost -= 3.0
+    if len(nxt) > 1 and nxt[0] == "-" and nxt[1] != "-":          # a new speaker: -Yes.
+        cost -= 3.0
     if q in _CONJUNCTIONS:
         cost -= 2.0
     elif q in _PREPOSITIONS:
@@ -192,7 +194,7 @@ def break_cost(prev: str, nxt: str) -> float:
         cost += 3.0
     if prev[:1].isupper() and nxt[:1].isupper() and not _ends_sentence(prev) and p not in _SUBJECTS:
         cost += 3.0
-    if re.match(r"^[—–\-.,;:!?…)\]}]", nxt):
+    if re.match(r"^[—–.,;:!?…)\]}]", nxt) or re.fullmatch(r"-+", nxt):           # a mark is not put at the start of a line
         cost += 10.0
     return cost
 

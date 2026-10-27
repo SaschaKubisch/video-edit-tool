@@ -60,6 +60,66 @@ in Shotcut do not come back, and the command lists them. Then `render` makes the
 
 **Sync offset per clip.** The tool measures one offset per clip when it matches the files (the seconds by which a sound comes later in the recorder's file than in the camera's). If one is wrong, the Film tab has a card, Sync offset per clip: type the right offset in seconds (a minus sign is allowed). The tool stores it in the timeline file as `audio_offset_hand_s`, beside the measured `audio_offset_s`, which is never changed. The sound of that clip's scenes uses the typed offset; the pictures do not change, so the next preview renders only sound again. Empty the field, or press Original, to use the measured offset again. A value beyond 30 seconds is refused, and a typed offset that leaves the recorder file without sound for a scene is a warning. `timeline summary` lists the offsets set by hand, and `assemble --replace` keeps them. `project.json` is not written. `PRD.md` and `SPECS.md` describe the plan and say which parts are built.
 
+## Subtitles and titles (step 4, work in progress)
+
+```bash
+export VET_FONT_DIR=/Volumes/SSD/fonts/inter                     # Inter (SIL Open Font License), not installed on the system
+export VET_WHISPER_MODEL=/Volumes/SSD/models/ggml-large-v3-turbo.bin   # only for subtitles auto
+.venv/bin/python main.py subtitles text s003 --text "Um, the pan is hot. We add the sausage and wait."   # the text box of a scene
+.venv/bin/python main.py subtitles list                          # the cues with their film times
+.venv/bin/python main.py subtitles add --at 30 --length 3 --text "Hello there."
+.venv/bin/python main.py subtitles auto --work /Volumes/SSD/work  # let Whisper listen (optional)
+.venv/bin/python main.py title add --text "Sunday kitchen" --start 1 --length 4 --template center
+.venv/bin/python main.py export set film-4k --subtitles both     # srt, burned, both or none
+.venv/bin/python main.py render --export film-4k --work /Volumes/SSD/work
+export OPENROUTER_API_KEY=...                                    # only for translate; read from the environment, never written
+.venv/bin/python main.py subtitles translate --lang pt-BR,zh-Hans,th,de,ja,ru --work /Volumes/SSD/work
+```
+
+**The text box of a scene is the main way to write subtitles.** Type the words of a scene (or dictate them with
+Superwhisper) into its box in the Film tab, or give them to `subtitles text`. The tool removes filler words (um, uh),
+fixes spacing and capitals, splits the text into subtitles of two lines at most (about 42 characters, broken after
+punctuation and before conjunctions), and spreads them across the scene in proportion to their length. If the
+text needs more time than the scene has, it says so and shortens the subtitles instead of dropping any. Drag a
+subtitle in the strip to move it, drag its edges to change its length, or type its times; such a subtitle is marked
+as changed by hand, and saving the box again asks before it replaces it. A trim of the scene moves the subtitles with
+the picture, or spreads them again if nobody moved them.
+
+**The form of the subtitles is a setting of each export:** `srt` writes `<film>.en.srt` next to the film (the starting
+value for a film), `burned` draws them into the picture (the starting value for a vertical short), `both`, `none`.
+Titles are always drawn. Change it in the Subtitles card, with `export set`, or for one render with `render --subtitles`.
+The style is one for all films (`config.py`: Inter SemiBold, 4.5 percent of the frame height, white with a black outline,
+inside the safe area of the picture; a subtitle that does not fit is split, never made smaller).
+
+**Whisper and the footage.** `subtitles auto` runs whisper.cpp with the model large-v3-turbo on the recorder's
+WAV of each clip, once per clip. On ambient sound the model writes text where nobody speaks ("Thank you.", `*Pain*`);
+the tool drops stock phrases, loops and phrases over sound at the noise floor and lists everything it dropped in
+`reports/subtitles-auto-report.json`. What is kept still needs a person's check. A voice-activity model
+(`VET_WHISPER_VAD_MODEL`, for example `ggml-silero-v5.1.2.bin` from the whisper.cpp project) improves this; it is not
+downloaded for you.
+
+**Claude Code writes subtitles and titles from a prompt** by running these commands, or by writing a JSON file that the
+tool checks and imports. Example: the owner says "put the title Sunday kitchen over the first 4 seconds, and subtitle the
+sausage scene with what I say in it". Claude Code looks (`timeline summary`, `timeline frames`), then:
+
+```bash
+cat > /tmp/titles.json <<'EOF'
+{"titles": [{"text": "Sunday kitchen", "start_s": 1, "length_s": 4, "template": "center"}]}
+EOF
+.venv/bin/python main.py title import /tmp/titles.json
+.venv/bin/python main.py subtitles text s017 --text "Now the pan is hot enough. We add the sausage and wait for it to cook."
+cat > /tmp/cues.json <<'EOF'
+{"cues": [{"start_s": 312.4, "end_s": 315.0, "text": "Listen to that sizzle."}]}
+EOF
+.venv/bin/python main.py subtitles import /tmp/cues.json
+.venv/bin/python main.py timeline validate && .venv/bin/python main.py subtitles check
+```
+
+Times in the files are film seconds (a cue or title with `"anchor": "s017"` counts from the start of that scene). Every
+command goes through the validator and keeps the old file as a snapshot (`timeline undo`). `subtitles check` reports
+cues that do not fit the safe area. Not built: burned-in subtitles in Chinese, Japanese or Thai (Inter has no such
+glyphs; the SRT files are fine) and subtitles and titles in the Shotcut project. See `SPECS.md` section 9.
+
 ## UI workflow
 
 1. **Match** - pick the video folder and the audio folder, click Match. The result list shows each pair, its offset and a confidence value (green high, red low - check red ones by hand).

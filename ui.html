@@ -1556,7 +1556,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
 async function filmAssemble() {
   const replace = !!film;
-  if (replace && !confirm("Assemble the film again? The current timeline file is kept as a snapshot.")) return;
+  if (replace && !confirm("Assemble the film again? The scenes get new numbers, so the subtitles, the scene texts and the titles are not carried over. The current timeline file is kept as a snapshot.")) return;
   showFilmError("");
   const resp = await api("POST", "/api/assemble", { replace });
   if (resp.error) { showFilmError(resp.error); return; }

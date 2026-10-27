@@ -2,6 +2,35 @@
 
 ## Unreleased (editor, step 2 in progress)
 
+### Added (step 4, words)
+- Decisions of 2026-10-27 (`PRD.md` section 3): Whisper model large-v3-turbo (D12), the subtitle form is a setting
+  of each export, font Inter (D13), a text box per scene, one subtitle style, translations by OpenRouter.
+- Subtitles in the timeline file: `segments[].text` (the words of a scene), `subtitles.cues[]` with `origin`
+  (`auto`, `text`, `manual`) and `locked`, `exports[].subtitles` (`srt`, `burned`, `both`, `none`; film `srt`,
+  short `burned` unless set), `titles[].size_pct`. `subtitles.mode` and `subtitles.style` are gone (V2 says
+  where they went). New rules V24 (cues overlap, order, gap), V25 (the form), V26 (titles, scene text), and
+  readability warnings in V19 (two lines, 42 characters, 1 to 7 s, 17 characters per second).
+- `words.py`: the local cleanup of a scene's text, wrapping and splitting by the measured width, spreading the
+  cues across a scene, cue and title operations at film time, SRT. A trim, a move or a cut read back from Shotcut
+  keeps the cues with their picture.
+- The one style (`config.TEXT_STYLE`, `config.TEXT_LAYOUTS`, `textlayout.py`): Inter SemiBold, safe area
+  of EBU R 95 (5 percent), text inside the picture of a letterboxed scene, 9:16 values ready for step 6.
+- Burned subtitles and titles in the film preview and the final film (`textlayer.py`): drawn with Pillow,
+  laid over the picture with ffmpeg's `overlay` filter (the installed ffmpeg has no libass, freetype or
+  drawtext). `<film>.en.srt` for the forms `srt` and `both`. `render --subtitles FORM` for one render.
+- `subtitles auto` (whisper.cpp, `transcribe.py`): once per clip, kept in `analysis/<clip>/transcript.json`;
+  stock phrases, loops, bracketed sound labels and phrases over sound at the noise floor are dropped and listed
+  in `reports/subtitles-auto-report.json`; a second run does not duplicate.
+- Commands: `subtitles` (`list`, `add`, `edit`, `remove`, `shift`, `sort`, `text`, `import`, `export`, `check`,
+  `auto`, `translate`), `title` (`list`, `add`, `edit`, `remove`, `import`), `export set NAME --subtitles FORM`.
+- `subtitles translate`: the cues into pt-BR, zh-Hans, th, de, ja and ru through an OpenRouter model
+  (`VET_TRANSLATE_MODEL`, key from `OPENROUTER_API_KEY` only), batches with context, answers checked, cached by
+  text and model, one SRT per language with the times of the English cues.
+- The Film tab: a Subtitles card (a text box per scene, a strip of cues to drag and resize, numeric times, the
+  form of each export, Whisper, the SRT file), a Translations card, a Titles card, and a caption the page draws
+  over an out-of-date preview. Operations of the page go through `POST /api/timeline/edit`; new endpoints
+  `POST /api/subtitles/auto`, `/api/subtitles/srt`, `/api/subtitles/translate`.
+
 ### Added (step 3, look and sound)
 - Loudness (decision D9, "Each scene, then film"): `loudness set|show` writes the mode and
   numbers into the timeline file. In the film preview and the final film every scene is

@@ -1030,6 +1030,23 @@ def cmd_subtitles(args):
         return cmd_subtitles_auto(args)
     if sub == "translate":
         return cmd_subtitles_translate(args)
+    if sub == "search":
+        import transcribe
+        tl, path = _load_timeline_or_exit(args)
+        work = _work_dir_of(args, fail)
+        try:
+            hits = transcribe.search(tl, work, args.words, include_dropped=args.all)
+        except transcribe.WhisperError as e:
+            fail(str(e), 2)
+        if not hits:
+            print("Nothing found. (Search reads the transcripts that `subtitles auto` made; add --all to include the "
+                  "phrases it dropped.)")
+        for h in hits:
+            where = f"{edits.clock(h['film_s'])} in the film ({h['segment']})" if h["film_s"] is not None \
+                else "not in the film"
+            print(f"{h['clip']}  {edits.clock(h['wav_s'])} in the sound  {where}  {h['text']}"
+                  + (f"  [dropped: {h['dropped']}]" if h["dropped"] else ""))
+        sys.exit(0 if hits else 1)
     if sub == "check":
         return cmd_subtitles_check(args)
     if sub == "export":
@@ -1584,6 +1601,9 @@ def build_parser():
     sp.add_argument("--out", help="The file (default: <film>.en.srt next to the export)")
     sp.add_argument("--export", metavar="NAME", help="Name of the export whose film the file belongs to")
     sub_cmd("check", "Check that every cue fits the safe area and the readability limits")
+    sp = sub_cmd("search", "Search the words Whisper heard (the transcripts of subtitles auto)", work=True)
+    sp.add_argument("words", help="Words to look for; a phrase has to contain all of them")
+    sp.add_argument("--all", action="store_true", help="Also the phrases that were dropped as not speech")
     sp = sub_cmd("auto", "Let Whisper listen to the sound and make cues", work=True)
     sp.add_argument("--only", help="Only these scenes, comma separated (for example s001,s002)")
     sp.add_argument("--redo", action="store_true", help="Run Whisper again even where a transcript is kept")

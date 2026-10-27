@@ -111,7 +111,7 @@ class CommandTests(FakeWhisperCase):
         self.assertEqual(pairs["-l"], "en")
         self.assertEqual(pairs["-mc"], "0")               # no text carried over: stops the same phrase repeating
         self.assertIn("-ojf", cmd)
-        self.assertIn("-sns", cmd)
+        self.assertNotIn("-sns", cmd)                       # suppressing non-speech tokens made it write sentences for water
         self.assertNotIn("--vad", cmd)
 
     def test_a_voice_activity_model_is_used_when_the_owner_provides_one(self):
@@ -154,6 +154,12 @@ class ParseAndFilterTests(FakeWhisperCase):
         self.assertAlmostEqual(p.words[0][2], 1.6)
         self.assertAlmostEqual(p.prob, (0.8 + 0.9 + 0.7 + 0.99) / 4)
 
+    def test_a_change_of_speaker_is_a_dash_joined_to_its_first_word(self):
+        raw = {"transcription": [{"offsets": {"from": 0, "to": 2000}, "text": " This is for audio. - Yes. - Yes. -",
+                                  "tokens": []}]}
+        (p,) = transcribe.parse(raw)
+        self.assertEqual(p.text, "This is for audio. -Yes. -Yes.")
+
     def ph(self, text, prob=0.9, activity=0.8):
         return transcribe.Phrase(0, 2, text, prob, activity, [])
 
@@ -170,6 +176,18 @@ class ParseAndFilterTests(FakeWhisperCase):
         self.assertIn("no words", reasons("..."))
         self.assertEqual(transcribe.drop_reason(self.ph("Thank you."), stock=False), "")
 
+    def test_a_sound_label_in_capital_letters_is_not_speech(self):
+        self.assertIn("capital letters", transcribe.drop_reason(self.ph("PIANO PLAYS")))
+        self.assertEqual(transcribe.drop_reason(self.ph("Woo!")), "")
+        self.assertEqual(transcribe.drop_reason(self.ph("It is OK")), "")
+
+    def test_the_same_sentence_said_again_with_a_little_word_in_front_is_a_loop(self):
+        said = ["So, I'm going to put it on the left side.", "I'm going to put it on the left side.",
+                "Okay, I'm going to put it on the left side."]
+        ps = [transcribe.Phrase(i * 7, i * 7 + 7, s, 0.9, 0.8, []) for i, s in enumerate(said)]
+        transcribe.mark_dropped(ps)
+        self.assertTrue(all("loop" in p.dropped for p in ps), [p.dropped for p in ps])
+
     def test_a_phrase_that_repeats_is_a_loop(self):
         ps = [transcribe.Phrase(i * 2, i * 2 + 2, "Let's do it a little bit more.", 0.9, 0.8, []) for i in range(5)]
         ps.insert(0, transcribe.Phrase(0, 1, "Something real here.", 0.9, 0.8, []))
@@ -179,6 +197,20 @@ class ParseAndFilterTests(FakeWhisperCase):
         two = [transcribe.Phrase(0, 2, "Again please.", 0.9, 0.8, []), transcribe.Phrase(2, 4, "Again please.", 0.9, 0.8, [])]
         transcribe.mark_dropped(two)
         self.assertEqual([p.dropped for p in two], ["", ""])
+
+    def test_one_group_of_words_repeated_inside_a_phrase_is_a_loop(self):
+        text = "I'm going to make a little bit more of a little bit more of a little bit more"
+        p = transcribe.Phrase(0, 20, text, 0.85, 0.8, [(w, i, i + 1, 0.9) for i, w in enumerate(text.split())])
+        transcribe.mark_dropped([p])
+        self.assertIn("group of words", p.dropped)
+        short = "I'm going to make a little bit more of a little bit more"
+        r = transcribe.Phrase(0, 20, short, 0.85, 0.8, [(w, i, i + 1, 0.9) for i, w in enumerate(short.split())])
+        transcribe.mark_dropped([r])
+        self.assertIn("group of words", r.dropped)
+        ok = "We make a little bit more of this soup than we need, and the rest goes in a bowl"
+        q = transcribe.Phrase(0, 20, ok, 0.85, 0.8, [(w, i, i + 1, 0.9) for i, w in enumerate(ok.split())])
+        transcribe.mark_dropped([q])
+        self.assertEqual(q.dropped, "")
 
     def test_one_phrase_of_a_few_words_over_and_over(self):
         text = "I love you " * 8
@@ -279,6 +311,13 @@ class CueTests(FakeWhisperCase):
         data, _ = self.run_auto(tl)
         s0 = 30 * 1001 / 30000 + 0.75
         self.assertAlmostEqual(data["subtitles"]["cues"][0]["start_s"], 2.0 - s0, delta=0.04)
+
+    def test_no_cue_lasts_more_than_seven_seconds(self):
+        self.hears(12, phrase(2.0, 11.5, "Now the pan is hot enough."))
+        data, _ = self.run_auto()
+        c = data["subtitles"]["cues"][0]
+        self.assertLessEqual(c["end_s"] - c["start_s"], config.SUBTITLE_MAX_SEC)
+        self.assertEqual(timeline.validate(data, file_checks=False), [])
 
     def test_a_cue_lasts_long_enough_to_read_and_has_a_gap(self):
         data, _ = self.run_auto()

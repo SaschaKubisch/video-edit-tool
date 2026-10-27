@@ -33,6 +33,17 @@ class V24CueTimingTests(RuleCase):
         d["subtitles"]["cues"].append(cue("c002", "s001", 6.0 + 2 * 1001 / 30000 + 0.001, 8.5))
         self.expect_clean(d)
 
+    def test_cues_that_meet_at_a_cut_between_two_scenes_are_fine(self):
+        d = example()
+        d["subtitles"]["cues"][0].update(start_s=26.0, end_s=28.7618)                      # to the end of s001 (28.7618 s)
+        d["subtitles"]["cues"].append(cue("c002", "s002", 0.0, 2.5))
+        self.expect_clean(d)
+
+    def test_times_with_four_decimals_may_pass_the_end_of_a_scene_by_the_rounding(self):
+        d = example()
+        d["subtitles"]["cues"][0].update(start_s=26.0, end_s=28.7620)                      # 28.76187 s is the scene
+        self.expect_clean(d)
+
     def test_cues_out_of_film_order_are_a_warning(self):
         d = example()
         d["subtitles"]["cues"].insert(0, cue("c002", "s002", 1.0, 4.0))

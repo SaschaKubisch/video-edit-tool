@@ -3,6 +3,7 @@ on the frames it is for and on no other, a title fades, the text stays in its sa
 letterboxed scene, the lanes are few, and the plan's signature moves with the text. Pillow's built-in
 font draws the text, so no font file is needed."""
 
+import os
 import subprocess
 import tempfile
 import unittest
@@ -55,7 +56,7 @@ FULL = {"s001": (0, 0, W, H), "s002": (0, 0, W, H), "s003": (0, 0, W, H)}
 
 class PlanTests(unittest.TestCase):
     def setUp(self):
-        builtin_font(self)
+        self.real_get_font = builtin_font(self)
 
     def test_a_cue_has_the_frames_it_is_for(self):
         plan = textlayer.build(data_with([CUE]), FRAME, 0, 400, FULL)
@@ -103,6 +104,26 @@ class PlanTests(unittest.TestCase):
         plan = textlayer.build(data_with([dict(CUE, text=long)]), FRAME, 0, 400, FULL)
         self.assertTrue(any("does not fit" in w for w in plan.warnings), plan.warnings)
         self.assertGreater(plan.lanes[0].height, 2 * textlayout.geometry(FRAME).line_height)
+
+    def test_a_plan_with_a_title_needs_no_font_until_it_is_written(self):
+        textlayout.get_font = self.real_get_font
+        old = os.environ.pop("VET_FONT_DIR", None)
+        self.addCleanup(lambda: old and os.environ.__setitem__("VET_FONT_DIR", old))
+        plan = textlayer.build(data_with([CUE], [TITLE]), FRAME, 0, 400, FULL)
+        self.assertEqual((plan.cue_count, plan.title_count), (1, 1))
+        self.assertEqual(len(plan.signature), 20)
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(textlayout.FontMissing):
+                plan.write(tmp)
+
+    def test_the_size_of_a_title_picture_is_the_size_it_is_drawn_at(self):
+        plan = textlayer.build(data_with(titles=[TITLE]), FRAME, 0, 400, FULL)
+        with tempfile.TemporaryDirectory() as tmp:
+            plan.write(tmp)
+            from PIL import Image
+            lane = plan.lanes[0]
+            for path in set(lane.files.values()):
+                self.assertEqual(Image.open(path).size, (lane.width, lane.height))
 
     def test_has_text(self):
         self.assertFalse(textlayer.has_text(data_with()))

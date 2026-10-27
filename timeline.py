@@ -813,7 +813,7 @@ class _Validator:
             if s >= e:
                 self.err("V15", f"{path}.end_s", f"end_s {e} is not after start_s {s}")
                 return None
-            elif anchor_len is not None and (s < 0 or e > anchor_len + 1e-9):
+            elif anchor_len is not None and (s < -5e-4 or e > anchor_len + 5e-4):      # times have four decimals
                 self.warn("V15", f"{path}.end_s",
                           f"the interval {s} to {e} s reaches outside {anchor_name} "
                           f"({anchor_len:.1f} s); the part outside is not shown")
@@ -933,11 +933,11 @@ class _Validator:
                     top = seg_seconds(by_id[anchor])
                     a, b = max(0.0, span[0]), min(top, span[1])
                     if b > a:
-                        placed.append((i, film_start[anchor] + a, film_start[anchor] + b))
+                        placed.append((i, film_start[anchor] + a, film_start[anchor] + b, anchor))
 
         # V24: the order in the list, then overlap and gap by film time
         previous = None
-        for i, a, b in placed:
+        for i, a, b, _ in placed:
             if previous is not None and a < previous - 1e-9:
                 self.warn("V24", f"subtitles.cues[{i}].start_s",
                           "the cue is before the cue above it in film time; keep the cues in "
@@ -945,19 +945,19 @@ class _Validator:
             previous = a
         order = sorted(placed, key=lambda p: (p[1], p[2]))
         gap = config.SUBTITLE_MIN_GAP_FRAMES * (fps[1] / fps[0] if fps else 0.0334)
-        reach, reach_i = None, None
-        for i, a, b in order:
+        reach, reach_i, reach_anchor = None, None, None
+        for i, a, b, anchor in order:
             if reach is not None and a < reach - 1e-9:
                 self.err("V24", f"subtitles.cues[{i}].start_s",
                          f"the cue starts at {a:.2f} s of the film, before the cue "
                          f"subtitles.cues[{reach_i}] ends ({reach:.2f} s)",
                          "move or shorten one of the two cues")
-            elif reach is not None and a - reach < gap - 1e-9:
+            elif reach is not None and anchor == reach_anchor and a - reach < gap - 5e-4:
                 self.warn("V24", f"subtitles.cues[{i}].start_s",
                           f"the cue starts {max(0.0, a - reach) * 1000:.0f} ms after the cue "
                           f"above it; leave at least {config.SUBTITLE_MIN_GAP_FRAMES} frames")
             if reach is None or b > reach:
-                reach, reach_i = b, i
+                reach, reach_i, reach_anchor = b, i, anchor
 
     # ── exports (V5, V18, V21) ──
     def exports(self, film, sources):

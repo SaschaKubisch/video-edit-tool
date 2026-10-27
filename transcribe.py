@@ -39,7 +39,8 @@ SHOTCUT_WHISPER = "/Applications/Shotcut.app/Contents/MacOS/whisper-cli"
 CUE_MIN_OVERLAP = 0.6              # a cue with less of its time inside the scene is dropped (SPECS 9.3)
 STOCK_PHRASES = {
     "thank you", "thanks", "thank you for watching", "thanks for watching", "bye", "bye bye", "goodbye",
-    "you", "ok", "okay", "i'll see you next time", "see you next time", "see you in the next video",
+    "you", "ok", "okay", "i'll see you next time", "we'll see you next time", "see you next time", "see you in the next video",
+    "see you in the next one",
     "we'll be right back", "please subscribe", "subscribe", "the end", "music", "applause",
     "subtitles by the amara.org community", "so", "oh", "uh", "um", "hmm", "mm", "mhm"}
 
@@ -120,9 +121,11 @@ def prepare_wav(src: str, dest: str, ffmpeg: str = None) -> float:
 
 def command(wav16: str, out_prefix: str, model: str = None, threads: int = None, vad: str = None) -> list:
     """The whisper-cli command line: English, JSON with token times, no text carried from one window to
-    the next (that stops the same phrase being repeated), non-speech tokens suppressed."""
+    the next (that stops the same phrase being repeated). Non-speech tokens are not suppressed (`-sns`): with
+    it the model wrote sentences for the sound of water and a kettle [measured on the first shoot, SPECS 9.2],
+    and without it writes sound labels such as *Pain*, which the filter recognises and drops."""
     cmd = [whisper_bin(), "-m", model or model_path(), "-f", wav16, "-l", "en", "-ojf", "-of", out_prefix,
-           "-np", "-t", str(threads or config.WHISPER_THREADS), "-mc", "0", "-sns"]
+           "-np", "-t", str(threads or config.WHISPER_THREADS), "-mc", "0"]
     vad = vad if vad is not None else vad_model_path()
     if vad:
         cmd += ["--vad", "-vm", vad]
@@ -148,12 +151,19 @@ def _is_special(token: dict) -> bool:
     return t.startswith("[_") or t.startswith("<|")
 
 
+def tidy(text: str) -> str:
+    """The text of a phrase as a subtitle writes a change of speaker: no dash at the end, and a dash in front of a
+    turn joined to its first word ("- Yes." becomes "-Yes."; the Netflix guide writes it without a space)."""
+    text = re.sub(r"(?:\s+-)+\s*$", "", text.strip())
+    return re.sub(r"(^|\s)-\s+(?=\S)", r"\1-", text)
+
+
 def parse(raw: dict) -> list:
     """The phrases of whisper.cpp's JSON (output-json-full). Words are built from the tokens: a token
     that starts with a space begins a word."""
     out = []
     for seg in raw.get("transcription", []):
-        text = seg.get("text", "").strip()
+        text = tidy(seg.get("text", ""))
         a, b = seg["offsets"]["from"] / 1000.0, seg["offsets"]["to"] / 1000.0
         ws, probs = [], []
         for tok in seg.get("tokens", []):
@@ -212,6 +222,9 @@ def drop_reason(p: Phrase, stock: bool = True) -> str:
         return "no words"
     if re.fullmatch(r"[\[\(\*♪].*[\]\)\*♪]", text):
         return "a sound description in brackets or asterisks, not speech"
+    letters = re.sub(r"[^A-Za-z]", "", text)
+    if len(letters) >= 8 and letters.isupper():
+        return "a sound description in capital letters (PIANO PLAYS), not speech"
     if p.prob < config.WHISPER_MIN_MEAN_PROB:
         return f"Whisper was not sure of the words (mean probability {p.prob:.2f})"
     if p.activity < config.WHISPER_MIN_ACTIVITY:
@@ -221,6 +234,30 @@ def drop_reason(p: Phrase, stock: bool = True) -> str:
     return ""
 
 
+def _repeats_a_group(ws: list) -> bool:
+    """Does a group of words come again straight after itself (or with one word between)? Three times for a
+    group of two or three words, twice for a group of four or more: "a little bit more of a little bit more"."""
+    n = len(ws)
+    for size in range(2, 9):
+        times = 3 if size < 4 else 2
+        for gap in (0, 1):
+            span = size + gap
+            for i in range(0, n - (times - 1) * span - size + 1):
+                first = ws[i:i + size]
+                if all(ws[i + k * span:i + k * span + size] == first for k in range(1, times)):
+                    return True
+    return False
+
+
+_LEAD = re.compile(r"^(?:(?:so|and|but|okay|ok|yeah|yes|well|now|then|oh|all right)\s+)+")
+
+
+def _loop_key(text: str) -> str:
+    """The text of a phrase without the little words it may start with: "So, I'm going to put it on the left side."
+    and "I'm going to put it on the left side." are the same sentence said again."""
+    return _LEAD.sub("", _normal(text))
+
+
 def mark_dropped(phrases: list, stock: bool = True) -> list:
     """Sets `dropped` on every phrase that is not trusted. A phrase that repeats the one before it
     config.WHISPER_REPEAT_RUN times or more is a loop and all of the run is dropped. Returns `phrases`."""
@@ -228,7 +265,7 @@ def mark_dropped(phrases: list, stock: bool = True) -> list:
         p.dropped = drop_reason(p, stock)
     run = 1
     for i in range(1, len(phrases) + 1):
-        same = i < len(phrases) and _normal(phrases[i].text) == _normal(phrases[i - 1].text)
+        same = i < len(phrases) and _loop_key(phrases[i].text) == _loop_key(phrases[i - 1].text)
         if same:
             run += 1
             continue
@@ -236,11 +273,13 @@ def mark_dropped(phrases: list, stock: bool = True) -> list:
             for p in phrases[i - run:i]:
                 p.dropped = p.dropped or "the same phrase over and over (a loop of the model)"
         run = 1
-    # a long phrase that is mostly one word again and again
+    # a phrase that is mostly a few words again and again, or one group of words repeated
     for p in phrases:
-        ws = [w[0].lower().strip(".,!?") for w in p.words]
+        ws = [w[0].lower().strip(".,!?") for w in p.words] or _normal(p.text).split()
         if len(ws) >= 8 and len(set(ws)) <= max(2, len(ws) // 5):
             p.dropped = p.dropped or "a few words repeated over and over (a loop of the model)"
+        elif _repeats_a_group(ws):
+            p.dropped = p.dropped or "a group of words repeated over and over (a loop of the model)"
         if not p.dropped and len(p.text) > 40 and len(zlib.compress(p.text.encode())) / len(p.text.encode()) < 0.3:
             p.dropped = "text that repeats itself (a loop of the model)"
     return phrases
@@ -313,7 +352,7 @@ def transcribe_clip(work_dir: str, source_id: str, wav: str, redo: bool = False,
 def phrase_cues(p: Phrase, rules) -> list:
     """[(start_s, end_s, text)] in WAV time for one trusted phrase: the text split to fit, each cue timed by
     its first and last word (or by its share of the characters when the words are missing)."""
-    text = p.text.strip()
+    text = tidy(p.text)
     pieces, _ = words.split_cues(text, rules)
     if not pieces:
         return []
@@ -352,7 +391,9 @@ def retime(cues: list, scene_s: float, fps, min_s=None, gap=None) -> list:
         b = min(b, a + config.SUBTITLE_MAX_SEC, scene_s, nxt - gap)
         if b - a < 0.2:
             continue
-        out.append((round(round(a / frame) * frame, 4), round(round(b / frame) * frame, 4), text))
+        fa = round(a / frame)
+        fb = min(round(b / frame), fa + int(config.SUBTITLE_MAX_SEC / frame + 1e-9))     # whole frames, never over 7 s
+        out.append((round(fa * frame, 4), round(fb * frame, 4), text))
     return out
 
 
@@ -455,3 +496,42 @@ def auto_subtitles(tl, work_dir: str, only=None, redo: bool = False, stock: bool
     if report["audio_s"] > 0:
         report["seconds_per_minute_of_audio"] = round(report["transcribe_s"] / (report["audio_s"] / 60.0), 2)
     return data, report
+
+
+# ── Searching the transcripts (W5) ──────────────────────────────
+
+def search(tl, work_dir: str, query: str, include_dropped: bool = False) -> list:
+    """The phrases of the kept transcripts (analysis/<clip>/transcript.json) that contain all the words of `query`,
+    in any case: [{clip, wav_s, text, dropped, segment, film_s}]. `film_s` is the film time of the phrase when a
+    scene of the film plays that part of the clip, else None. Reads only the files that `subtitles auto` made."""
+    wanted = [w for w in re.findall(r"[a-z0-9']+", query.lower()) if w]
+    if not wanted:
+        raise WhisperError("give the words to look for")
+    starts = tl.segment_film_starts()
+    rate = tl.sample_rate
+    hits = []
+    for cid in tl.data["sources"]:
+        try:
+            with open(transcript_path(work_dir, cid), encoding="utf-8") as f:
+                transcript = json.load(f)
+        except (OSError, ValueError):
+            continue
+        for p in transcript.get("phrases", []):
+            if p.get("dropped") and not include_dropped:
+                continue
+            have = set(re.findall(r"[a-z0-9']+", p["text"].lower()))
+            if not all(w in have for w in wanted):
+                continue
+            film = scene = None
+            for seg in tl.film_order():
+                if seg["source"] != cid:
+                    continue
+                s0 = tl.source_audio_start(seg) / rate
+                length = float((seg["out"] - seg["in"]) / tl.fps)
+                if 0 <= p["start_s"] - s0 < length:
+                    scene = seg["id"]
+                    film = float(starts[seg["id"]] / tl.fps) + (p["start_s"] - s0)
+                    break
+            hits.append({"clip": cid, "wav_s": p["start_s"], "text": p["text"], "dropped": p.get("dropped", ""),
+                         "segment": scene, "film_s": film})
+    return hits

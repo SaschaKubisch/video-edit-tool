@@ -103,6 +103,11 @@ class WrapTests(unittest.TestCase):
                 self.assertNotIn(line.split()[-1].lower(), {"the", "a", "an", "on", "for", "to", "in"},
                                  f"{width}: {lines}")
 
+    def test_a_new_speaker_starts_a_line(self):
+        lines = words.wrap("Are you coming to the table now? -In a minute, I am almost done", rules())
+        self.assertEqual(len(lines), 2)
+        self.assertTrue(lines[1].startswith("-In a minute"), lines)
+
     def test_a_dash_stays_with_the_word_before_it(self):
         lines = words.wrap("We waited a long time for the water — it was cold", rules(max_chars=34))
         for line in lines:

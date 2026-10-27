@@ -275,6 +275,22 @@ class AutoCommandTests(FakeWhisperCase):
         self.assertEqual(len(json.loads(path.read_text())["subtitles"]["cues"]), 1)
         self.assertEqual(len(self.calls()), 1)
 
+    def test_search_finds_words_in_the_transcripts_with_their_film_time(self):
+        wav = self.wav("a", 12, [(2.0, 5.0), (7.0, 9.0)])
+        self.hears(12, phrase(2.0, 5.0, "Now the pan is hot enough."), phrase(7.0, 9.0, "Thank you."))
+        path = self.root / "timeline.json"
+        store.save(self.film([("A", wav, 400)], [("A", 30, 330)]), str(path))
+        run(["subtitles", "auto", "--file", str(path), "--work", str(self.work)])
+        code, out, err = run(["subtitles", "search", "PAN hot", "--file", str(path), "--work", str(self.work)])
+        self.assertEqual(code, 0, err)
+        self.assertIn("Now the pan is hot enough.", out)
+        self.assertIn("00:00:00.75 in the film (s001)", out)             # 2.0 s of sound minus the 1.25 s before the scene
+        code, out, _ = run(["subtitles", "search", "thank", "--file", str(path), "--work", str(self.work)])
+        self.assertEqual(code, 1)                                       # dropped phrases are not searched
+        code, out, _ = run(["subtitles", "search", "thank", "--all", "--file", str(path), "--work", str(self.work)])
+        self.assertEqual(code, 0)
+        self.assertIn("dropped: a stock phrase", out)
+
     def test_without_a_model_the_command_says_what_to_set(self):
         wav = self.wav("a", 12, [])
         path = self.root / "timeline.json"
