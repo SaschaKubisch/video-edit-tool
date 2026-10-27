@@ -200,9 +200,7 @@ def item_title_image(frame, item: Item):
     (template, size, id) and `item.lines` the lines."""
     template, size, _ = item.geometry
     t = config.TITLE_TEMPLATES[template]
-    W, H = frame
     g = textlayout.geometry(frame)
-    size_, max_width, x0, cx, safe = title_geometry(frame, template, size)
     image, _ = textlayout.render_lines(list(item.lines), g, "title", size=size, align=t["align"])
     w, h = image.size
     return image, title_place(frame, template, size, w, h)
