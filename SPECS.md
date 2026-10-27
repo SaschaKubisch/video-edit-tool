@@ -176,6 +176,7 @@ The code stays flat in the repository folder, as today.
 | `whisper-cli` 1.8.3 (whisper.cpp) | Speech to text for the automatic subtitles (step 4, D12) | `VET_WHISPER_BIN`, else `whisper-cli` in `/Applications/Shotcut.app/Contents/MacOS/`, else on `PATH` [measured]. Run as a command-line program only; Shotcut is not started. |
 | The model `ggml-large-v3-turbo.bin` | Whisper (D12) | `VET_WHISPER_MODEL`. Downloaded once by hand, never by the tool. |
 | Inter 4.1 (SIL Open Font License 1.1) | The font of subtitles and titles (D13) | `VET_FONT_DIR`, the folder with `Inter-SemiBold.ttf`, `Inter-Bold.ttf` and `LICENSE.txt`. Not installed on the system, not committed. |
+| BudouX 0.10.1 (Apache License 2.0; the package, its Python code and its models) | Phrase boundaries for the line breaks of Japanese, Simplified Chinese and Thai subtitles (9.9). Pure Python, no other package. | A Python package in the tool's environment, pinned in `requirements.txt` (`budoux==0.10.1`). Source: github.com/google/budoux. The licence text is in the installed package (`budoux-0.10.1.dist-info/licenses/LICENSE`); the tool does not copy or change the package. |
 
 A command `python3 main.py tools check` prints each program, its version and whether the needed filters exist: `lut3d`, `pad`, `subtitles`, `ebur128`, `alimiter`, `whisper`, `crop`, `scale`, and the encoders `libx264`, `h264_videotoolbox`, `hevc_videotoolbox`, `prores_videotoolbox`, `prores_ks`. [unverified until `ffmpeg-full` is installed; the existing ffmpeg 8.1 has all of them except `subtitles` and `whisper`.]
 

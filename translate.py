@@ -22,9 +22,9 @@ the files line up.
   that are new.
 - Each translation is wrapped again for its language: 42 characters per line for pt-BR, de and ru, 35 for Thai
   (tone marks and vowel marks not counted), 16 for Simplified Chinese, 13 full-width characters for Japanese;
-  two lines at most. A line of Chinese, Japanese or Thai has no spaces, so it is cut by the count of characters,
-  after punctuation where it can be. The limits are those of the Netflix Timed Text Style Guide of each
-  language (config.TRANSLATE_LANGUAGE_RULES).
+  two lines at most. A line of Chinese, Japanese or Thai has no spaces, so it is cut at the phrase boundaries that
+  BudouX gives, with the line-start and line-end rules of W3C JLREQ and CLREQ kept (linebreak.py). The limits are
+  those of the Netflix Timed Text Style Guide of each language (config.TRANSLATE_LANGUAGE_RULES).
 """
 
 import hashlib
@@ -40,6 +40,7 @@ import urllib.request
 
 import config
 import fsutil
+import linebreak
 import words
 
 
@@ -193,12 +194,6 @@ def srt_file(entry: dict, lang: str) -> str:
 
 # ── Measuring and wrapping a translation ────────────────────────
 
-_CLOSING = set("，。、！？；：）」』】》〉”’.,!?;:)]}")
-_OPENING = set("（「『【《〈“‘([{")
-_STOPS = set("，。、！？；：,.!?;:")
-_THAI_LEADING = set("เแโใไ")
-
-
 def visual_len(text: str, lang: str) -> float:
     """The length of a line in the unit of its language: characters; for Thai without the tone marks and the
     vowel marks above and below; for Japanese a full-width character is 1 and a half-width one is 0.5."""
@@ -210,66 +205,30 @@ def visual_len(text: str, lang: str) -> float:
     return float(len(text))
 
 
-def _allowed(text: str, i: int, lang: str) -> bool:
-    """May a line end before text[i]?"""
-    prev, nxt = text[i - 1], text[i]
-    if nxt in _CLOSING or prev in _OPENING:
-        return False
-    if unicodedata.category(nxt) == "Mn" or prev in _THAI_LEADING:
-        return False
-    if prev.isascii() and nxt.isascii() and prev.isalnum() and nxt.isalnum():
-        return False
-    return True
-
-
-def _wrap_unspaced(text: str, lang: str, limit: float) -> list:
-    n = len(text)
-    best = None
-    for i in range(1, n):
-        if not _allowed(text, i, lang):
-            continue
-        a, b = text[:i].rstrip(), text[i:].lstrip()
-        if not a or not b:
-            continue
-        la, lb = visual_len(a, lang), visual_len(b, lang)
-        if la > limit or lb > limit:
-            continue
-        cost = 0.0 if (text[i - 1] == " " or text[i] == " " or text[i - 1] in _STOPS) else 3.0
-        cost += (1.0 + 3.0 * (la - lb) / limit) if la > lb else 0.5 * (lb - la) / limit
-        if best is None or cost < best[0]:
-            best = (cost, [a, b])
-    if best:
-        return best[1]
-    lines, line = [], ""
-    for i, ch in enumerate(text):
-        if line and visual_len(line + ch, lang) > limit:
-            j = len(line)
-            while j > 1 and not _allowed(line + ch, j, lang):
-                j -= 1
-            if j < 1 or visual_len(line[:j], lang) == 0:
-                j = len(line)
-            lines.append(line[:j].rstrip())
-            line = line[j:].lstrip()
-        line += ch
-    lines.append(line)
-    return [l for l in lines if l]
-
-
-def wrap_translation(text: str, lang: str) -> list:
-    """The lines of a translated cue: one line when it fits, else two (bottom-heavy, at a natural place), else
-    as many as it takes. The limit is that of the language (config.TRANSLATE_LANGUAGE_RULES)."""
+def layout_translation(text: str, lang: str):
+    """The lines of a translated cue, and whether a phrase had to be cut inside: (lines, split_phrase).
+    One line when it fits. For pt-BR, de and ru, two lines at a natural place (words.wrap), else as many as it
+    takes. For Chinese, Japanese and Thai, the fewest lines that can be cut at phrase boundaries (BudouX) with the
+    line-start and line-end rules kept, balanced (linebreak.py). The limit is that of the language
+    (config.TRANSLATE_LANGUAGE_RULES)."""
     import textlayout
     rule = config.TRANSLATE_LANGUAGE_RULES[lang]
     limit = rule["max_chars"]
     text = " ".join(str(text).split())
     if visual_len(text, lang) <= limit:
-        return [text]
+        return [text], False
     if rule["unit"] == "char":
         rules = textlayout.LineRules(max_chars=limit, max_width=float(limit * 10), measure=lambda s: 10.0 * len(s),
                                      exact=False, max_lines=2)
         lines = words.wrap(text, rules, max_lines=2) or words.wrap(text, rules, max_lines=8)
-        return lines or [text]
-    return _wrap_unspaced(text, lang, limit)
+        return (lines or [text]), False
+    found = linebreak.break_lines(text, lang, limit, lambda s: visual_len(s, lang))
+    return found.lines, found.split_phrase
+
+
+def wrap_translation(text: str, lang: str) -> list:
+    """The lines of a translated cue (layout_translation without the flag)."""
+    return layout_translation(text, lang)[0]
 
 
 # ── The cache ───────────────────────────────────────────────────

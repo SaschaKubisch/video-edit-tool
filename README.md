@@ -17,7 +17,7 @@ brew install ffmpeg        # provides ffmpeg and ffprobe
 .venv/bin/python main.py   # opens http://localhost:8765
 ```
 
-Requires Python 3.12 (in the `.venv` folder next to the tool), the packages in `requirements.txt` (numpy, scipy, tqdm, vapoursynth with vapoursynth-brawsource, opencv-python-headless) and ffmpeg/ffprobe on the PATH. The tests run with `.venv/bin/python -m unittest discover -s tests -v`; 60 tests of version 1.1.0 pass on Python 3.12 without code changes.
+Requires Python 3.12 (in the `.venv` folder next to the tool), the packages in `requirements.txt` (numpy, scipy, tqdm, vapoursynth with vapoursynth-brawsource, opencv-python-headless, Pillow, budoux) and ffmpeg/ffprobe on the PATH. The tests run with `.venv/bin/python -m unittest discover -s tests -v`; 60 tests of version 1.1.0 pass on Python 3.12 without code changes.
 
 ## Editing the film (work in progress, branch `editor-step2`)
 
