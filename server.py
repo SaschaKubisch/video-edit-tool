@@ -15,6 +15,7 @@ from pathlib import Path
 from urllib.parse import urlparse, parse_qs, unquote
 
 import config
+import words
 from project import Project, SceneMatch
 
 # Global state
@@ -242,6 +243,12 @@ class AppHandler(BaseHTTPRequestHandler):
                 self._handle_loudness()
             elif path == "/api/render":
                 self._handle_render()
+            elif path == "/api/subtitles/auto":
+                self._handle_subtitles_auto()
+            elif path == "/api/subtitles/srt":
+                self._handle_subtitles_srt()
+            elif path == "/api/subtitles/translate":
+                self._handle_subtitles_translate()
             else:
                 self.send_error(404)
         except json.JSONDecodeError:
@@ -504,8 +511,13 @@ class AppHandler(BaseHTTPRequestHandler):
                 _json_response(self, {"error": "The timeline file changed since the page read "
                                       "it. Reload.", "hash": h}, 409)
                 return
+            notes = []
             try:
-                new_data = edits.apply_operations(tl.data, ops)
+                new_data = edits.apply_operations(tl.data, ops, notes)
+            except words.NeedsConfirmation as e:
+                # not a stale hash: no `hash` in the answer, so the page keeps what it shows
+                _json_response(self, {"error": str(e), "needs_confirmation": {"cues": e.cues}}, 409)
+                return
             except edits.OperationError as e:
                 _json_response(self, {"error": str(e)}, 400)
                 return
@@ -521,7 +533,7 @@ class AppHandler(BaseHTTPRequestHandler):
             except store.StaleHash as e:
                 _json_response(self, {"error": str(e), "hash": e.actual}, 409)
                 return
-        _json_response(self, _film_answer(new, new_hash, findings))
+        _json_response(self, _film_answer(new, new_hash, findings, notes))
 
     def _serve_preview_file(self, name):
         """A file of <work>/previews, with HTTP range requests (SPECS 12). Any path that
@@ -814,6 +826,148 @@ class AppHandler(BaseHTTPRequestHandler):
         threading.Thread(target=do_render, daemon=True).start()
         _json_response(self, {"status": "started", "export": name})
 
+    def _handle_subtitles_srt(self):
+        """Write the SRT file of an export now: {export?}. The file is <film>.en.srt next to the export's
+        file (SPECS 9.5)."""
+        import export
+        import fsutil
+        body = _read_body(self)
+        body = body if isinstance(body, dict) else {}
+        with _timeline_lock:
+            loaded = self._load_timeline()
+        if loaded is None:
+            return
+        tl, h = loaded
+        exports = tl.data.get("exports") or []
+        entry = next((e for e in exports if e["name"] == body.get("export")), None) if body.get("export") \
+            else (exports[0] if exports else None)
+        if entry is None:
+            _json_response(self, {"error": "The timeline file has no export of that name."}, 400)
+            return
+        spans = words.cue_spans(tl.data)
+        path = export.srt_path(entry["output"])
+        try:
+            fsutil.write_text_atomic(path, words.srt_text(spans, words.RULES_FACTORY(tl.data)))
+        except OSError as e:
+            _json_response(self, {"error": f"Cannot write {path}: {e}"}, 400)
+            return
+        _json_response(self, {"file": path, "cues": len(spans)})
+
+    def _handle_subtitles_auto(self):
+        """Let Whisper listen to the sound and make cues: {only?: [scene ids], redo?: bool}. A job: it
+        shares the slot with the others. The cues are saved to the timeline file when it ends, if the
+        file is still the one it started from."""
+        import fsutil
+        import store
+        import timeline
+        import transcribe
+        body = _read_body(self)
+        body = body if isinstance(body, dict) else {}
+        work = work_dir()
+        if not work:
+            _json_response(self, {"error": "No work folder. Start the app with --work DIR, or set work_dir "
+                                  "in the project file."}, 400)
+            return
+        only = body.get("only")
+        if only is not None and not (isinstance(only, list) and all(isinstance(s, str) for s in only)):
+            _json_response(self, {"error": "'only' must be a list of scene ids."}, 400)
+            return
+        try:
+            transcribe.whisper_bin()
+            transcribe.model_path()
+        except transcribe.WhisperError as e:
+            _json_response(self, {"error": str(e)}, 400)
+            return
+        with _timeline_lock:
+            loaded = self._load_timeline()
+        if loaded is None:
+            return
+        tl, h = loaded
+        if not _try_start_job():
+            _json_response(self, {"error": "Another job is already running"}, 409)
+            return
+        _set_status("transcribing", "Whisper is listening...", 3)
+
+        def do_auto():
+            try:
+                def progress(i, n):
+                    _set_status("transcribing", f"Whisper has listened to clip {i} of {n}...",
+                                min(95, 5 + int(90 * i / max(n, 1))))
+
+                data, report = transcribe.auto_subtitles(tl, work, only=only, redo=body.get("redo") is True,
+                                                         log=lambda s: None, progress=progress)
+                new = timeline.Timeline(data, tl.duplicates)
+                findings = new.validate(file_checks=False)
+                if timeline.has_errors(findings):
+                    raise RuntimeError("the cues break a rule of the timeline file: " + "; ".join(
+                        f"{f.rule} {f.path}: {f.message}" for f in findings if f.level == "error"))
+                with _timeline_lock:
+                    store.save(new, timeline_file(), expected_hash=h)
+                fsutil.write_json_atomic(os.path.join(work, "reports", "subtitles-auto-report.json"), report)
+                _set_status("transcribed",
+                            f"{report['cues']} cue(s) from {len(report['clips'])} clip(s); "
+                            f"{len(report['dropped'])} phrase(s) dropped as not speech.", 100)
+            except store.StaleHash:
+                _set_status("error", "The timeline file changed while Whisper was listening, so the cues "
+                            "were not saved. The transcripts are kept; press the button again.", 0)
+            except transcribe.WhisperError as e:
+                _set_status("error", f"Whisper failed: {e}", 0)
+            except Exception as e:
+                traceback.print_exc()
+                _set_status("error", f"Whisper failed: {e}", 0)
+            finally:
+                _end_job()
+
+        threading.Thread(target=do_auto, daemon=True).start()
+        _json_response(self, {"status": "started"})
+
+    def _handle_subtitles_translate(self):
+        """Translate the cues: {languages?: [codes], export?: name}. A job; it writes one SRT file per
+        language next to the export's file (SPECS 9.9). The timeline file is not changed."""
+        import translate
+        body = _read_body(self)
+        body = body if isinstance(body, dict) else {}
+        work = work_dir()
+        if not work:
+            _json_response(self, {"error": "No work folder. Start the app with --work DIR, or set work_dir "
+                                  "in the project file."}, 400)
+            return
+        with _timeline_lock:
+            loaded = self._load_timeline()
+        if loaded is None:
+            return
+        tl, h = loaded
+        try:
+            langs = translate.parse_languages(body.get("languages"))
+            entry = translate.pick_export(tl.data, body.get("export"))
+            translate.check_ready()
+        except translate.TranslateError as e:
+            _json_response(self, {"error": str(e)}, 400)
+            return
+        if not _try_start_job():
+            _json_response(self, {"error": "Another job is already running"}, 409)
+            return
+        _set_status("translating", "Translating the subtitles...", 3)
+
+        def do_translate():
+            try:
+                def progress(done, total, message):
+                    _set_status("translating", message, min(95, 5 + int(90 * done / max(total, 1))))
+
+                report = translate.translate_film(tl, work, entry, langs, progress=progress)
+                _set_status("translated", f"{len(report['written'])} SRT file(s) written; "
+                            f"{report['sent_cues']} cue(s) sent, {report['cached_cues']} from the cache.", 100)
+            except translate.TranslateError as e:
+                _set_status("error", str(e), 0)
+            except Exception as e:
+                traceback.print_exc()
+                _set_status("error", f"Translation failed: {e}", 0)
+            finally:
+                _end_job()
+
+        threading.Thread(target=do_translate, daemon=True).start()
+        _json_response(self, {"status": "started"})
+
     def _handle_assemble(self):
         body = _read_body(self)
         body = body if isinstance(body, dict) else {}
@@ -1023,16 +1177,65 @@ def _free_bytes() -> int:
         return 0
 
 
-def _film_answer(tl, h: str, findings) -> dict:
+def _words_state(tl) -> dict:
+    """The subtitles and titles for the page (SPECS 9.8): the cues with their film times, the titles, the
+    form of every export, and what is available (the font, Whisper, the translator)."""
+    import export
+    import textlayout
+    data = tl.data
+    spans = {s["id"]: s for s in words.cue_spans(data)}
+    cues = []
+    for c in (data.get("subtitles") or {}).get("cues", []):
+        sp = spans.get(c["id"])
+        cues.append({"id": c["id"], "segment": c["anchor"], "start_s": c["start_s"], "end_s": c["end_s"],
+                     "text": c["text"], "origin": c.get("origin", "manual"), "locked": bool(c.get("locked")),
+                     "in_film": sp is not None,
+                     "film_start_s": None if sp is None else round(sp["start_s"], 3),
+                     "film_end_s": None if sp is None else round(sp["end_s"], 3)})
+    forms = [{"export": e["name"], "form": export.subtitle_form(e, data["kind"]),
+              "srt": export.srt_path(e["output"])} for e in data.get("exports") or []]
+    state = {"cues": cues, "titles": [dict(t) for t in data.get("titles") or []], "forms": forms,
+             "form_choices": list(config.SUBTITLE_FORMS), "templates": list(config.TITLE_TEMPLATES),
+             "limits": {"max_chars": config.TEXT_LAYOUTS[config.layout_key(
+                 data["film"]["frame"]["width"], data["film"]["frame"]["height"])]["max_chars"],
+                        "max_lines": config.SUBTITLE_MAX_LINES, "max_cps": config.SUBTITLE_MAX_CPS,
+                        "min_s": config.SUBTITLE_MIN_SEC, "max_s": config.SUBTITLE_MAX_SEC}}
+    try:
+        textlayout.get_font("subtitle", 12)
+        state["font"] = {"available": True, "problem": ""}
+    except textlayout.FontMissing as e:
+        state["font"] = {"available": False, "problem": str(e)}
+    state["whisper"] = _whisper_state()
+    try:
+        import translate
+        state["translate"] = translate.page_state(tl, work_dir(), data.get("exports") or [])
+    except Exception as e:                  # a broken cache must not stop the page from loading
+        state["translate"] = {"problem": str(e), "languages": [], "key": False}
+    return state
+
+
+def _whisper_state() -> dict:
+    import transcribe
+    try:
+        transcribe.whisper_bin()
+        transcribe.model_path()
+        return {"available": True, "problem": ""}
+    except transcribe.WhisperError as e:
+        return {"available": False, "problem": str(e)}
+
+
+def _film_answer(tl, h: str, findings, notes=None) -> dict:
     """What the page needs to show the film: the summary, the findings, the state of the preview,
-    the creative LUT and the choices, the loudness, and the exports."""
+    the creative LUT and the choices, the loudness, the exports, the subtitles and titles, and what
+    the operations noted on their own."""
     import edits
     preview = _preview_state(h, tl)
     return {"path": timeline_file(), "name": os.path.basename(timeline_file()), "hash": h,
             "summary": edits.summary(tl, h, _review_flags()),
             "findings": [f.as_dict() for f in findings],
             "preview": preview, "look": _look_state(tl), "loudness": _loudness_state(tl, preview),
-            "exports": _exports_state(tl), "free_bytes": _free_bytes()}
+            "exports": _exports_state(tl), "free_bytes": _free_bytes(),
+            "words": _words_state(tl), "notes": notes or []}
 
 
 def _preview_state(current_hash: str, tl=None) -> dict:

@@ -380,6 +380,35 @@
   .film-select { padding: 4px 8px; background: #0a0a2e; color: #eee; border: 1px solid #333; border-radius: 4px; min-width: 220px; }
   .film-ok { color: #95d5b2; } .film-bad { color: #ff6b6b; }
   .film-credit { font-size: 0.8em; color: #aaa; margin-top: 4px; word-break: break-all; }
+  /* subtitles and titles (step 4, words) */
+  .film-stage { position: relative; max-width: 960px; }
+  .film-caption { position: absolute; left: 4%; right: 4%; bottom: 12%; text-align: center; color: #fff; pointer-events: none;
+                  font-weight: 600; font-size: 1.05em; line-height: 1.25; white-space: pre-line;
+                  text-shadow: 0 0 3px #000, 0 0 3px #000, 1px 1px 2px #000; }
+  .film-caption:empty { display: none; }
+  .scene-box { border: 1px solid #2a2a4a; border-radius: 6px; padding: 10px 12px; margin: 12px 0; background: #12122b; }
+  .scene-box.off { opacity: 0.5; }
+  .scene-head { display: flex; flex-wrap: wrap; gap: 10px; align-items: baseline; font-size: 0.85em; }
+  .scene-text { width: 100%; box-sizing: border-box; min-height: 56px; margin: 6px 0; padding: 6px 8px; background: #0a0a2e;
+                border: 1px solid #333; border-radius: 4px; color: #e0e0e0; font: inherit; font-size: 0.9em; resize: vertical; }
+  .cue-strip { position: relative; height: 34px; background: #0a0a2e; border: 1px solid #333; border-radius: 4px;
+               margin: 6px 0; overflow: hidden; touch-action: none; }
+  .cue-block { position: absolute; top: 3px; bottom: 3px; border-radius: 3px; background: #1f6f8b; color: #fff;
+               font-size: 0.7em; line-height: 26px; padding: 0 6px; overflow: hidden; white-space: nowrap;
+               cursor: grab; user-select: none; box-sizing: border-box; min-width: 6px; }
+  .cue-block.text { background: #1f6f8b; } .cue-block.auto { background: #2d6a4f; } .cue-block.manual { background: #9c6b00; }
+  .cue-block.locked { outline: 1px solid #ffd166; }
+  .cue-block.selected { box-shadow: 0 0 0 2px #e94560; }
+  .cue-handle { position: absolute; top: 0; bottom: 0; width: 6px; cursor: ew-resize; background: rgba(255,255,255,0.25); }
+  .cue-handle.left { left: 0; } .cue-handle.right { right: 0; }
+  .cue-playhead { position: absolute; top: 0; bottom: 0; width: 1px; background: #e94560; pointer-events: none; }
+  .cue-input { width: 78px; padding: 2px 5px; background: #0a0a2e; border: 1px solid #333; color: #e0e0e0;
+               border-radius: 3px; font-family: monospace; font-size: 0.95em; }
+  .cue-text { width: 100%; min-width: 220px; padding: 3px 6px; background: #0a0a2e; border: 1px solid #333; color: #e0e0e0;
+              border-radius: 3px; font: inherit; font-size: 0.95em; }
+  .lang-grid { display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 8px 0; }
+  .lang-item { font-size: 0.85em; }
+  .lang-item small { color: #888; margin-left: 4px; }
 </style>
 </head>
 <body>
@@ -551,8 +580,12 @@
           <div class="progress-fill" id="filmProgressFill"></div>
         </div>
         <div class="film-error" id="filmError"></div>
+        <div class="film-warn" id="filmNotes"></div>
         <div class="hint" id="filmMissing"></div>
-        <video id="filmPlayer" class="film-player" controls preload="metadata" style="display:none"></video>
+        <div class="film-stage">
+          <video id="filmPlayer" class="film-player" controls preload="metadata" style="display:none"></video>
+          <div class="film-caption" id="filmCaption"></div>
+        </div>
         <div class="film-note" id="filmPlayerNote"></div>
       </div>
       <div class="card" id="filmLookCard" style="display:none">
@@ -596,6 +629,41 @@
            the old file is kept. Click a row to jump to it in the preview. After a change, render the
            preview again.</p>
         <table class="film-table" id="filmTable"></table>
+      </div>
+      <div class="card" id="filmSubtitlesCard" style="display:none">
+        <h2>Subtitles</h2>
+        <p>Write the words of a scene in its box (type them, or dictate them with Superwhisper). Press Save text:
+           the tool removes filler words such as um and uh, fixes spacing and capitals, splits the text into
+           subtitles that fit two lines, and spreads them across the scene in proportion to their length. Then
+           drag a subtitle to move it, drag its edges to change its length, or type its times. Saving the box
+           again splits only that scene, and asks first if you moved subtitles by hand.</p>
+        <div class="film-warn" id="filmWordsProblem"></div>
+        <div class="film-row2" id="filmFormRows"></div>
+        <div class="film-row2">
+          <button class="btn btn-secondary btn-small" id="filmSrtBtn" onclick="filmWriteSrt()">Write the SRT file</button>
+          <button class="btn btn-secondary btn-small" id="filmAutoBtn" onclick="filmAuto()">Let Whisper listen (automatic)</button>
+          <span class="hint" id="filmWordsMsg"></span>
+        </div>
+        <div id="filmSceneBoxes"></div>
+      </div>
+      <div class="card" id="filmTranslateCard" style="display:none">
+        <h2>Translations</h2>
+        <p>Translate the English subtitles into other languages and write one SRT file per language next to the film
+           (<span class="film-mono">film.pt-BR.srt</span> and so on), for YouTube. Every translation has the times of its
+           English subtitle. The text is sent to OpenRouter; the key is read from the environment variable
+           OPENROUTER_API_KEY and is never shown or written.</p>
+        <div class="film-row2" id="filmTransExport"></div>
+        <div class="lang-grid" id="filmLangs"></div>
+        <div class="film-row2">
+          <button class="btn btn-primary btn-small" id="filmTransBtn" onclick="filmTranslate()">Translate and write the files</button>
+          <span class="hint" id="filmTransMsg"></span>
+        </div>
+      </div>
+      <div class="card" id="filmTitlesCard" style="display:none">
+        <h2>Titles</h2>
+        <p>A title is text drawn into the picture of every export, in Inter, with a fade. Times are film seconds.</p>
+        <table class="film-table" id="filmTitlesTable"></table>
+        <div class="film-row2" id="filmNewTitle"></div>
       </div>
       <div class="card" id="filmClipsCard" style="display:none">
         <h2>Sync offset per clip</h2>
@@ -1151,6 +1219,9 @@ function renderFilm() {
   document.getElementById("filmPreviewBtn").disabled = filmJob || !film;
   document.getElementById("filmLookCard").style.display = film ? "block" : "none";
   document.getElementById("filmExportCard").style.display = film ? "block" : "none";
+  ["filmSubtitlesCard", "filmTranslateCard", "filmTitlesCard"].forEach(id => {
+    document.getElementById(id).style.display = film ? "block" : "none";
+  });
   if (!film) {
     card.style.display = "none";
     clipsCard.style.display = "none";
@@ -1193,6 +1264,7 @@ function renderFilm() {
   renderFilmClips();
   renderFilmLook();
   renderFilmExports();
+  renderFilmWords();
 }
 
 // What the next preview has to do (SPECS 7.6): a changed offset changes sound only.
@@ -1289,10 +1361,11 @@ function renderFilmTable() {
   document.getElementById("filmTable").innerHTML = head + body;
 }
 
-// Send operations to the server with the hash the page started from.
+// Send operations to the server with the hash the page started from. Returns the answer when the
+// change was saved, the answer with `needs_confirmation` when the server asks a question, else null.
 async function filmOp(event, ops) {
   if (event) event.stopPropagation();
-  if (filmBusy || !film) return;
+  if (filmBusy || !film) return null;
   filmBusy = true;
   showFilmError("");
   const resp = await api("POST", "/api/timeline/edit", { hash: film.hash, operations: ops });
@@ -1301,16 +1374,23 @@ async function filmOp(event, ops) {
     Object.assign(film, resp);
     film.findings = resp.findings || [];
     renderFilm();
-    return;
+    showFilmNotes(resp.notes);
+    return resp;
   }
+  if (resp.needs_confirmation) return resp;     // the caller asks the person; nothing was changed
   if (resp.findings) {
     showFilmFindings(resp);
     renderFilm();            // put the controls back to the saved state
-    return;
+    return null;
   }
   showFilmError(resp.error || "The change was not saved.");
   if (resp.hash) await loadFilm();     // 409: the file changed; show the file as it is now
   else renderFilm();
+  return null;
+}
+
+function showFilmNotes(notes) {
+  document.getElementById("filmNotes").textContent = (notes || []).join("\n");
 }
 
 // ── Look, loudness and export (step 3) ──
@@ -1465,6 +1545,7 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("filmPlayer").addEventListener("timeupdate", () => {
     if (!film) return;
     const t = document.getElementById("filmPlayer").currentTime;
+    updateCaption(t);
     film.summary.rows.forEach(r => {
       const el = document.getElementById("filmRow_" + r.id);
       if (el) el.classList.toggle("playing",
@@ -1496,7 +1577,8 @@ async function filmRenderPreview() {
 // Called with every status answer: shows the progress of assemble and preview.
 function filmStatus(s) {
   const bar = document.getElementById("filmProgress");
-  if (s.step === "assembling" || s.step === "previewing" || s.step === "rendering") {
+  if (s.step === "assembling" || s.step === "previewing" || s.step === "rendering" ||
+      s.step === "transcribing" || s.step === "translating") {
     filmJob = true;
     bar.style.display = "block";
     document.getElementById("filmProgressFill").style.width = s.progress + "%";
@@ -1504,7 +1586,9 @@ function filmStatus(s) {
     document.getElementById("filmAssembleBtn").disabled = true;
     document.getElementById("filmPreviewBtn").disabled = true;
     renderFilmExports();
-  } else if (s.step === "assembled" || s.step === "previewed" || s.step === "rendered" || s.step === "error") {
+    renderFilmWords();
+  } else if (s.step === "assembled" || s.step === "previewed" || s.step === "rendered" ||
+             s.step === "transcribed" || s.step === "translated" || s.step === "error") {
     if (filmJob) {
       filmJob = false;
       bar.style.display = "none";
@@ -1512,6 +1596,320 @@ function filmStatus(s) {
       loadFilm();
     }
   }
+}
+
+
+// ── Subtitles and titles (step 4, SPECS 9.8) ──
+const sceneDrafts = {};       // text typed into a scene's box and not saved yet, by scene id
+let selectedCue = null;       // the cue whose row is open
+let cueDrag = null;           // a drag of a cue block in progress
+
+function filmWords() {
+  return film && film.words ? film.words : null;
+}
+
+function fmtT(sec) {          // film seconds as a number for an input
+  return (Math.round(sec * 1000) / 1000).toString();
+}
+
+function snapToFrame(sec) {
+  const fps = filmFps();
+  return Math.round(sec * fps) / fps;
+}
+
+// What a drag does to a cue (a pure function, so it can be checked without a browser).
+// `d` = {mode: "move"|"left"|"right", start, end (film seconds), sceneStart, sceneLength, width (pixels of the strip)}
+// and `dx` the pixels moved. The cue stays inside its scene and is at least MIN_CUE seconds long.
+const MIN_CUE = 0.3;
+function dragCue(d, dx) {
+  const perPx = d.sceneLength / Math.max(1, d.width);
+  const delta = dx * perPx;
+  const lo = d.sceneStart, hi = d.sceneStart + d.sceneLength;
+  let start = d.start, end = d.end;
+  if (d.mode === "move") {
+    const len = d.end - d.start;
+    start = Math.min(Math.max(d.start + delta, lo), hi - len);
+    end = start + len;
+  } else if (d.mode === "left") {
+    start = Math.min(Math.max(d.start + delta, lo), d.end - MIN_CUE);
+  } else {
+    end = Math.max(Math.min(d.end + delta, hi), d.start + MIN_CUE);
+  }
+  return { start: snapToFrame(start), end: snapToFrame(end) };
+}
+
+function updateCaption(t) {
+  const el = document.getElementById("filmCaption");
+  const w = filmWords();
+  const stale = film && film.preview && !film.preview.up_to_date;
+  let text = "";
+  if (w && stale) {      // the preview file does not have the current text: show it from the page
+    const c = w.cues.find(c => c.in_film && t >= c.film_start_s && t < c.film_end_s);
+    if (c) text = c.text;
+  }
+  el.textContent = text;
+}
+
+function renderFilmWords() {
+  const w = filmWords();
+  if (!w) return;
+  const busy = filmJob || filmBusy;
+  // the form of each export
+  document.getElementById("filmFormRows").innerHTML = w.forms.length ? w.forms.map(f =>
+    `<label>Subtitles in <b>${escapeHtml(f.export)}</b></label>
+     <select class="film-select" id="filmForm_${escapeHtml(f.export)}" style="min-width:160px" ${busy ? "disabled" : ""}
+       onchange="filmSetForm('${escapeHtml(f.export)}', this.value)">` +
+    w.form_choices.map(c => `<option value="${c}" ${c === f.form ? "selected" : ""}>${{
+      srt: "an SRT file next to the film", burned: "drawn into the picture", both: "both", none: "none"}[c]}</option>`).join("") +
+    `</select>`).join("") : '<span class="hint">Add an export (Export card) to choose how the subtitles are delivered.</span>';
+  const problems = [];
+  if (!w.font.available) problems.push("Burned subtitles and titles need the Inter font: " + w.font.problem);
+  document.getElementById("filmWordsProblem").textContent = problems.join("\n");
+  document.getElementById("filmAutoBtn").disabled = busy || !w.whisper.available;
+  document.getElementById("filmAutoBtn").title = w.whisper.available ? "" : w.whisper.problem;
+  document.getElementById("filmSrtBtn").disabled = busy || !w.forms.length;
+  // the scenes
+  const rows = film.summary.rows;
+  const cuesOf = id => w.cues.filter(c => c.segment === id);
+  document.getElementById("filmSceneBoxes").innerHTML = rows.map(r => {
+    const id = escapeHtml(r.id);
+    const cues = cuesOf(r.id);
+    const draft = Object.prototype.hasOwnProperty.call(sceneDrafts, r.id) ? sceneDrafts[r.id] : r.text;
+    const when = r.enabled ? fmtFilm(r.film_start_s) + " - " + fmtFilm(r.film_start_s + r.length_s) : "removed from the film";
+    const blocks = r.enabled ? cues.filter(c => c.in_film).map(c => {
+      const left = 100 * (c.film_start_s - r.film_start_s) / r.length_s;
+      const width = Math.max(0.5, 100 * (c.film_end_s - c.film_start_s) / r.length_s);
+      return `<div class="cue-block ${c.origin} ${c.locked ? "locked" : ""} ${selectedCue === c.id ? "selected" : ""}"
+          id="cueBlock_${escapeHtml(c.id)}" style="left:${left.toFixed(2)}%;width:${width.toFixed(2)}%"
+          title="${escapeHtml(c.id + " " + c.origin + (c.locked ? ", moved by hand" : ""))}"
+          onpointerdown="cueDown(event, '${escapeHtml(c.id)}', '${id}', 'move')">
+          <span class="cue-handle left" onpointerdown="cueDown(event, '${escapeHtml(c.id)}', '${id}', 'left')"></span>
+          ${escapeHtml(c.text.replace(/\n/g, " "))}
+          <span class="cue-handle right" onpointerdown="cueDown(event, '${escapeHtml(c.id)}', '${id}', 'right')"></span></div>`;
+    }).join("") : "";
+    const table = cues.length ? `<table class="film-table"><tr><th>#</th><th>From (film s)</th><th>To (film s)</th>
+        <th>Text</th><th>Made by</th><th></th></tr>` + cues.map(c => {
+      const cid = escapeHtml(c.id);
+      return `<tr id="cueRow_${cid}">
+        <td class="film-mono">${cid}</td>
+        <td><input class="cue-input" id="cueStart_${cid}" inputmode="decimal" value="${c.film_start_s === null ? "" : fmtT(c.film_start_s)}"
+             ${c.in_film ? "" : "disabled"} onchange="filmCueTimes('${cid}')"></td>
+        <td><input class="cue-input" id="cueEnd_${cid}" inputmode="decimal" value="${c.film_end_s === null ? "" : fmtT(c.film_end_s)}"
+             ${c.in_film ? "" : "disabled"} onchange="filmCueTimes('${cid}')"></td>
+        <td><input class="cue-text" id="cueText_${cid}" value="${escapeHtml(c.text.replace(/\n/g, " / "))}"
+             title="A slash marks a line break" onchange="filmCueText('${cid}', this.value)"></td>
+        <td class="film-mono">${escapeHtml(c.origin)}${c.locked ? ", by hand" : ""}</td>
+        <td><button class="btn btn-secondary film-btn" ${c.in_film ? "" : "disabled"} onclick="filmGoTo(${c.film_start_s === null ? 0 : c.film_start_s})">Go</button>
+            <button class="btn btn-secondary film-btn" onclick="filmOp(event, [{op:'remove_cue', cue:'${cid}'}])">Remove</button></td></tr>`;
+    }).join("") + "</table>" : "";
+    return `<div class="scene-box ${r.enabled ? "" : "off"}" id="scene_${id}">
+      <div class="scene-head"><b>${id}</b><span class="film-mono">${when}</span>
+        <span class="hint">${escapeHtml(r.label || "")}</span></div>
+      <textarea class="scene-text" id="sceneText_${id}" placeholder="The words of this scene. Dictate them with Superwhisper or type them."
+        oninput="sceneDrafts['${id}'] = this.value">${escapeHtml(draft)}</textarea>
+      <div class="film-row2">
+        <button class="btn btn-primary btn-small" ${busy ? "disabled" : ""} onclick="filmSceneText('${id}')">Save text</button>
+        <button class="btn btn-secondary btn-small" ${busy || !r.enabled ? "disabled" : ""} onclick="filmAddCue('${id}')">Add a subtitle here</button>
+        <span class="hint">${cues.length} subtitle${cues.length === 1 ? "" : "s"}</span></div>
+      ${r.enabled ? `<div class="cue-strip" id="cueStrip_${id}">${blocks}</div>` : ""}
+      ${table}</div>`;
+  }).join("");
+  renderFilmTitles(w, busy);
+  renderFilmTranslate(w, busy);
+}
+
+async function filmSetForm(exportName, form) {
+  await filmOp(null, [{ op: "set_export_subtitles", export: exportName, form: form }]);
+}
+
+// Save the words of a scene. The server cleans and splits them. If the scene has subtitles that were made
+// or moved by hand, it says so and nothing changes until the person agrees.
+async function filmSceneText(segId) {
+  const box = document.getElementById("sceneText_" + segId);
+  const text = Object.prototype.hasOwnProperty.call(sceneDrafts, segId) ? sceneDrafts[segId] : box.value;
+  let resp = await filmOp(null, [{ op: "set_scene_text", segment: segId, text: text }]);
+  if (resp && resp.needs_confirmation) {
+    const n = resp.needs_confirmation.cues.length;
+    if (!confirm("Scene " + segId + " has " + n + " subtitle" + (n === 1 ? "" : "s") + " that you made or moved by hand (" +
+                 resp.needs_confirmation.cues.join(", ") + "). Replace them with subtitles made from the new text?")) {
+      return null;
+    }
+    resp = await filmOp(null, [{ op: "set_scene_text", segment: segId, text: text, replace_adjusted: true }]);
+  }
+  if (resp && resp.hash) delete sceneDrafts[segId];
+  if (resp && resp.hash) renderFilmWords();
+  return resp;
+}
+
+function filmGoTo(seconds) {
+  const player = document.getElementById("filmPlayer");
+  if (player.style.display !== "none") player.currentTime = seconds;
+}
+
+// A subtitle at the playhead if it is inside this scene, else at the start of the scene.
+async function filmAddCue(segId) {
+  const r = film.summary.rows.find(x => x.id === segId);
+  if (!r || !r.enabled) return null;
+  const player = document.getElementById("filmPlayer");
+  let at = player.currentTime || 0;
+  if (!(at >= r.film_start_s && at < r.film_start_s + r.length_s - 0.5)) at = r.film_start_s + 0.2;
+  return filmOp(null, [{ op: "add_cue", film_start_s: snapToFrame(at), text: "New subtitle." }]);
+}
+
+async function filmCueTimes(cueId) {
+  const a = Number(String(document.getElementById("cueStart_" + cueId).value).replace(",", "."));
+  const b = Number(String(document.getElementById("cueEnd_" + cueId).value).replace(",", "."));
+  if (!Number.isFinite(a) || !Number.isFinite(b)) {
+    showFilmError("The times of a subtitle are numbers of film seconds, for example 12.5.");
+    renderFilm();
+    return null;
+  }
+  return filmOp(null, [{ op: "edit_cue", cue: cueId, film_start_s: a, film_end_s: b }]);
+}
+
+async function filmCueText(cueId, text) {
+  return filmOp(null, [{ op: "edit_cue", cue: cueId, text: text.replace(/\s*\/\s*/g, "\n") }]);
+}
+
+// Dragging a cue block: down on the block or on one of its edges, move, up.
+function cueDown(ev, cueId, segId, mode) {
+  ev.stopPropagation();
+  ev.preventDefault();
+  const w = filmWords();
+  const cue = w.cues.find(c => c.id === cueId);
+  const row = film.summary.rows.find(r => r.id === segId);
+  const strip = document.getElementById("cueStrip_" + segId);
+  if (!cue || !row || !cue.in_film || filmBusy) return;
+  selectedCue = cueId;
+  cueDrag = { mode: mode, cue: cueId, start: cue.film_start_s, end: cue.film_end_s, sceneStart: row.film_start_s,
+              sceneLength: row.length_s, width: strip.clientWidth || 1, x0: ev.clientX, segId: segId };
+  window.addEventListener("pointermove", cueMove);
+  window.addEventListener("pointerup", cueUp);
+}
+
+function cueMove(ev) {
+  if (!cueDrag) return;
+  const r = dragCue(cueDrag, ev.clientX - cueDrag.x0);
+  const block = document.getElementById("cueBlock_" + cueDrag.cue);
+  block.style.left = (100 * (r.start - cueDrag.sceneStart) / cueDrag.sceneLength).toFixed(2) + "%";
+  block.style.width = (100 * (r.end - r.start) / cueDrag.sceneLength).toFixed(2) + "%";
+}
+
+async function cueUp(ev) {
+  window.removeEventListener("pointermove", cueMove);
+  window.removeEventListener("pointerup", cueUp);
+  const d = cueDrag;
+  cueDrag = null;
+  if (!d) return;
+  const r = dragCue(d, ev.clientX - d.x0);
+  if (Math.abs(r.start - d.start) < 0.01 && Math.abs(r.end - d.end) < 0.01) { renderFilmWords(); return; }
+  await filmOp(null, [{ op: "edit_cue", cue: d.cue, film_start_s: r.start, film_end_s: r.end }]);
+}
+
+async function filmWriteSrt() {
+  const w = filmWords();
+  const name = w.forms.length ? w.forms[0].export : null;
+  showFilmError("");
+  const resp = await api("POST", "/api/subtitles/srt", { export: name });
+  if (resp.error) { showFilmError(resp.error); return null; }
+  document.getElementById("filmWordsMsg").textContent = resp.cues + " subtitle(s) written to " + resp.file;
+  return resp;
+}
+
+async function filmAuto() {
+  showFilmError("");
+  const resp = await api("POST", "/api/subtitles/auto", {});
+  if (resp.error) { showFilmError(resp.error); return null; }
+  filmJob = true;
+  renderFilm();
+  startPolling();
+  return resp;
+}
+
+// ── Translations ──
+function renderFilmTranslate(w, busy) {
+  const tr = w.translate || { languages: [], key: false };
+  const exportsList = w.forms || [];
+  document.getElementById("filmTransExport").innerHTML = exportsList.length
+    ? `<label>Files next to</label><select class="film-select" id="filmTransExportSel">` +
+      exportsList.map(f => `<option value="${escapeHtml(f.export)}">${escapeHtml(f.export)} (${escapeHtml(f.srt.replace(/\.en\.srt$/, ""))}.*.srt)</option>`).join("") + `</select>`
+    : '<span class="hint">Add an export first: the files are written next to its film.</span>';
+  const checked = {};
+  (tr.languages || []).forEach(l => {
+    const el = document.getElementById("transLang_" + l.code);
+    checked[l.code] = el ? !!el.checked : true;
+  });
+  document.getElementById("filmLangs").innerHTML = (tr.languages || []).map(l =>
+    `<label class="lang-item"><input type="checkbox" id="transLang_${escapeHtml(l.code)}" ${checked[l.code] === false ? "" : "checked"}>
+       ${escapeHtml(l.name)}<small>${l.translated} of ${l.cues} translated${l.file ? ", file written" : ""}</small></label>`).join("");
+  let msg = "Model " + (tr.model || "?");
+  if (tr.estimate_usd !== null && tr.estimate_usd !== undefined) msg += ", about $" + tr.estimate_usd.toFixed(3) + " for all six languages (an estimate)";
+  if (!tr.key) msg += ". No key: set OPENROUTER_API_KEY in the environment and start the app again.";
+  if (tr.problem) msg += " " + tr.problem;
+  document.getElementById("filmTransMsg").textContent = msg;
+  document.getElementById("filmTransBtn").disabled = busy || !tr.key || !exportsList.length || !w.cues.some(c => c.in_film);
+}
+
+async function filmTranslate() {
+  const w = filmWords();
+  const languages = (w.translate.languages || []).filter(l => {
+    const el = document.getElementById("transLang_" + l.code);
+    return el && el.checked;
+  }).map(l => l.code);
+  if (!languages.length) { showFilmError("Tick at least one language."); return null; }
+  const sel = document.getElementById("filmTransExportSel");
+  showFilmError("");
+  const resp = await api("POST", "/api/subtitles/translate", { languages: languages, export: sel ? sel.value : undefined });
+  if (resp.error) { showFilmError(resp.error); return null; }
+  filmJob = true;
+  renderFilm();
+  startPolling();
+  return resp;
+}
+
+// ── Titles ──
+function renderFilmTitles(w, busy) {
+  const head = `<tr><th>#</th><th>Text</th><th>On</th><th>From (s)</th><th>To (s)</th><th>Place</th><th>Size %</th><th>Fade s</th><th></th></tr>`;
+  const body = w.titles.map(t => {
+    const id = escapeHtml(t.id);
+    return `<tr id="titleRow_${id}"><td class="film-mono">${id}</td>
+      <td><input class="cue-text" id="titleText_${id}" value="${escapeHtml(t.text)}"
+           onchange="filmEditTitle('${id}', {text: this.value})"></td>
+      <td class="film-mono">${escapeHtml(t.anchor)}</td>
+      <td><input class="cue-input" value="${fmtT(t.start_s)}" onchange="filmEditTitle('${id}', {start_s: Number(this.value)})"></td>
+      <td><input class="cue-input" value="${fmtT(t.end_s)}" onchange="filmEditTitle('${id}', {end_s: Number(this.value)})"></td>
+      <td><select class="film-select" style="min-width:110px" onchange="filmEditTitle('${id}', {template: this.value})">` +
+      w.templates.map(x => `<option value="${x}" ${x === (t.template || "center") ? "selected" : ""}>${x}</option>`).join("") + `</select></td>
+      <td><input class="cue-input" style="width:56px" value="${t.size_pct === undefined ? "" : t.size_pct}" placeholder="auto"
+           onchange="filmEditTitle('${id}', {size_pct: Number(this.value)})"></td>
+      <td><input class="cue-input" style="width:56px" value="${t.fade_s === undefined ? "" : t.fade_s}" placeholder="0.5"
+           onchange="filmEditTitle('${id}', {fade_s: Number(this.value)})"></td>
+      <td><button class="btn btn-secondary film-btn" onclick="filmOp(event, [{op:'remove_title', title:'${id}'}])">Remove</button></td></tr>`;
+  }).join("");
+  document.getElementById("filmTitlesTable").innerHTML = w.titles.length ? head + body : "<tr><td>No titles yet.</td></tr>";
+  document.getElementById("filmNewTitle").innerHTML = `
+    <input class="cue-text" id="newTitleText" placeholder="Title text" style="max-width:280px">
+    <label>from</label><input class="cue-input" id="newTitleStart" value="1" style="width:56px">
+    <label>for</label><input class="cue-input" id="newTitleLength" value="4" style="width:56px"><label>s</label>
+    <select class="film-select" id="newTitleTemplate" style="min-width:110px">` +
+    w.templates.map(x => `<option value="${x}">${x}</option>`).join("") + `</select>
+    <button class="btn btn-primary btn-small" ${busy ? "disabled" : ""} onclick="filmAddTitle()">Add title</button>`;
+}
+
+async function filmEditTitle(id, fields) {
+  for (const k of Object.keys(fields)) {
+    if (typeof fields[k] === "number" && !Number.isFinite(fields[k])) { showFilmError("A number is needed."); renderFilm(); return null; }
+  }
+  return filmOp(null, [Object.assign({ op: "edit_title", title: id }, fields)]);
+}
+
+async function filmAddTitle() {
+  const text = document.getElementById("newTitleText").value;
+  if (!text.trim()) { showFilmError("Write the text of the title."); return null; }
+  const start = Number(document.getElementById("newTitleStart").value);
+  const length = Number(document.getElementById("newTitleLength").value);
+  return filmOp(null, [{ op: "add_title", text: text, start_s: start, length_s: length,
+                         template: document.getElementById("newTitleTemplate").value }]);
 }
 
 // ── Helpers ──

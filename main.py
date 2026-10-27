@@ -22,6 +22,8 @@ Commands:
   look     list creative LUTs, choose the creative or the base LUT
   export   list, add, switch on and off the exports (presets) of the timeline file
   render   render the final film from the .braw files (levelled sound, LUTs, DCI 4K)
+  subtitles list, write, import and change the subtitles; a text box per scene; Whisper; translations
+  title    add, change, remove and import titles
 
 Usage:
   python main.py
@@ -834,7 +836,14 @@ def cmd_export(args):
             done = "" if not last else f"  last render: {'ok' if last['ok'] else 'FAILED'} " \
                 f"{last['finished_at']}, {last['speed']['video_fps']} fps"
             print(f"{e['name']:16} {state} {e['width']}x{e['height']}  {e['video']['codec']:20} "
-                  f"about {size:.1f} GB  {e['output']}{done}")
+                  f"about {size:.1f} GB  subtitles {export.subtitle_form(e, tl.data['kind'])}  "
+                  f"{e['output']}{done}")
+        return
+    if args.export_command == "set":
+        import edits
+        change_timeline(args, lambda d: edits.apply_operations(
+            d, [{"op": "set_export_subtitles", "export": args.name, "form": args.subtitles}]))
+        print(f"Export {args.name}: subtitles {args.subtitles}")
         return
     if args.export_command in ("enable", "disable"):
         on = args.export_command == "enable"
@@ -850,6 +859,8 @@ def cmd_export(args):
         def add(data):
             made["entry"] = export.preset_entry(args.preset, out_dir, data["film"]["frame"],
                                                 name=args.name, width=args.width, height=args.height)
+            if args.subtitles:
+                made["entry"]["subtitles"] = args.subtitles
             return export.with_export(data, made["entry"], replace=args.replace)
 
         change_timeline(args, add)
@@ -919,7 +930,7 @@ def cmd_render(args, decoder=None):
             try:
                 result = export.render_export(
                     tl, name, work_dir, decoder, timeline_hash=timeline.file_hash(path),
-                    protected=originals, force=args.force,
+                    protected=originals, force=args.force, subtitles=args.subtitles,
                     log=lambda s: print(f"{time.strftime('%H:%M:%S')}  {s}", flush=True))
             except (export.ExportError, safety.OriginalsProtectedError) as e:
                 print(f"Error: {e}", file=sys.stderr, flush=True)
@@ -927,6 +938,8 @@ def cmd_render(args, decoder=None):
                 continue
             for w in result.warnings:
                 print(f"  warning: {w}", flush=True)
+            if result.srt_file:
+                print(f"  subtitles file: {result.srt_file}", flush=True)
             if result.credit_file:
                 print(f"  credit for the video description: {result.credit_file}", flush=True)
             failed = failed or not result.ok
@@ -935,6 +948,276 @@ def cmd_render(args, decoder=None):
               "start over.", flush=True)
         sys.exit(130)
     sys.exit(1 if failed else 0)
+
+
+def _words_change(args, ops, file_checks=False):
+    """Apply operations of words.py through the validator and save with a snapshot. Prints what the
+    operations noted. Returns (Timeline before, Timeline after)."""
+    import edits
+    import timeline
+    import words
+    before = {}
+    notes = []
+
+    def change(data):
+        before["data"] = data
+        try:
+            return edits.apply_operations(data, ops, notes)
+        except words.NeedsConfirmation as e:
+            raise ValueError(f"{e} Cues: {', '.join(e.cues)}. Run the command again with --replace-adjusted "
+                             "to replace them, or leave the scene as it is.")
+
+    new = change_timeline(args, change, file_checks=file_checks)
+    for n in notes:
+        print(f"  note: {n}")
+    return timeline.Timeline(before["data"]), new
+
+
+def _new_ids(before, after, key):
+    old = {x["id"] for x in (before.data.get(key) if key == "titles" else (before.data.get("subtitles") or {}).get("cues")) or []}
+    now = after.data.get(key) if key == "titles" else (after.data.get("subtitles") or {}).get("cues")
+    return [x["id"] for x in now or [] if x["id"] not in old]
+
+
+def _load_timeline_or_exit(args):
+    import timeline
+    path = default_timeline_path(args)
+    try:
+        return timeline.Timeline.load(path), path
+    except FileNotFoundError:
+        print(f"Error: timeline file not found: {path}", file=sys.stderr)
+        sys.exit(2)
+    except timeline.TimelineError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+def cmd_subtitles(args):
+    """The subtitles of the film (SPECS 9): list, write by hand, a text box per scene, Whisper, import,
+    SRT, translations."""
+    import edits
+    import export
+    import timeline
+    import words
+
+    def fail(message, code=1):
+        print(f"Error: {message}", file=sys.stderr)
+        sys.exit(code)
+
+    sub = args.subtitles_command
+    if sub == "list":
+        tl, path = _load_timeline_or_exit(args)
+        rows = words.cue_spans(tl.data)
+        shown = {r["id"] for r in rows}
+        off = [c for c in (tl.data.get("subtitles") or {}).get("cues", []) if c["id"] not in shown]
+        if args.json:
+            print(json.dumps([{"id": r["id"], "segment": r["segment"], "start_s": round(r["start_s"], 3),
+                               "end_s": round(r["end_s"], 3), "text": r["text"],
+                               "origin": r["cue"].get("origin", "manual"), "locked": bool(r["cue"].get("locked"))}
+                              for r in rows], indent=2))
+            return
+        if not rows and not off:
+            print("The film has no subtitles. Write them: python main.py subtitles text SCENE --text \"...\", "
+                  "or run: python main.py subtitles auto")
+        for r in rows:
+            flag = ("locked " if r["cue"].get("locked") else "") + r["cue"].get("origin", "manual")
+            print(f"{r['id']}  {edits.clock(r['start_s'])} - {edits.clock(r['end_s'])}  {r['segment']}  "
+                  f"{flag:12} {r['text'].replace(chr(10), ' / ')}")
+        for c in off:
+            print(f"{c['id']}  (scene {c['anchor']} is not in the film)  {c['text'].replace(chr(10), ' / ')}")
+        return
+    if sub == "auto":
+        return cmd_subtitles_auto(args)
+    if sub == "translate":
+        return cmd_subtitles_translate(args)
+    if sub == "check":
+        return cmd_subtitles_check(args)
+    if sub == "export":
+        tl, path = _load_timeline_or_exit(args)
+        out = args.out
+        if not out:
+            exports = tl.data.get("exports") or []
+            entry = next((e for e in exports if e["name"] == args.export), None) if args.export else \
+                (exports[0] if exports else None)
+            if entry is None:
+                fail("name the file with --out, or an export of the timeline file with --export", 2)
+            out = export.srt_path(entry["output"])
+        spans = words.cue_spans(tl.data)
+        os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
+        import fsutil
+        fsutil.write_text_atomic(out, words.srt_text(spans, words.RULES_FACTORY(tl.data)))
+        print(f"{len(spans)} subtitle(s) written to {out}")
+        return
+
+    if sub == "add":
+        end = args.end if args.end is not None else (args.at + args.length if args.length else None)
+        ops = [{"op": "add_cue", "film_start_s": args.at, "film_end_s": end, "text": args.text}]
+    elif sub == "edit":
+        op = {"op": "edit_cue", "cue": args.cue}
+        for key, value in (("text", args.text), ("film_start_s", args.start), ("film_end_s", args.end)):
+            if value is not None:
+                op[key] = value
+        ops = [op]
+    elif sub == "remove":
+        ops = [{"op": "remove_cue", "cues": args.cues}]
+    elif sub == "shift":
+        ops = [{"op": "shift_cues", "seconds": args.seconds,
+                "cues": args.cues.split(",") if args.cues else None,
+                "from_s": args.from_s, "to_s": args.to_s}]
+    elif sub == "sort":
+        ops = [{"op": "sort_cues"}]
+    elif sub == "text":
+        if args.text_file == "-":
+            text = sys.stdin.read()
+        elif args.text_file:
+            try:
+                text = Path(args.text_file).read_text(encoding="utf-8")
+            except OSError as e:
+                fail(str(e), 2)
+        elif args.text is not None:
+            text = args.text
+        else:
+            fail("give --text, or --text-file FILE (- for standard input)", 2)
+        ops = [{"op": "set_scene_text", "segment": args.segment, "text": text,
+                "replace_adjusted": args.replace_adjusted}]
+    elif sub == "import":
+        try:
+            raw = Path(args.file_to_import).read_text(encoding="utf-8")
+            if args.file_to_import.lower().endswith(".srt"):
+                items = words.parse_srt(raw)
+            else:
+                data = json.loads(raw)
+                items = data.get("cues") if isinstance(data, dict) else data
+        except (OSError, ValueError, words.WordsError) as e:
+            fail(f"cannot read {args.file_to_import}: {e}")
+        ops = [{"op": "import_cues", "cues": items, "replace": args.replace}]
+    before, after = _words_change(args, ops)
+    if sub in ("add", "import", "text"):
+        made = _new_ids(before, after, "cues")
+        if sub == "text":
+            scene = [c for c in after.data["subtitles"]["cues"] if c["anchor"] == args.segment]
+            print(f"Scene {args.segment}: {len(scene)} cues from the text")
+        else:
+            print(f"{len(made)} cue(s) added: {', '.join(made)}")
+    else:
+        print({"edit": "Cue changed", "remove": "Cue removed", "shift": "Cues moved", "sort": "Cues sorted"}[sub])
+
+
+def cmd_subtitles_check(args):
+    """Which cues do not fit the safe area at the size of the film, and the readability warnings of the
+    validator (SPECS 9.3)."""
+    import render
+    import textlayer
+    import textlayout
+    import timeline
+    tl, path = _load_timeline_or_exit(args)
+    problems = []
+    plan = render.make_plan(tl, preview_width=None)
+    count = len((tl.data.get("subtitles") or {}).get("cues", []))
+    text = textlayer.build(tl.data, plan.frame, 0, plan.film_frames, render.segment_rects(plan), burn_titles=False)
+    problems += text.warnings
+    for f in tl.validate(file_checks=False):
+        if f.rule in ("V19", "V24") and f.level == "warning":
+            problems.append(f"{f.rule} {f.path}: {f.message}")
+    if not textlayout.fonts_available():
+        print("note: no Inter font (VET_FONT_DIR), so widths are estimated, not measured")
+    print(f"{count} cue(s) checked.")
+    for p in problems:
+        print(f"  {p}")
+    sys.exit(1 if problems else 0)
+
+
+def cmd_subtitles_auto(args):
+    """Whisper subtitles for the scenes of the film (SPECS 9.2)."""
+    import fsutil
+    import store
+    import timeline
+    import transcribe
+    tl, path = _load_timeline_or_exit(args)
+    work = _work_dir_of(args, lambda m, code=2: (print(f"Error: {m}", file=sys.stderr), sys.exit(code)))
+    before = timeline.file_hash(path)
+    only = [s for s in args.only.split(",") if s] if args.only else None
+    try:
+        data, report = transcribe.auto_subtitles(
+            tl, work, only=only, redo=args.redo, stock=not args.keep_stock_phrases,
+            log=lambda s: print(f"{time.strftime('%H:%M:%S')}  {s}", flush=True))
+    except transcribe.WhisperError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+    new = timeline.Timeline(data, tl.duplicates)
+    findings = new.validate(file_checks=False)
+    if timeline.has_errors(findings):
+        print(json.dumps([f.as_dict() for f in findings], indent=2))
+        print("The cues break a rule of the timeline file; nothing was saved.", file=sys.stderr)
+        sys.exit(1)
+    try:
+        store.save(new, path, expected_hash=before)
+    except store.StaleHash as e:
+        print(f"Error: {e} The transcripts are kept; run the command again.", file=sys.stderr)
+        sys.exit(1)
+    report_path = os.path.join(work, "reports", f"{args.report_name}.json")
+    fsutil.write_json_atomic(report_path, report)
+    print(f"{report['cues']} cue(s) made from {len(report['clips'])} clip(s) in {report['seconds']:.0f} s"
+          + (f" ({report['transcribe_s']:.0f} s of Whisper for {report['audio_s'] / 60:.1f} min of sound, "
+             f"{report.get('seconds_per_minute_of_audio', 0):.1f} s per minute)" if report["audio_s"] else
+             " (the transcripts of an earlier run were used)"))
+    print(f"{len(report['dropped'])} phrase(s) dropped as not speech or not trusted; the report lists them and the "
+          f"reasons: {report_path}")
+
+
+def cmd_subtitles_translate(args):
+    """Translate the English cues into more languages and write one SRT file per language (SPECS 9.9)."""
+    import translate
+    return translate.cli(args, default_timeline_path(args), _work_dir_of)
+
+
+def cmd_title(args):
+    """Titles drawn into the picture (SPECS 9.7): add, change, remove, list, import."""
+    import edits
+    import timeline
+    import words
+
+    sub = args.title_command
+    if sub == "list":
+        tl, path = _load_timeline_or_exit(args)
+        titles = tl.data.get("titles") or []
+        if not titles:
+            print("The film has no titles. Add one: python main.py title add --text \"Sunday kitchen\" --start 1 --length 4")
+        for x in titles:
+            print(f"{x['id']}  {x['anchor']:5} {x['start_s']:g} - {x['end_s']:g} s  "
+                  f"{x.get('template', 'center'):11} {x['text']}")
+        return
+    if sub == "add":
+        op = {"op": "add_title", "text": args.text, "start_s": args.start, "anchor": args.anchor}
+        for key, value in (("end_s", args.end), ("length_s", args.length), ("template", args.template),
+                           ("size_pct", args.size), ("fade_s", args.fade)):
+            if value is not None:
+                op[key] = value
+        ops = [op]
+    elif sub == "edit":
+        op = {"op": "edit_title", "title": args.title}
+        for key, value in (("text", args.text), ("start_s", args.start), ("end_s", args.end),
+                           ("length_s", args.length), ("anchor", args.anchor), ("template", args.template),
+                           ("size_pct", args.size), ("fade_s", args.fade)):
+            if value is not None:
+                op[key] = value
+        ops = [op]
+    elif sub == "remove":
+        ops = [{"op": "remove_title", "title": args.title}]
+    elif sub == "import":
+        try:
+            data = json.loads(Path(args.file_to_import).read_text(encoding="utf-8"))
+        except (OSError, ValueError) as e:
+            print(f"Error: cannot read {args.file_to_import}: {e}", file=sys.stderr)
+            sys.exit(1)
+        ops = [{"op": "import_titles", "titles": data.get("titles") if isinstance(data, dict) else data,
+                "replace": args.replace}]
+    before, after = _words_change(args, ops)
+    if sub in ("add", "import"):
+        print(f"{len(_new_ids(before, after, 'titles'))} title(s) added: {', '.join(_new_ids(before, after, 'titles'))}")
+    else:
+        print({"edit": "Title changed", "remove": "Title removed"}[sub])
+
 
 
 def cmd_export_shotcut(args):
@@ -1229,12 +1512,13 @@ def build_parser():
     for cmd_name, text in (("list", "List the exports with their size estimate and last render"),
                            ("enable", "Switch an export on (the ProRes master is off until you do)"),
                            ("disable", "Switch an export off"),
+                           ("set", "Change a setting of an export: the form of the subtitles"),
                            ("add", "Add an export from a preset")):
         sp = ex_sub.add_parser(cmd_name, help=text)
         sp.add_argument("--file", "-f",
             help=f"Timeline file (default: {config.TIMELINE_FILE} next to the project file)")
         sp.add_argument("--work", "-w", help="Work folder (default: work_dir of the project file)")
-        if cmd_name in ("enable", "disable"):
+        if cmd_name in ("enable", "disable", "set"):
             sp.add_argument("name", help="Name of the export")
     ex_add = ex_sub.choices["add"]
     ex_add.add_argument("--preset", required=True, choices=["film-4k", "film-4k-x264", "film-master"],
@@ -1245,7 +1529,111 @@ def build_parser():
     ex_add.add_argument("--height", type=int, help="Custom height")
     ex_add.add_argument("--output-dir", help="Folder of the file (default: <work>/renders)")
     ex_add.add_argument("--replace", action="store_true", help="Replace an export of the same name")
+    ex_add.add_argument("--subtitles", choices=config.SUBTITLE_FORMS,
+        help="The form of the subtitles in this export (D13): srt, burned, both or none "
+             "(default: srt for a film, burned for a short)")
+    ex_sub.choices["set"].add_argument("--subtitles", required=True, choices=config.SUBTITLE_FORMS,
+        help="srt: a file next to the film; burned: drawn into the picture; both; none")
     p_export.set_defaults(func=cmd_export)
+
+    # ── subtitles ──
+    p_sub = subparsers.add_parser("subtitles",
+        help="The subtitles: write them by hand or in a text box per scene, let Whisper listen, import, "
+             "write SRT files, translate")
+    sb = p_sub.add_subparsers(dest="subtitles_command", required=True)
+
+    def sub_cmd(name, text, work=False):
+        sp = sb.add_parser(name, help=text)
+        sp.add_argument("--file", "-f",
+            help=f"Timeline file (default: {config.TIMELINE_FILE} next to the project file)")
+        if work:
+            sp.add_argument("--work", "-w", help="Work folder (default: work_dir of the project file)")
+        return sp
+
+    sp = sub_cmd("list", "List the cues with their film times")
+    sp.add_argument("--json", action="store_true", help="Print the cues as JSON")
+    sp = sub_cmd("add", "Add a cue at a film time")
+    sp.add_argument("--at", type=float, required=True, help="Film time of the start, in seconds")
+    sp.add_argument("--end", type=float, help="Film time of the end (default: the time the text needs)")
+    sp.add_argument("--length", type=float, help="Length in seconds, instead of --end")
+    sp.add_argument("--text", required=True, help="The text; a line feed breaks a line")
+    sp = sub_cmd("edit", "Change the text and/or the film times of a cue")
+    sp.add_argument("cue", help="Cue id, for example c003")
+    sp.add_argument("--text")
+    sp.add_argument("--start", type=float, help="New film time of the start")
+    sp.add_argument("--end", type=float, help="New film time of the end")
+    sp = sub_cmd("remove", "Remove cues")
+    sp.add_argument("cues", nargs="+", help="Cue ids")
+    sp = sub_cmd("shift", "Move cues earlier (negative) or later in the film")
+    sp.add_argument("seconds", type=float)
+    sp.add_argument("--cues", help="Only these cue ids, comma separated")
+    sp.add_argument("--from", dest="from_s", type=float, help="Only cues that start at or after this film time")
+    sp.add_argument("--to", dest="to_s", type=float, help="Only cues that start at or before this film time")
+    sub_cmd("sort", "Put the cues in film order")
+    sp = sub_cmd("text", "Set the text of a scene: it is cleaned, split into cues and spread across the scene")
+    sp.add_argument("segment", help="Scene id, for example s003")
+    sp.add_argument("--text", help="The words of the scene")
+    sp.add_argument("--text-file", metavar="FILE", help="Read the words from a file (- for standard input)")
+    sp.add_argument("--replace-adjusted", action="store_true",
+        help="Also replace cues of the scene that were made or moved by hand")
+    sp = sub_cmd("import", "Add cues from a JSON file (film seconds) or an SRT file")
+    sp.add_argument("file_to_import", metavar="FILE", help="A .json file with a list of {start_s, end_s, text} or "
+                    "{\"cues\": [...]}, or an .srt file")
+    sp.add_argument("--replace", action="store_true", help="Remove all cues first")
+    sp = sub_cmd("export", "Write the SRT file of the film")
+    sp.add_argument("--out", help="The file (default: <film>.en.srt next to the export)")
+    sp.add_argument("--export", metavar="NAME", help="Name of the export whose film the file belongs to")
+    sub_cmd("check", "Check that every cue fits the safe area and the readability limits")
+    sp = sub_cmd("auto", "Let Whisper listen to the sound and make cues", work=True)
+    sp.add_argument("--only", help="Only these scenes, comma separated (for example s001,s002)")
+    sp.add_argument("--redo", action="store_true", help="Run Whisper again even where a transcript is kept")
+    sp.add_argument("--keep-stock-phrases", action="store_true",
+        help="Keep phrases such as \"Thank you.\" that Whisper writes for sound without speech")
+    sp.add_argument("--report-name", default="subtitles-auto-report", help="Name of the report in <work>/reports")
+    sp = sub_cmd("translate", "Translate the cues and write one SRT file per language", work=True)
+    sp.add_argument("--lang", help=f"Languages, comma separated (default: {','.join(config.TRANSLATE_LANGUAGES)})")
+    sp.add_argument("--export", metavar="NAME", help="The export whose film the files belong to (default: the first)")
+    sp.add_argument("--model", help="The OpenRouter model (default: VET_TRANSLATE_MODEL)")
+    sp.add_argument("--dry-run", action="store_true", help="Count what would be sent and the cost; send nothing")
+    p_sub.set_defaults(func=cmd_subtitles)
+
+    # ── title ──
+    p_title = subparsers.add_parser("title", help="Titles drawn into the picture")
+    tt = p_title.add_subparsers(dest="title_command", required=True)
+
+    def title_cmd(name, text):
+        sp = tt.add_parser(name, help=text)
+        sp.add_argument("--file", "-f",
+            help=f"Timeline file (default: {config.TIMELINE_FILE} next to the project file)")
+        return sp
+
+    def title_args(sp, start_required=False):
+        sp.add_argument("--start", type=float, required=start_required,
+            help="Start in seconds (film time, or from the start of the scene with --anchor)")
+        sp.add_argument("--end", type=float, help="End in seconds")
+        sp.add_argument("--length", type=float, help="Length in seconds, instead of --end (default 4)")
+        sp.add_argument("--anchor", help="film (default) or a scene id")
+        sp.add_argument("--template", choices=list(config.TITLE_TEMPLATES), help="center, lower_third or opening")
+        sp.add_argument("--size", type=float, help="Font size in percent of the frame height (1 to 30)")
+        sp.add_argument("--fade", type=float, help=f"Fade in and out, in seconds (default {config.TITLE_FADE_SEC})")
+
+    title_cmd("list", "List the titles")
+    sp = title_cmd("add", "Add a title")
+    sp.add_argument("--text", required=True)
+    title_args(sp, start_required=True)
+    sp.set_defaults(anchor="film")
+    sp = title_cmd("edit", "Change a title")
+    sp.add_argument("title", help="Title id, for example t002")
+    sp.add_argument("--text")
+    title_args(sp)
+    sp = title_cmd("remove", "Remove a title")
+    sp.add_argument("title", help="Title id")
+    sp = title_cmd("import", "Add titles from a JSON file")
+    sp.add_argument("file_to_import", metavar="FILE", help="A .json file with a list of {text, start_s, end_s} or "
+                    "{\"titles\": [...]}")
+    sp.add_argument("--replace", action="store_true", help="Remove all titles first")
+    p_title.set_defaults(func=cmd_title)
+
 
     # ── render ──
     p_render = subparsers.add_parser("render",
@@ -1256,6 +1644,9 @@ def build_parser():
     p_render.add_argument("--export", metavar="NAME", help="Render this export")
     p_render.add_argument("--all", action="store_true", help="Render every export that is switched on")
     p_render.add_argument("--force", action="store_true", help="Render an export that is switched off")
+    p_render.add_argument("--subtitles", choices=config.SUBTITLE_FORMS,
+        help="The form of the subtitles for this render only: srt, burned, both or none (default: the "
+             "setting of the export; change that with: export set NAME --subtitles FORM)")
     p_render.add_argument("--detach", action="store_true",
         help="Run in the background, in a session of its own, with a log and a pid file in <work>/reports")
     p_render.set_defaults(func=cmd_render)

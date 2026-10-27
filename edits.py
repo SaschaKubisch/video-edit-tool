@@ -198,7 +198,9 @@ def summary(tl, file_hash: str = None, review: dict = None) -> dict:
             "frame": tl.data["film"]["frame"], "segments": len(rows),
             "enabled": sum(1 for r in rows if r["enabled"]),
             "film_frames": total, "film_seconds": float(total / fps), "rows": rows,
-            "clips": clip_rows(tl)}
+            "clips": clip_rows(tl),
+            "cues": len((tl.data.get("subtitles") or {}).get("cues") or []),
+            "titles": len(tl.data.get("titles") or [])}
 
 
 def clip_rows(tl) -> list:
@@ -231,6 +233,8 @@ def format_summary(s: dict, name: str = "timeline.json") -> str:
             film = "(removed)"
         lines.append(f"{r['id']:5} {film:23} {r['length_s']:>5.1f} s  {r['source']:20} "
                      f"{str(r['in']) + '-' + str(r['out']):13} {r['label']}")
+    if s.get("cues") or s.get("titles"):
+        lines.append(f"subtitles: {s.get('cues', 0)} cue(s); titles: {s.get('titles', 0)}")
     typed = [c for c in s.get("clips", []) if c["offset_hand_s"] is not None]
     if typed:
         lines.append("offsets set by hand: " + "; ".join(

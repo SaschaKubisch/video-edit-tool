@@ -311,6 +311,17 @@ class TitleTests(FilmCase):
         self.assertEqual(errors(out), [])
 
 
+class SummaryTests(FilmCase):
+    def test_the_summary_counts_cues_and_titles_and_carries_the_scene_text(self):
+        out = self.ops({"op": "set_scene_text", "segment": "s003", "text": "Pan on the stove."})
+        s = edits.summary(timeline.Timeline(out))
+        self.assertEqual((s["cues"], s["titles"]), (2, 1))
+        self.assertEqual(s["rows"][2]["text"], "Pan on the stove.")
+        self.assertIn("subtitles: 2 cue(s); titles: 1", edits.format_summary(s))
+        self.assertNotIn("subtitles:", edits.format_summary(edits.summary(timeline.Timeline(
+            {**example(), "subtitles": {"language": "en", "cues": []}, "titles": []}))))
+
+
 class SrtTests(FilmCase):
     def test_time_format(self):
         self.assertEqual(words.srt_time(0), "00:00:00,000")

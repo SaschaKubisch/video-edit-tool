@@ -211,10 +211,29 @@ WHISPER_MIN_ACTIVITY = 0.10        # ... or whose sound is mostly at the noise f
 WHISPER_REPEAT_RUN = 3             # the same phrase this many times in a row is a loop and is dropped
 
 # Translation through OpenRouter (SPECS 9.9). The key is read from OPENROUTER_API_KEY only.
+# The languages of the owner's answer (2026-10-27) as YouTube writes them, with the limits of the Netflix
+# Timed Text Style Guide of each language (read on 2026-10-27): characters per line, adult reading speed in
+# characters per second, and how a line is measured. `name` is what the translator is told.
 TRANSLATE_LANGUAGES = ("pt-BR", "zh-Hans", "th", "de", "ja", "ru")
+TRANSLATE_LANGUAGE_RULES = {
+    "pt-BR": {"name": "Brazilian Portuguese (pt-BR)", "max_chars": 42, "cps": 17.0, "unit": "char"},
+    "zh-Hans": {"name": "Simplified Chinese (zh-Hans)", "max_chars": 16, "cps": 9.0, "unit": "cjk"},
+    "th": {"name": "Thai (th)", "max_chars": 35, "cps": 17.0, "unit": "thai"},
+    "de": {"name": "German (de)", "max_chars": 42, "cps": 17.0, "unit": "char"},
+    "ja": {"name": "Japanese (ja)", "max_chars": 13, "cps": 4.0, "unit": "width"},
+    "ru": {"name": "Russian (ru)", "max_chars": 42, "cps": 17.0, "unit": "char"},
+}
+# The translator is an OpenRouter model, set by VET_TRANSLATE_MODEL or --model. Starting default: the
+# cheap model of SPECS 9.9, with its price in US dollars per million tokens as openrouter.ai/api/v1/models
+# listed it on 2026-10-27.
+TRANSLATE_MODEL = "google/gemini-2.5-flash-lite"
+TRANSLATE_PRICES = {"google/gemini-2.5-flash-lite": (0.10, 0.40)}
+TRANSLATE_URL = "https://openrouter.ai/api/v1"
 TRANSLATE_BATCH = 30               # cues per request
 TRANSLATE_CONTEXT = 3              # cues of context before and after a batch
 TRANSLATE_TRIES = 3                # requests per batch before the run stops
+TRANSLATE_TIMEOUT_SEC = 120
+TRANSLATE_RETRY_WAIT_SEC = (1.0, 3.0)
 
 
 def layout_key(width: int, height: int) -> str:

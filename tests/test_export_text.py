@@ -106,6 +106,17 @@ class SubtitleFormTests(ExportTextFixture):
         self.assertEqual(export.subtitle_form({}, "short"), "burned")
         self.assertEqual(export.subtitle_form({"subtitles": "both"}, "short"), "both")
 
+    def test_the_form_can_be_replaced_for_one_render(self):
+        base = self.run_form("none")
+        tl, name = self.tl("srt", name="film-override")
+        result = self.run_export(tl, name, subtitles="burned")
+        self.assertEqual(result.subtitles, "burned")
+        self.assertTrue(self.shown(self.diff(result, base), 20))
+        self.assertIsNone(result.srt_file)
+        self.assertEqual(tl.data["exports"][0]["subtitles"], "srt")           # the file is not changed
+        with self.assertRaises(export.ExportError):
+            self.run_export(tl, name, subtitles="hard")
+
     def test_the_report_names_the_form_and_the_file(self):
         result = self.run_form("both")
         row = json.loads((self.work / "reports" / "render-report.json").read_text())["renders"][-1]

@@ -645,12 +645,13 @@ def _check_sources(tl, plan, decoder, log) -> None:
 def render_export(tl, name: str, work_dir: str, decoder, timeline_hash: str = None, protected=None,
                   loader=None, free_bytes=None, ffmpeg: str = None, ffprobe: str = None,
                   log=print, progress=None, force: bool = False, report_name: str = "render-report",
-                  mix_cache: bool = True) -> ExportResult:
+                  mix_cache: bool = True, subtitles: str = None) -> ExportResult:
     """Render the export `name` of the timeline `tl` from the original `.braw` files.
 
     `decoder` is a Decoder (decoder.py). `loader(path)` returns a WAV as float32 stereo at
     the mix rate (default: ffmpeg). `progress(frames_done, frames_total, fps)` is called as
-    frames are written. `force` renders an export that is switched off. Raises ExportError
+    frames are written. `force` renders an export that is switched off. `subtitles` (srt, burned, both,
+    none) replaces the form of the subtitles for this render only; the timeline file is not changed. Raises ExportError
     (ExportDisabled, NotEnoughSpace, AlreadyRunning) before anything is written, and
     KeyboardInterrupt after it has removed what it made. On a failed check the file stays as
     `.partial`; the result has `ok` False and the problems."""
@@ -688,7 +689,9 @@ def render_export(tl, name: str, work_dir: str, decoder, timeline_hash: str = No
             f"(with a margin of {int((SPACE_MARGIN - 1) * 100)} percent and the sound scratch file) "
             f"and {free / 1e9:.1f} GB is free in {os.path.dirname(os.path.abspath(out_path))}.")
 
-    form = subtitle_form(entry, tl.data["kind"])
+    if subtitles is not None and subtitles not in config.SUBTITLE_FORMS:
+        raise ExportError(f"subtitles must be one of {', '.join(config.SUBTITLE_FORMS)}, not {subtitles!r}")
+    form = subtitles or subtitle_form(entry, tl.data["kind"])
     text = None
     if textlayer.has_text(tl.data, burn_cues=form in ("burned", "both")):
         text = textlayer.build(tl.data, (entry["width"], entry["height"]), 0, frames,
