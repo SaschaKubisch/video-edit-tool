@@ -151,7 +151,6 @@ class V2UnknownKeyTests(RuleCase):
         d["audio"]["loudness"]["x_a"] = 1
         d["titles"][0]["x_a"] = 1
         d["subtitles"]["x_a"] = 1
-        d["subtitles"]["style"]["x_a"] = 1
         d["subtitles"]["cues"][0]["x_a"] = 1
         d["exports"][0]["x_a"] = 1
         d["exports"][0]["video"]["x_a"] = 1
@@ -256,7 +255,7 @@ class V6IdTests(RuleCase):
         d["titles"].append(dict(d["titles"][0]))
         self.expect(d, "V6", "titles[1].id")
         d = example()
-        d["subtitles"]["cues"].append(dict(d["subtitles"]["cues"][0]))
+        d["subtitles"]["cues"].append(dict(d["subtitles"]["cues"][0], start_s=10.0, end_s=12.8))
         self.expect(d, "V6", "subtitles.cues[1].id")
 
     def test_duplicate_source_id_in_the_json_text(self):
@@ -533,7 +532,7 @@ class V15AnchorTests(RuleCase):
 
     def test_interval_beyond_its_segment_is_a_warning(self):
         d = example()
-        d["subtitles"]["cues"][0]["end_s"] = 40.0            # s001 is 28.8 s long
+        d["subtitles"]["cues"][0].update(start_s=24.0, end_s=30.0)    # s001 is 28.8 s long
         self.expect(d, "V15", "subtitles.cues[0].end_s", level="warning")
 
     def test_title_beyond_the_film_is_a_warning(self):
@@ -648,10 +647,11 @@ class V18ExportTests(RuleCase):
 
 
 class V19SubtitleTests(RuleCase):
-    def test_mode_must_be_known(self):
+    def test_the_mode_moved_to_the_exports(self):
+        # D13 (2026-10-27): the form is a setting of each export, not of the subtitles
         d = example()
         d["subtitles"]["mode"] = "hardcode"
-        self.expect(d, "V19", "subtitles.mode")
+        self.expect(d, "V2", "subtitles.mode")
 
     def test_language_must_be_english(self):
         d = example()
@@ -676,6 +676,7 @@ class V19SubtitleTests(RuleCase):
     def test_line_of_exactly_max_chars_is_allowed(self):
         d = example()
         d["subtitles"]["cues"][0]["text"] = "x" * 42 + "\n" + "y" * 42
+        d["subtitles"]["cues"][0]["end_s"] = 8.2     # 85 characters need 5 s at 17 per second
         self.expect_clean(d)
 
 

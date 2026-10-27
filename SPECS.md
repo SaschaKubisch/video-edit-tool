@@ -258,6 +258,7 @@ Types: `int` integer, `num` decimal number, `str` string, `bool` true or false. 
 | `label` | str | no | Short name for people, for example "frying pan, close". |
 | `origin` | str | no | `assembly`, `manual`, `prompt` or `short`. How the segment came to be. |
 | `note` | str | no | Longer remark, for example "starts 0.5 s after the clap". |
+| `text` | str | no | **Added in step 4.** The words of the scene, as the owner typed or dictated them into the scene's text box (section 9.4). The tool cleans the text, splits it into cues and spreads them across the scene. A trim of the scene spreads them again. |
 | `crop` | object | no | `{"x": 0..1}` or `{"x_from": 0..1, "x_to": 0..1}`. Horizontal place of the window. 0 is the left edge, 1 the right edge, 0.5 the centre (default). With `x_from` and `x_to` the window moves slowly from one to the other over the segment. |
 | `audio_join` | `{duration_s, curve}` | no | Crossfade into this segment from the one before. Overrides `film.audio_join`. |
 | `gain_db_adjust` | num | no | Extra gain after loudness levelling, in dB. Default 0. |
@@ -288,7 +289,8 @@ Types: `int` integer, `num` decimal number, `str` string, `bool` true or false. 
 | `text` | str | yes | The title. |
 | `anchor` | str | yes | `film` or a segment id. |
 | `start_s`, `end_s` | num | yes | Seconds from the start of the anchor. |
-| `template` | str | no | `center`, `lower_third` or `opening`. Default `center`. |
+| `template` | str | no | Where the title sits and how it looks: `center`, `lower_third` or `opening` (section 9.7). Default `center`. |
+| `size_pct` | num | no | **Added in step 4.** Font size as a percent of the frame height, from 1 to 30. Default: the template's size. |
 | `fade_s` | num | no | Fade in and out of the title. Default 0.5. |
 
 **`subtitles`**
@@ -296,9 +298,9 @@ Types: `int` integer, `num` decimal number, `str` string, `bool` true or false. 
 | Field | Type | Req | Meaning |
 |-------|------|-----|---------|
 | `language` | str | yes | `en`. |
-| `mode` | str | yes | `burn`, `sidecar` or `both`. D13. |
-| `style` | object | no | `font` (str), `size_pct` (size as percent of the frame height), `outline_px`, `max_chars_per_line`. |
-| `cues[]` | array | yes | Each cue: `id` (`c` and digits), `anchor` (a segment id), `start_s`, `end_s` (seconds from the start of that segment), `text`. |
+| `cues[]` | array | yes | Each cue: `id` (`c` and digits), `anchor` (a segment id), `start_s`, `end_s` (seconds from the start of that segment), `text` (lines are separated by a line feed), `origin` (`auto` from Whisper, `text` from the scene's text box, `manual`; default `manual`), `locked` (true when the owner moved, resized or edited the cue by hand; default false). |
+
+**Changed in step 4 (decisions D13 and "one style", 2026-10-27).** The version-1 plan had `subtitles.mode` and `subtitles.style` in the file. The form of the subtitles is now a setting of each export (`exports[].subtitles`, below), and the style is defined once in the tool's configuration (`config.TEXT_STYLE`, `config.TEXT_LAYOUTS`), so neither is in the file. A file that still has `subtitles.mode` or `subtitles.style` is refused by rule V2.
 
 **`exports[]`**
 
@@ -310,12 +312,13 @@ Types: `int` integer, `num` decimal number, `str` string, `bool` true or false. 
 | `width`, `height` | int | yes | Output size. Same shape as `film.frame` (rule V5). |
 | `video` | object | yes | `codec` (`h264_videotoolbox` or `libx264` for MP4; `prores_videotoolbox` for MOV), `rate_control` (`{"mode":"bitrate","mbps":45}`, or `{"mode":"crf","crf":18}` for `libx264`), `preset` (`libx264` only), `profile` (`hq`, ProRes only). Starting values are in section 5.6. |
 | `audio` | object | yes | `codec` (`aac` for MP4, `pcm_s24le` for MOV), `bitrate_kbps` (AAC only), `sample_rate`. |
+| `subtitles` | str | no | **Added in step 4 (D13).** The form of the subtitles in this export: `srt` (an SRT file next to the film, nothing drawn), `burned` (drawn into the picture), `both`, or `none`. Without it the export gets `config.SUBTITLE_FORM_DEFAULT`: `srt` for a film and `burned` for a short (starting values). Titles are drawn into the picture whatever the form. |
 
 **`derived_from`** (short only): `film` (path of the film file), `target_length_s`, `settings` (the short builder's settings, kept so the short can be built again).
 
 ### 3.3 Example
 
-The values are an illustration. The frame rate, frame sizes, frame counts and the base LUT's file name are those of the owner's clips and decision (the clips `A002_01011540_C002` and `A002_01060615_C083` of `Recordings_261003`); the paths, hashes, offsets, the creative LUT and the settings are made up. `mode: both` in `subtitles` is an example of open decision D13, not a choice. `-14.0` as target and `segment_then_film` as mode are the settled values of D9. `h264_videotoolbox` is the default encoder (decision D17).
+The values are an illustration. The frame rate, frame sizes, frame counts and the base LUT's file name are those of the owner's clips and decision (the clips `A002_01011540_C002` and `A002_01060615_C083` of `Recordings_261003`); the paths, hashes, offsets, the creative LUT and the settings are made up. `-14.0` as target and `segment_then_film` as mode are the settled values of D9. `h264_videotoolbox` is the default encoder (decision D17).
 
 ```json
 {
@@ -383,18 +386,17 @@ The values are an illustration. The frame rate, frame sizes, frame counts and th
   ],
   "subtitles": {
     "language": "en",
-    "mode": "both",
-    "style": {"font": "Helvetica Neue", "size_pct": 4.5, "outline_px": 3, "max_chars_per_line": 42},
     "cues": [
       {"id": "c001", "anchor": "s001", "start_s": 3.2, "end_s": 6.0,
-       "text": "Now the pan is hot enough."}
+       "text": "Now the pan is hot enough.", "origin": "auto"}
     ]
   },
   "exports": [
     {"name": "film-4k", "output": "/Volumes/SSD/film/renders/film-4k.mp4",
      "width": 4096, "height": 2160,
      "video": {"codec": "h264_videotoolbox", "rate_control": {"mode": "bitrate", "mbps": 45}},
-     "audio": {"codec": "aac", "bitrate_kbps": 384, "sample_rate": 48000}},
+     "audio": {"codec": "aac", "bitrate_kbps": 384, "sample_rate": 48000},
+     "subtitles": "srt"},
     {"name": "film-master", "output": "/Volumes/SSD/film/renders/film-master.mov", "enabled": false,
      "width": 4096, "height": 2160,
      "video": {"codec": "prores_videotoolbox", "profile": "hq"},
@@ -414,7 +416,7 @@ The values are an illustration. The frame rate, frame sizes, frame counts and th
 
 ### 3.5 Validation rules
 
-`timeline.py` checks these rules (V1 to V22, and V0 and V23, which the build added). Errors stop the tool. Warnings are listed and do not stop it. "File checks" read the disk and can be switched off for tests.
+`timeline.py` checks these rules (V1 to V22, and V0 and V23 to V26, which the build added). Errors stop the tool. Warnings are listed and do not stop it. "File checks" read the disk and can be switched off for tests.
 
 | Rule | Check | Level |
 |------|-------|-------|
@@ -437,11 +439,14 @@ The values are an illustration. The frame rate, frame sizes, frame counts and th
 | V16 | File checks: the `sha256` of each LUT equals the file's hash. `look.lut.interp` is `tetrahedral`. A source whose `copy_lut_sha256` differs from `look.base.sha256` gets a warning: its preview copy carries another base LUT, so the film preview shows it wrongly. The final render is not affected, because it applies the base LUT itself. | error, warning |
 | V17 | `audio.loudness.mode` is `off`, `segment_then_film` or `film_only`. Unless it is `off`, `target_lufs` is present and between -40 and -5. `true_peak_dbtp` is at most 0. `max_gain_db` lies between 0 and 30. | error |
 | V18 | Export names are unique. No export `output` lies inside a folder that holds an original (any parent folder of a `.braw` or WAV used). | error |
-| V19 | `subtitles.mode` is `burn`, `sidecar` or `both`. Cue text is not empty. A cue with more than two lines or more than `max_chars_per_line` per line is a warning. | error, warning |
+| V19 | `subtitles.language` is `en`. Cue text is not empty (error). Warnings (readability, section 9.3): a cue with more than two lines, a line longer than `max_chars` of the layout (42 for 16:9), a cue longer than 7 s or shorter than 1 s, or read faster than 17 characters per second. **Changed in step 4:** the plan checked `subtitles.mode` and `max_chars_per_line` here; the form is now `exports[].subtitles` (V25) and the limits come from `config.py`. | error, warning |
 | V20 | For a short: `derived_from.film` exists (file check). | error |
 | V21 | In version 1 the container follows the file extension. `.mp4` needs video codec `h264_videotoolbox` or `libx264` and audio codec `aac`. `.mov` needs video codec `prores_videotoolbox` with profile `hq` and audio codec `pcm_s24le`. | error |
 | V22 | A short is not longer than 180 seconds. | warning |
 | V23 | **Added in the build.** `sources[].audio_offset_hand_s` is a finite number from -30 to 30 s (`OFFSET_HAND_MAX_SEC`, a starting value; a value of another type is a V0 error). With a function that gives the length of a WAV (ffprobe when the file checks are on; the page passes its own), a warning when, at that offset, the WAV of a clip with a hand offset holds no sound for an enabled segment of the clip ("the segment is silent"), or sound for only part of it (a frame or more missing). Clips without a hand offset are not checked here: the render reports them (5.4). A WAV whose length cannot be read gives one warning, not an error. | error, warning |
+| V24 | **Added in step 4.** Cues on enabled segments are compared by film time (the segment's film start plus the cue's `start_s` and `end_s`). Two cues that overlap: error. Cues that are not in film order in the list, or two cues less than two frames apart (`config.SUBTITLE_MIN_GAP_FRAMES`): warning. A cue on a segment that is switched off is not in the film and is not compared. | error, warning |
+| V25 | **Added in step 4 (D13).** `exports[].subtitles` is `srt`, `burned`, `both` or `none`. | error |
+| V26 | **Added in step 4.** A title has text that is not empty, a `template` of `center`, `lower_third` or `opening`, a `size_pct` from 1 to 30 and a `fade_s` that is not negative. A segment's `text` is a string. A cue's `origin` is `auto`, `text` or `manual` and its `locked` is true or false. | error |
 
 **Readings the build fixed** (the plan left them open): an optional number that is absent counts as 0 for rule V11 (no fade-in, no fade-out, no crossfade, so the sound cuts hard); rule V5 applies to the `size` of a source as well as to `film.frame` and the exports; rule V19 demands `language` `en`; rule V21 allows rate control `crf` only with `libx264`; the shape test of V5 passes when the width or the height is within one pixel of the value that the other dimension gives; rule V6 finds a repeated source id by reading the JSON text, because a JSON parser keeps only the last of two equal keys; a free key (`x_...`) is allowed in every object, including `fps`, `size` and `rate_control`.
 

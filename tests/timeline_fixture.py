@@ -30,6 +30,7 @@ def short_example():
     d["kind"] = "short"
     d["film"]["frame"] = {"width": 1080, "height": 1920}
     d["film"]["fit"] = "fill"
+    d["subtitles"]["cues"][0]["text"] = "The pan is hot."        # 9:16 lines hold 24 characters
     d["derived_from"] = {"film": "/Volumes/SSD/film/timeline.json",
                          "target_length_s": 60, "settings": {"x_free": 1}}
     d["exports"] = [{"name": "short-vertical",

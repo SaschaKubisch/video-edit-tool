@@ -147,3 +147,72 @@ LOUDNESS_MAX_GAIN_DB = 12.0        # most that levelling adds to a quiet segment
 # ── Final film (`render`, SPECS 5.3 and 5.6) ──
 EXPORT_GOP = 30                    # a key frame every 30 frames (about 1 s), as in the tested chain
 EXPORT_LOG_EVERY_SEC = 30          # the render prints its progress this often
+
+# ── Words (step 4, SPECS section 9): subtitles, titles, Whisper, translation ──
+# Decisions of 2026-10-27: D12 model large-v3-turbo (file named by VET_WHISPER_MODEL), D13 form
+# is a setting of each export, font Inter (folder named by VET_FONT_DIR), one style for all films.
+SUBTITLE_LANGUAGE = "en"
+SUBTITLE_FORMS = ("srt", "burned", "both", "none")
+# Starting values, not decisions (D13): the form an export gets when it names none.
+SUBTITLE_FORM_DEFAULT = {"film": "srt", "short": "burned"}
+
+# Readability limits (SPECS 9.3). Sources: the Netflix English Timed Text Style Guide (42
+# characters per line, two lines at most, a bottom-heavy shape, 17 characters per second for
+# children's programmes and 20 for adults', 5/6 s to 7 s per subtitle, a gap of two frames);
+# the owner asked for about 17 characters per second and 1 to 7 s.
+SUBTITLE_MAX_LINES = 2
+SUBTITLE_MAX_CPS = 17.0            # characters per second a viewer can read (spaces count)
+SUBTITLE_MIN_SEC = 1.0             # shortest cue the spreading makes (where the scene allows)
+SUBTITLE_MAX_SEC = 7.0             # longest cue
+SUBTITLE_GAP_SEC = 0.1             # the gap the spreading leaves between two cues (starting value)
+SUBTITLE_MIN_GAP_FRAMES = 2        # a gap below this is a warning (Netflix: two frames)
+SUBTITLE_CLIP_KEEP_SEC = 0.5       # a trim that leaves less than this of a cue drops the cue
+SUBTITLE_FILLERS = ("um", "umm", "uh", "uhh", "uhm", "er", "erm", "errm", "ehm")
+
+# The one style (SPECS 9.5). Sizes are fractions of the frame height, so the preview and
+# every export size look the same. Fonts come from VET_FONT_DIR.
+TEXT_FONT_DIR_ENV = "VET_FONT_DIR"
+TEXT_STYLE = {
+    "subtitle_font": "Inter-SemiBold.ttf",
+    "title_font": "Inter-Bold.ttf",
+    "colour": (255, 255, 255),
+    "outline_colour": (0, 0, 0),
+    "outline_em": 0.075,            # outline width, in em
+    "shadow_offset_em": 0.045,
+    "shadow_blur_em": 0.05,
+    "shadow_alpha": 0.6,
+    "line_height_em": 1.2,
+}
+# Layouts by the shape of the frame. `safe` is the margin of the safe area as a fraction of the
+# frame: (left, top, right, bottom). 16:9: the graphics safe area of EBU R 95 (5 percent on every
+# side). 9:16: the margins of SPECS 11.6 (secondary source). `size_pct` is the font size as a
+# percent of the frame height; `bottom_pct` lifts the last line this far above the bottom of the
+# safe area, as a percent of the picture height; `max_chars` is the line length in characters.
+TEXT_LAYOUTS = {
+    "16:9": {"safe": (0.05, 0.05, 0.05, 0.05), "size_pct": 4.5, "bottom_pct": 2.5, "max_chars": 42},
+    "9:16": {"safe": (0.04, 0.15, 0.18, 0.35), "size_pct": 3.3, "bottom_pct": 0.0, "max_chars": 24},
+}
+# Titles (SPECS 9.7): font size in percent of the frame height, the box and where it sits.
+TITLE_TEMPLATES = {
+    "center": {"size_pct": 7.0, "anchor": "center", "x_pct": 50.0, "y_pct": 50.0, "max_width_pct": 80.0},
+    "lower_third": {"size_pct": 4.8, "anchor": "left", "x_pct": None, "y_pct": 72.0, "max_width_pct": 60.0},
+    "opening": {"size_pct": 9.0, "anchor": "center", "x_pct": 50.0, "y_pct": 45.0, "max_width_pct": 80.0},
+}
+TITLE_FADE_SEC = 0.5
+
+# Whisper (D12, SPECS 9.2). The names of the files are settings; nothing is downloaded at run time.
+WHISPER_THREADS = 4
+WHISPER_MIN_MEAN_PROB = 0.55       # a phrase whose tokens average a lower probability is dropped
+WHISPER_MIN_ACTIVITY = 0.10        # ... or whose sound is mostly at the noise floor
+WHISPER_REPEAT_RUN = 3             # the same phrase this many times in a row is a loop and is dropped
+
+# Translation through OpenRouter (SPECS 9.9). The key is read from OPENROUTER_API_KEY only.
+TRANSLATE_LANGUAGES = ("pt-BR", "zh-Hans", "th", "de", "ja", "ru")
+TRANSLATE_BATCH = 30               # cues per request
+TRANSLATE_CONTEXT = 3              # cues of context before and after a batch
+TRANSLATE_TRIES = 3                # requests per batch before the run stops
+
+
+def layout_key(width: int, height: int) -> str:
+    """The key of TEXT_LAYOUTS for a frame: "9:16" for a frame that is higher than wide, else "16:9"."""
+    return "9:16" if height > width else "16:9"

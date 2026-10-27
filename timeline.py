@@ -44,7 +44,7 @@ AUDIO_JOIN_KEYS = ["duration_s", "curve"]
 SOURCE_KEYS = ["original_video", "preview_copy", "audio", "audio_offset_s",
                "audio_offset_hand_s", "audio_drift_ppm", "frames", "fps", "size",
                "copy_lut_sha256"]
-SEGMENT_KEYS = ["id", "source", "in", "out", "enabled", "label", "origin", "note",
+SEGMENT_KEYS = ["id", "source", "in", "out", "enabled", "label", "origin", "note", "text",
                 "crop", "audio_join", "gain_db_adjust", "priority"]
 CROP_KEYS = ["x", "x_from", "x_to"]
 LOOK_KEYS = ["base", "lut"]
@@ -52,11 +52,12 @@ BASE_KEYS = ["mode", "path", "sha256"]
 LUT_KEYS = ["path", "sha256", "interp", "name", "credit"]
 AUDIO_KEYS = ["sample_rate", "loudness"]
 LOUDNESS_KEYS = ["mode", "target_lufs", "true_peak_dbtp", "max_gain_db"]
-TITLE_KEYS = ["id", "text", "anchor", "start_s", "end_s", "template", "fade_s"]
-SUBTITLES_KEYS = ["language", "mode", "style", "cues"]
-STYLE_KEYS = ["font", "size_pct", "outline_px", "max_chars_per_line"]
-CUE_KEYS = ["id", "anchor", "start_s", "end_s", "text"]
-EXPORT_KEYS = ["name", "output", "enabled", "width", "height", "video", "audio"]
+TITLE_KEYS = ["id", "text", "anchor", "start_s", "end_s", "template", "size_pct", "fade_s"]
+SUBTITLES_KEYS = ["language", "cues"]
+CUE_KEYS = ["id", "anchor", "start_s", "end_s", "text", "origin", "locked"]
+CUE_ORIGINS = ("auto", "text", "manual")
+TITLE_TEMPLATES = tuple(config.TITLE_TEMPLATES)
+EXPORT_KEYS = ["name", "output", "enabled", "width", "height", "video", "audio", "subtitles"]
 EXPORT_VIDEO_KEYS = ["codec", "rate_control", "preset", "profile"]
 RATE_CONTROL_KEYS = ["mode", "mbps", "crf"]
 EXPORT_AUDIO_KEYS = ["codec", "bitrate_kbps", "sample_rate"]
@@ -191,7 +192,7 @@ def _canonical(data):
         "look": obj(LOOK_KEYS, base=obj(BASE_KEYS), lut=obj(LUT_KEYS)),
         "audio": obj(AUDIO_KEYS, loudness=obj(LOUDNESS_KEYS)),
         "titles": _list_of(obj(TITLE_KEYS)),
-        "subtitles": obj(SUBTITLES_KEYS, style=obj(STYLE_KEYS), cues=_list_of(obj(CUE_KEYS))),
+        "subtitles": obj(SUBTITLES_KEYS, cues=_list_of(obj(CUE_KEYS))),
         "exports": _list_of(export),
         "derived_from": obj(DERIVED_KEYS),
     })
@@ -268,10 +269,20 @@ class _Validator:
             return None
         return v
 
+    MOVED_KEYS = {
+        ("subtitles", "mode"): "the form of the subtitles is now a setting of each export: "
+                               "exports[].subtitles is 'srt', 'burned', 'both' or 'none' (D13)",
+        ("subtitles", "style"): "the style is defined once in the tool's configuration "
+                                "(config.TEXT_STYLE and config.TEXT_LAYOUTS), not in the file",
+    }
+
     def check_keys(self, obj, known, path):
         """V2: no unknown key unless it starts with x_."""
         for k in obj:
             if k in known or str(k).startswith("x_"):
+                continue
+            if (path, k) in self.MOVED_KEYS:
+                self.err("V2", _join(path, k), f"unknown key '{k}'", self.MOVED_KEYS[(path, k)])
                 continue
             close = difflib.get_close_matches(k, known, n=1, cutoff=0.6)
             hint = f"did you mean '{close[0]}'?" if close else \
@@ -601,7 +612,7 @@ class _Validator:
                 seg["in"] = None
             enabled = self.typed(s, "enabled", path, "bool", required=False)
             seg["enabled"] = True if enabled is None else enabled
-            for key in ("label", "origin", "note", "priority"):
+            for key in ("label", "origin", "note", "text", "priority"):
                 v = self.typed(s, key, path, "str", required=False)
                 if key == "origin" and v is not None and v not in (
                         "assembly", "manual", "prompt", "short"):
@@ -776,7 +787,7 @@ class _Validator:
             if t is not None and not 0 <= t <= 30:
                 self.err("V17", f"{p}.max_gain_db", f"max_gain_db {t} is outside 0 to 30")
 
-    # ── titles and subtitles (V6, V15, V19) ──
+    # ── titles and subtitles (V6, V15, V19, V24, V26) ──
     def titles_and_subtitles(self, segments, film, sources):
         by_id = {s["id"]: s for s in segments if s["id"]}
         fps = film["fps"]
@@ -786,23 +797,27 @@ class _Validator:
                 return None
             return (seg["out"] - seg["in"]) * fps[1] / fps[0]
 
-        film_seconds = None
-        if fps:
-            film_seconds = sum((s["out"] - s["in"]) for s in segments
-                               if s["enabled"] and s["in"] is not None
-                               and s["out"] is not None) * fps[1] / fps[0]
+        # film start (seconds) of every enabled segment, in file order
+        film_start, at = {}, 0.0
+        for s in segments:
+            if s["enabled"] and s["id"] and seg_seconds(s) is not None:
+                film_start[s["id"]] = at
+                at += seg_seconds(s)
+        film_seconds = at if fps else None
 
         def interval(item, path, anchor_len, anchor_name):
             s = self.typed(item, "start_s", path, "num")
             e = self.typed(item, "end_s", path, "num")
             if s is None or e is None:
-                return
+                return None
             if s >= e:
                 self.err("V15", f"{path}.end_s", f"end_s {e} is not after start_s {s}")
+                return None
             elif anchor_len is not None and (s < 0 or e > anchor_len + 1e-9):
                 self.warn("V15", f"{path}.end_s",
                           f"the interval {s} to {e} s reaches outside {anchor_name} "
                           f"({anchor_len:.1f} s); the part outside is not shown")
+            return s, e
 
         titles = self.lst(self.d, "titles", "", required=False)
         seen = {}
@@ -819,9 +834,20 @@ class _Validator:
                 elif tid in seen:
                     self.err("V6", f"{path}.id", f"title id '{tid}' is used twice")
                 seen[tid] = i
-            self.typed(t, "text", path, "str")
-            self.typed(t, "template", path, "str", required=False)
-            self.typed(t, "fade_s", path, "num", required=False)
+            text = self.typed(t, "text", path, "str")
+            if text is not None and not text.strip():
+                self.err("V26", f"{path}.text", "the title text is empty")
+            template = self.typed(t, "template", path, "str", required=False)
+            if template is not None and template not in TITLE_TEMPLATES:
+                self.err("V26", f"{path}.template", f"template must be one of "
+                         f"{', '.join(TITLE_TEMPLATES)}, found {template!r}")
+            size = self.typed(t, "size_pct", path, "num", required=False)
+            if size is not None and not 1 <= size <= 30:
+                self.err("V26", f"{path}.size_pct", f"size_pct {size} is outside 1 to 30",
+                         "the size is a percent of the frame height")
+            fade = self.typed(t, "fade_s", path, "num", required=False)
+            if fade is not None and fade < 0:
+                self.err("V26", f"{path}.fade_s", f"fade_s {fade} must not be negative")
             anchor = self.typed(t, "anchor", path, "str")
             length, name = None, ""
             if anchor is not None:
@@ -842,21 +868,13 @@ class _Validator:
         if lang is not None and lang != "en":
             self.err("V19", "subtitles.language", f"language must be 'en', found {lang!r}",
                      "version 1 supports English only")
-        mode = self.typed(subs, "mode", "subtitles", "str")
-        if mode is not None and mode not in ("burn", "sidecar", "both"):
-            self.err("V19", "subtitles.mode",
-                     f"mode must be 'burn', 'sidecar' or 'both', found {mode!r}")
-        max_chars = None
-        style = self.obj(subs, "style", "subtitles", required=False) if "style" in subs else None
-        if style is not None:
-            self.check_keys(style, STYLE_KEYS, "subtitles.style")
-            self.typed(style, "font", "subtitles.style", "str", required=False)
-            self.typed(style, "size_pct", "subtitles.style", "num", required=False)
-            self.typed(style, "outline_px", "subtitles.style", "num", required=False)
-            max_chars = self.typed(style, "max_chars_per_line", "subtitles.style", "int",
-                                   required=False)
+        frame = film["frame"]
+        layout = config.TEXT_LAYOUTS[config.layout_key(*frame)] if frame else \
+            config.TEXT_LAYOUTS["16:9"]
+        max_chars = layout["max_chars"]
         cues = self.lst(subs, "cues", "subtitles")
         seen = {}
+        placed = []                     # (list index, film start, film end) of cues in the film
         for i, c in enumerate(cues or []):
             path = f"subtitles.cues[{i}]"
             if not isinstance(c, dict):
@@ -870,6 +888,11 @@ class _Validator:
                 elif cid in seen:
                     self.err("V6", f"{path}.id", f"cue id '{cid}' is used twice")
                 seen[cid] = i
+            origin = self.typed(c, "origin", path, "str", required=False)
+            if origin is not None and origin not in CUE_ORIGINS:
+                self.err("V26", f"{path}.origin",
+                         f"origin must be one of {', '.join(CUE_ORIGINS)}, found {origin!r}")
+            self.typed(c, "locked", path, "bool", required=False)
             anchor = self.typed(c, "anchor", path, "str")
             length, name = None, ""
             if anchor is not None:
@@ -878,20 +901,63 @@ class _Validator:
                 else:
                     self.err("V15", f"{path}.anchor",
                              f"anchor '{anchor}' is not a segment id")
-            interval(c, path, length, name)
+            span = interval(c, path, length, name)
             text = self.typed(c, "text", path, "str")
+            chars = None
             if text is not None:
                 if not text.strip():
                     self.err("V19", f"{path}.text", "the cue text is empty")
                 else:
                     lines = text.split("\n")
                     longest = max(len(line) for line in lines)
-                    if len(lines) > 2:
+                    chars = len(text.replace("\n", " ").strip())
+                    if len(lines) > config.SUBTITLE_MAX_LINES:
                         self.warn("V19", f"{path}.text", f"the cue has {len(lines)} lines; "
                                   f"two is the most that reads well")
                     elif max_chars and longest > max_chars:
                         self.warn("V19", f"{path}.text", f"a line has {longest} characters, "
-                                  f"more than max_chars_per_line ({max_chars})")
+                                  f"more than {max_chars}, the length of a line")
+            if span is not None:
+                dur = span[1] - span[0]
+                if dur > config.SUBTITLE_MAX_SEC + 1e-9:
+                    self.warn("V19", f"{path}.end_s", f"the cue lasts {dur:.1f} s; a cue should "
+                              f"last {config.SUBTITLE_MAX_SEC:g} s at most")
+                elif dur < config.SUBTITLE_MIN_SEC - 1e-9:
+                    self.warn("V19", f"{path}.end_s", f"the cue lasts {dur:.2f} s; a cue should "
+                              f"last {config.SUBTITLE_MIN_SEC:g} s at least")
+                if chars and dur > 0 and chars / dur > config.SUBTITLE_MAX_CPS + 1e-9:
+                    self.warn("V19", f"{path}.text", f"the cue is read at {chars / dur:.0f} "
+                              f"characters per second; more than {config.SUBTITLE_MAX_CPS:g} is "
+                              f"hard to read")
+                if anchor in film_start:
+                    top = seg_seconds(by_id[anchor])
+                    a, b = max(0.0, span[0]), min(top, span[1])
+                    if b > a:
+                        placed.append((i, film_start[anchor] + a, film_start[anchor] + b))
+
+        # V24: the order in the list, then overlap and gap by film time
+        previous = None
+        for i, a, b in placed:
+            if previous is not None and a < previous - 1e-9:
+                self.warn("V24", f"subtitles.cues[{i}].start_s",
+                          "the cue is before the cue above it in film time; keep the cues in "
+                          "film order", "run: python main.py subtitles sort")
+            previous = a
+        order = sorted(placed, key=lambda p: (p[1], p[2]))
+        gap = config.SUBTITLE_MIN_GAP_FRAMES * (fps[1] / fps[0] if fps else 0.0334)
+        reach, reach_i = None, None
+        for i, a, b in order:
+            if reach is not None and a < reach - 1e-9:
+                self.err("V24", f"subtitles.cues[{i}].start_s",
+                         f"the cue starts at {a:.2f} s of the film, before the cue "
+                         f"subtitles.cues[{reach_i}] ends ({reach:.2f} s)",
+                         "move or shorten one of the two cues")
+            elif reach is not None and a - reach < gap - 1e-9:
+                self.warn("V24", f"subtitles.cues[{i}].start_s",
+                          f"the cue starts {max(0.0, a - reach) * 1000:.0f} ms after the cue "
+                          f"above it; leave at least {config.SUBTITLE_MIN_GAP_FRAMES} frames")
+            if reach is None or b > reach:
+                reach, reach_i = b, i
 
     # ── exports (V5, V18, V21) ──
     def exports(self, film, sources):
@@ -918,6 +984,12 @@ class _Validator:
                              f"export name '{name}' is used twice (also exports[{seen[name]}])")
                 seen[name] = i
             self.typed(e, "enabled", path, "bool", required=False)
+            form = self.typed(e, "subtitles", path, "str", required=False)
+            if form is not None and form not in config.SUBTITLE_FORMS:
+                self.err("V25", f"{path}.subtitles",
+                         f"subtitles must be one of {', '.join(config.SUBTITLE_FORMS)}, "
+                         f"found {form!r}", "srt: a file next to the film; burned: drawn into the "
+                         "picture; both; none")
             out = self.typed(e, "output", path, "str")
             if out is not None:
                 try:
