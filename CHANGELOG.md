@@ -2,6 +2,20 @@
 
 ## Unreleased (editor, step 2 in progress)
 
+### Added (step 5, prompt edits)
+- The scene index (`scenes index`): `index.json` and `index.md` in `<work>/index/<timeline name>/` with one entry per
+  scene (film times, clip and frames, the speech the transcript has in the scene, the scene text, the cues, the sheet),
+  and the hash of the timeline file it was made from.
+- Still sheets (`scenes sheets`): one JPEG per scene with 3, 6 or 9 stills labelled with the scene id and film time,
+  and overview pages with one still for each of 12 scenes. Sheets that are up to date are kept, and the stills are
+  cached, so a removal only draws new labels. `scenes frames SCENE --every 1s` is a finer look inside one scene.
+- `scenes remove`, `keep`, `restore` and `cut ID --from S --to S` (film seconds), each with `--dry-run` (the film
+  length before and after, the scenes and cues affected, the film titles that sit by film time) and one snapshot
+  for `timeline undo`. A cut splits the scene; the second part has the film's own sound crossfade.
+- `CLAUDE.md` (new) tells Claude Code how to handle an edit request; the README has the sausage example.
+- Film tab: a Restore button on a removed scene.
+- D14 is still open: "cut out" is read as remove, `keep` exists, the search is Claude Code reading sheets and the index.
+
 ### Added (step 4, words)
 - Decisions of 2026-10-27 (`PRD.md` section 3): Whisper model large-v3-turbo (D12), the subtitle form is a setting
   of each export, font Inter (D13), a text box per scene, one subtitle style, translations by OpenRouter.
