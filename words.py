@@ -228,7 +228,7 @@ def _wrap(toks, rules, max_lines):
     if _fits(rules, whole):
         return [whole], 0.0
     n = len(toks)
-    for count in range(2, max_lines + 1):
+    for count in range(2, min(max_lines, 3) + 1):
         best = None
         if count == 2:
             candidates = ((k,) for k in range(1, n))
@@ -261,6 +261,17 @@ def _wrap(toks, rules, max_lines):
                 best = (strs, cost, widths[-1])
         if best:
             return best[0], best[1]
+    if max_lines > 3:                       # more lines than that are filled one after the other
+        lines, line = [], []
+        for tok in toks:
+            if line and not _fits(rules, join_tokens(line + [tok])):
+                lines.append(line)
+                line = []
+            line.append(tok)
+        lines.append(line)
+        strs = [join_tokens(l) for l in lines]
+        if len(strs) <= max_lines and all(_fits(rules, s) for s in strs):
+            return strs, 50.0
     return None
 
 
