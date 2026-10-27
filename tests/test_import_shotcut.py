@@ -13,7 +13,7 @@ import export_shotcut
 import import_shotcut
 import store
 import timeline
-from tests.test_export_shotcut import ShotcutFixture, props
+from tests.test_export_shotcut import CUES, ShotcutFixture, props
 from tests.test_timeline_commands import run
 
 MLT_FPS = 30000 / 1001
@@ -325,6 +325,124 @@ class IgnoredThingsTests(ImportFixture):
         text = "\n".join(report.ignored)
         self.assertIn("filter brightness on clip chain0", text)
         self.assertIn("transition luma", text)
+
+
+class SubtitleReadBackTests(ImportFixture):
+    """The subtitle track of the project is not read back (decision of the build, SPECS 8.6): the film's subtitles live
+    in the timeline file, where each cue belongs to a scene and moves with it, and a track in Shotcut has film times
+    only. The reader says what it found, so that a change made in Shotcut is not lost without a word."""
+
+    def setUp(self):
+        name = self.id().split(".")[-1]
+        self.work = self.root / f"imp-{name}"
+        self.work.mkdir(parents=True, exist_ok=True)
+        self.path = self.work / "timeline.json"
+        self.tl = self.make_tl(loud=False)
+        self.tl.data["subtitles"] = {"language": "en", "cues": [dict(c) for c in CUES]}
+        self.tl.save(str(self.path))
+        export_shotcut.write_project(self.tl, str(self.work), str(self.work / "film.mlt"),
+                                     protected=[str(self.originals)], log=lambda s: None, check=False)
+        self.mlt = self.work / "film.mlt"
+
+    def feed(self, root):
+        return [f for f in root.find("tractor").findall("filter") if props(f).get("mlt_service") == "subtitle_feed"][0]
+
+    def set_text(self, tree, text):
+        for p in self.feed(tree.getroot()).findall("property"):
+            if p.get("name") == "text":
+                p.text = text
+
+    def test_a_track_nobody_touched_is_reported_as_written_and_nothing_changes(self):
+        before = self.path.read_bytes()
+        report = self.read()
+        self.assertEqual(report.subtitles, ["subtitle track English (eng): 3 cues, as the tool wrote them"])
+        self.assertEqual(report.ignored, [])
+        self.assertTrue(report.nothing_changed)
+        self.assertEqual(self.path.read_bytes(), before)
+
+    def test_an_edited_text_is_reported_and_not_read_back(self):
+        tree = self.tree()
+        text = props(self.feed(tree.getroot()))["text"].replace("First scene.", "The first scene, edited.")
+        self.set_text(tree, text)
+        self.save(tree)
+        before = self.path.read_bytes()
+        report = self.read()
+        line, = report.subtitles
+        self.assertIn("subtitle track English (eng)", line)
+        self.assertIn("changed in Shotcut", line)
+        self.assertIn("1 of 3 cues differ", line)
+        self.assertIn("not read back", line)
+        self.assertIn("subtitles import", line)
+        self.assertEqual(self.path.read_bytes(), before)
+        self.assertEqual(self.data()["subtitles"]["cues"][0]["text"], "First scene.")
+
+    def test_a_moved_cue_and_an_added_cue_are_reported(self):
+        tree = self.tree()
+        text = props(self.feed(tree.getroot()))["text"].replace("00:00:00,500 --> 00:00:01,500", "00:00:00,900 --> 00:00:01,500")
+        self.set_text(tree, text)
+        self.save(tree)
+        self.assertIn("1 of 3 cues differ", self.read().subtitles[0])
+        tree = self.tree()
+        text = props(self.feed(tree.getroot()))["text"] + "\n4\n00:00:05,000 --> 00:00:05,800\nNew.\n"
+        self.set_text(tree, text)
+        self.save(tree)
+        line = self.read().subtitles[0]
+        self.assertIn("4 cues in Shotcut, 3 in the timeline file", line)
+
+    def test_a_track_made_in_shotcut_is_reported_as_such(self):
+        tree = self.tree()
+        tractor = tree.getroot().find("tractor")
+        f = ET.SubElement(tractor, "filter")
+        for k, v in (("mlt_service", "subtitle_feed"), ("feed", "Subtitle Track 2"), ("lang", "deu"),
+                     ("text", "1\n00:00:01,000 --> 00:00:02,000\nHallo.\n"), ("shotcut:hidden", "1")):
+            ET.SubElement(f, "property", name=k).text = v
+        self.save(tree)
+        report = self.read()
+        self.assertEqual(report.subtitles[1], "subtitle track Subtitle Track 2 (deu): 1 cue, made in Shotcut; not read back")
+
+    def test_a_translation_track_is_counted_and_not_compared(self):
+        from tests.test_export_lang import JA, put_translations
+        put_translations(self.work, "ja", JA)
+        export_shotcut.write_project(self.tl, str(self.work), str(self.mlt), protected=[str(self.originals)],
+                                     log=lambda s: None, check=False, subtitle_langs=("en", "ja"))
+        report = self.read()
+        self.assertEqual(report.subtitles[1],
+                         "subtitle track Japanese (jpn): 3 cues, a translation; not compared and not read back")
+
+    def test_a_film_without_a_track_has_nothing_to_say(self):
+        export_shotcut.write_project(self.tl, str(self.work), str(self.mlt), protected=[str(self.originals)],
+                                     log=lambda s: None, check=False, subtitle_langs=())
+        self.assertEqual(self.read().subtitles, [])
+
+    def test_the_command_prints_the_subtitle_lines(self):
+        tree = self.tree()
+        self.set_text(tree, props(self.feed(tree.getroot()))["text"].replace("Third scene.", "Edited."))
+        self.save(tree)
+        code, out, err = run(["import-shotcut", "--file", str(self.path), "--mlt", str(self.mlt)])
+        self.assertEqual(code, 0, err)
+        self.assertIn("Subtitles in the project", out)
+        self.assertIn("changed in Shotcut", out)
+
+    def test_export_shotcut_takes_the_languages_of_the_tracks(self):
+        from tests.test_export_lang import JA, put_translations
+        put_translations(self.work, "ja", JA)
+        out_path = self.work / "cli-lang.mlt"
+        code, out, err = run(["export-shotcut", "--file", str(self.path), "--work", str(self.work), "--out", str(out_path),
+                              "--no-check", "--lang", "en,ja"])
+        self.assertEqual(code, 0, err)
+        self.assertIn("English", out)
+        self.assertIn("Japanese", out)
+        feeds = [f for f in ET.parse(out_path).getroot().find("tractor").findall("filter")
+                 if props(f).get("mlt_service") == "subtitle_feed"]
+        self.assertEqual([props(f)["lang"] for f in feeds], ["eng", "jpn"])
+        code, out, err = run(["export-shotcut", "--file", str(self.path), "--work", str(self.work), "--out", str(out_path),
+                              "--no-check", "--lang", "none"])
+        self.assertEqual(code, 0, err)
+        self.assertNotIn("subtitle_feed", out_path.read_text())
+        code, out, err = run(["export-shotcut", "--file", str(self.path), "--work", str(self.work), "--out", str(out_path),
+                              "--no-check", "--lang", "fr"])
+        self.assertEqual(code, 1)
+        self.assertIn("fr", err)
 
 
 class CommandTests(ImportFixture):

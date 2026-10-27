@@ -199,6 +199,13 @@ TEXT_LANG_STYLE = {
     "th": {"font": "NotoSansThai-SemiBold.ttf", "family": "Noto Sans Thai", "line_height_em": 1.45, "needs_raqm": True,
            "source": "https://github.com/notofonts/thai"},
 }
+# The subtitle tracks of the Shotcut project (SPECS 8.6, step 6). Shotcut 24 and later keeps a subtitle track as a
+# `subtitle_feed` filter on the tractor: `feed` is the name of the track, `lang` its three-letter code (the one
+# QLocale.languageToCode(.., ISO639Part2) gives in Shotcut), `text` the SRT document.
+SHOTCUT_SUBTITLE_TRACKS = {
+    "en": ("English", "eng"), "pt-BR": ("Portuguese (Brazil)", "por"), "zh-Hans": ("Chinese (Simplified)", "zho"),
+    "th": ("Thai", "tha"), "de": ("German", "deu"), "ja": ("Japanese", "jpn"), "ru": ("Russian", "rus"),
+}
 # The credit line that goes into <film>.credit.txt for the fonts that were drawn into the film. The OFL does not ask for a
 # credit in a film made with a font; the line says which fonts and under which licence, for the video description.
 TEXT_FONT_LICENCE = "SIL Open Font License 1.1 (https://openfontlicense.org/)"

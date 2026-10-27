@@ -27,6 +27,29 @@
   machine; the same with the 44 subtitles of the first shoot in 173 s. No black bar. With the window centred about 3 of
   15 scenes need a hand crop.
 
+### Added (step 6, burned-in translations)
+- Subtitles in Japanese, Simplified Chinese and Thai can be burned into the film and into a short: `render --export NAME
+  --lang LANG` and `short --file FILE --lang LANG` (LANG: pt-BR, zh-Hans, th, de, ja, ru, or en). The text of each cue is
+  the translation that `subtitles translate` left in the cache (`translate.final_texts`, `translate.localize`), drawn into
+  `<film>.<lang>.<ext>`; the English film stays. Japanese uses Noto Sans JP Bold, Chinese Noto Sans SC Bold and Thai
+  Noto Sans Thai SemiBold (SIL Open Font License 1.1) from the folder `VET_NOTO_FONT_DIR`; titles and the Latin
+  languages stay in Inter. Thai is laid out with raqm and stops with a message when Pillow has none. Line heights, measured:
+  Thai 1.45 em, Japanese and Chinese 1.3 em, Inter 1.2 em. Lines are cut at phrase boundaries inside the safe width in
+  the real font; a cue that needs more than two lines becomes cues of two lines that share its time. Every cue of a
+  short names the cue of the film it came from (`x_film_cue`). The credit file of a film that burns text lists the fonts
+  and their licence after the line of the LUT.
+- The first real run (`SPECS.md` 9.13): a 30.7 s excerpt of the first shoot rendered in Japanese, Chinese and Thai from the
+  `.braw` files (122, 113 and 115 s, 44.4 Mbit/s, -14.06 LUFS, true peak -1.58 dBTP) and a 30 s short in Japanese.
+
+### Added (step 6, Shotcut project)
+- `export-shotcut` writes the film's cues as a subtitle track of the project, the way Shotcut 24 and later keeps it (read in
+  Shotcut's source and accepted by `melt` 7.41.0): a `subtitle_feed` filter on the tractor with `feed`, `lang` and the SRT in
+  `text`, and a `subtitle` filter that draws the first track. `--lang en,ja` writes more tracks from the translations,
+  `--lang none` none. `import-shotcut` does not read subtitle tracks back (decision of the build, written into `SPECS.md` 8.6);
+  it reports each track, says whether the English one was changed in Shotcut and how to keep the changes.
+- Measured with `melt`: the creative LUT of the Shotcut project does not tint the black bars of a wide clip (they stay
+  (0, 0, 0), also with the slay Film cube that lifts black), so the export needed no change; a test guards it.
+
 ### Changed (step 6, hand crops)
 - The first short of 60 s was planned and rendered again with hand crops for four scenes (`scenes crop`: film scenes s125
   `x 0.40`, s128 `x 0.29`, s046 `x 0.23`, s002 `x 0.78`), looked at on the stills and the new contact sheet

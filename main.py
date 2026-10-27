@@ -31,6 +31,7 @@ Usage:
 import argparse
 import json
 import os
+import re
 import sys
 import time
 from fractions import Fraction
@@ -1552,14 +1553,23 @@ def cmd_export_shotcut(args):
         fail(str(e), 1)
     work_dir = _work_dir_of(args, fail)
     out = args.out or os.path.join(work_dir, "film.mlt")
+    langs = [] if args.lang.strip().lower() == "none" else [x for x in re.split(r"[,\s]+", args.lang) if x]
+    by_lower = {c.lower(): c for c in config.SHOTCUT_SUBTITLE_TRACKS}
+    bad = [x for x in langs if x.lower() not in by_lower]
+    if bad:
+        fail(f"unknown language {', '.join(bad)}. The languages are: {', '.join(config.SHOTCUT_SUBTITLE_TRACKS)}, or none.", 1)
+    langs = [by_lower[x.lower()] for x in langs]
     try:
         result = export_shotcut.write_project(tl, work_dir, out, protected=timeline_originals(tl.data),
-                                              check=not args.no_check,
+                                              check=not args.no_check, subtitle_langs=langs,
                                               log=lambda s: print(s, flush=True))
     except (export_shotcut.ShotcutError, safety.OriginalsProtectedError) as e:
         fail(str(e), 1)
     print(f"Shotcut project: {result.path}  ({result.segments} scenes, profile "
           f"{result.profile[0]}x{result.profile[1]})")
+    if result.subtitle_tracks:
+        print(f"Subtitle tracks: {', '.join(result.subtitle_tracks)} (the first is drawn over the picture; they are "
+              "not read back by import-shotcut)")
     for w in result.warnings:
         print(f"  warning: {w}")
     print("Open it in Shotcut for hand work, save it, then: python main.py import-shotcut")
@@ -1602,6 +1612,10 @@ def cmd_import_shotcut(args):
     if report.ignored:
         print("Not read (made in Shotcut, they do not come back):")
         for line in report.ignored:
+            print(f"  - {line}")
+    if report.subtitles:
+        print("Subtitles in the project (never read back; the film's subtitles are in the timeline file):")
+        for line in report.subtitles:
             print(f"  - {line}")
 
 
@@ -2041,6 +2055,9 @@ def build_parser():
     p_xs.add_argument("--work", "-w", help="Work folder (default: work_dir of the project file)")
     p_xs.add_argument("--out", metavar="FILE", help="The project file to write (default: <work>/film.mlt)")
     p_xs.add_argument("--no-check", action="store_true", help="Do not read the project with melt")
+    p_xs.add_argument("--lang", default=config.SUBTITLE_LANGUAGE, metavar="LANGS",
+        help="The subtitle tracks of the project, a list such as en,ja (default: en; none for no track). The first "
+             "is drawn over the picture; a translation must have been made with `subtitles translate`")
     p_xs.set_defaults(func=cmd_export_shotcut)
     p_is = subparsers.add_parser("import-shotcut",
         help="Read the cut points and the order back from the saved Shotcut project")

@@ -61,6 +61,7 @@ class ImportReport:
     added: list = field(default_factory=list)         # ids of new segments
     removed: list = field(default_factory=list)       # ids that are now disabled
     ignored: list = field(default_factory=list)       # what was seen in the project and not read
+    subtitles: list = field(default_factory=list)     # what the subtitle tracks of the project hold (never read back)
     findings: list = field(default_factory=list)      # warnings of the validator
 
     @property
@@ -69,7 +70,7 @@ class ImportReport:
 
     def as_dict(self) -> dict:
         return {"changed": self.changed, "moved": self.moved, "added": self.added,
-                "removed": self.removed, "ignored": self.ignored}
+                "removed": self.removed, "ignored": self.ignored, "subtitles": self.subtitles}
 
 
 # ── Reading the XML ─────────────────────────────────────────────
@@ -251,6 +252,54 @@ def note_other_edits(project: Project, report: ImportReport) -> None:
                 report.ignored.append(f"transition {props.get('mlt_service', '?')}")
 
 
+def _cues(n: int) -> str:
+    return f"{n} cue" + ("" if n == 1 else "s")
+
+
+def note_subtitles(project: Project, report: ImportReport, data: dict) -> None:
+    """Say what the subtitle tracks of the project hold (SPECS 8.6). They are not read back: a cue of the film belongs
+    to a scene and moves with it, and a track in Shotcut has film times only. The English track the writer made is
+    compared with the film's cues, so that an edit made in Shotcut is named and not lost without a word; a translation
+    is counted; a track made in Shotcut is reported as that."""
+    import config
+    spans = words.cue_spans(data)
+    names = {name: lang for lang, (name, code) in config.SHOTCUT_SUBTITLE_TRACKS.items()}
+    frame = 1.0 / project.fps
+    for t in project.root.findall("tractor"):
+        for f in t.findall("filter"):
+            props = _props(f)
+            if props.get("mlt_service") != "subtitle_feed" or "text" not in props:
+                continue
+            name, code = props.get("feed", "?"), props.get("lang", "?")
+            head = f"subtitle track {name} ({code}): "
+            try:
+                cues = words.parse_srt(props["text"])
+            except words.WordsError:
+                report.subtitles.append(head + "the text is not an SRT document; not read back")
+                continue
+            lang = names.get(name)
+            if props.get(OWN) != "1":
+                report.subtitles.append(head + f"{_cues(len(cues))}, made in Shotcut; not read back")
+            elif lang != config.SUBTITLE_LANGUAGE:
+                report.subtitles.append(head + f"{_cues(len(cues))}, a translation; not compared and not read back")
+            else:
+                differ = sum(1 for a, b in zip(cues, spans)
+                             if abs(a["start_s"] - b["start_s"]) > frame + 1e-3 or abs(a["end_s"] - b["end_s"]) > frame + 1e-3
+                             or " ".join(a["text"].split()) != " ".join(b["text"].split()))
+                if len(cues) != len(spans):
+                    report.subtitles.append(
+                        head + f"changed in Shotcut ({len(cues)} cues in Shotcut, {len(spans)} in the timeline file); "
+                        "not read back. To keep the changes, save the track from Shotcut as an SRT file and run: "
+                        "python main.py subtitles import FILE.srt --replace")
+                elif differ:
+                    report.subtitles.append(
+                        head + f"changed in Shotcut ({differ} of {len(cues)} cues differ); not read back. To keep the "
+                        "changes, save the track from Shotcut as an SRT file and run: "
+                        "python main.py subtitles import FILE.srt --replace")
+                else:
+                    report.subtitles.append(head + f"{_cues(len(cues))}, as the tool wrote them")
+
+
 # ── Writing the cuts into the timeline data ─────────────────────
 
 def _next_number(segments) -> int:
@@ -333,8 +382,10 @@ def read_back(project_path: str, timeline_path: str, dry_run: bool = False, file
     report = ImportReport()
     entries = video_entries(project, tl.data["sources"], report)
     note_other_edits(project, report)
+    note_subtitles(project, report, tl.data)
     new_data, applied = apply_entries(tl.data, entries)
     applied.ignored = report.ignored + [i for i in applied.ignored if i not in report.ignored]
+    applied.subtitles = report.subtitles
     new = timeline.Timeline(new_data, tl.duplicates)
     findings = new.validate(file_checks=file_checks)
     errors = [f for f in findings if f.level == "error"]

@@ -19,6 +19,7 @@ import export_shotcut
 import loudness
 import render
 import timeline
+import words
 from tests import media
 from tests.test_export import ExportFixture, W, H, FPS, RATE
 
@@ -271,6 +272,197 @@ class RefusalTests(ShotcutFixture):
         broken.write_text(text)
         with self.assertRaises(export_shotcut.ShotcutError):
             export_shotcut.check_with_melt(str(broken), frames=10)
+
+
+CUES = [
+    {"id": "c001", "anchor": "s001", "start_s": 0.5, "end_s": 1.5, "text": "First scene.", "origin": "manual"},
+    {"id": "c002", "anchor": "s002", "start_s": 0.5, "end_s": 1.5, "text": "Second scene\nwith bars.", "origin": "manual"},
+    {"id": "c003", "anchor": "s003", "start_s": 0.5, "end_s": 1.5, "text": "Third scene.", "origin": "manual"},
+]
+
+
+class SubtitleTrackTests(ShotcutFixture):
+    """Step 6: the film's cues as a subtitle track of the project (SPECS 8.6). Shotcut 24 and later keep a subtitle
+    track as a `subtitle_feed` filter on the tractor: `feed` is the name of the track, `lang` its three-letter code and
+    `text` the whole SRT document. The Subtitle filter (`subtitle`, with the same `feed`) draws it."""
+
+    def tl_with_cues(self, cues=CUES):
+        tl = self.make_tl(loud=False)
+        tl.data["subtitles"] = {"language": "en", "cues": [dict(c) for c in cues]}
+        return tl
+
+    def project(self, tl=None, name=None, **kw):
+        name = name or self.id().split(".")[-1]
+        work = self.root / f"work-{name}"
+        return self.make_project(tl or self.tl_with_cues(), work, **kw)
+
+    def feeds(self, root):
+        tractor = root.find("tractor")
+        return [f for f in tractor.findall("filter") if props(f).get("mlt_service") == "subtitle_feed"]
+
+    def burns(self, root):
+        tractor = root.find("tractor")
+        return [f for f in tractor.findall("filter") if props(f).get("mlt_service") == "subtitle"]
+
+    def test_the_default_is_one_english_track_on_the_tractor_with_the_srt_of_the_film(self):
+        r, root, work = self.project()
+        feeds = self.feeds(root)
+        self.assertEqual(len(feeds), 1)
+        p = props(feeds[0])
+        self.assertEqual((p["feed"], p["lang"]), ("English", "eng"))
+        self.assertEqual(p["shotcut:hidden"], "1")
+        self.assertEqual(p["vet:own"], "1")
+        self.assertIsNone(feeds[0].get("track"))                         # the tractor's own filter, not a track's
+        parsed = words.parse_srt(p["text"])
+        self.assertEqual([c["text"] for c in parsed], ["First scene.", "Second scene\nwith bars.", "Third scene."])
+        # film times: the scenes are 60 frames long
+        self.assertAlmostEqual(parsed[0]["start_s"], 0.5, delta=0.001)
+        self.assertAlmostEqual(parsed[1]["start_s"], 60 * 1001 / 30000 + 0.5, delta=0.04)
+        self.assertAlmostEqual(parsed[2]["end_s"], 120 * 1001 / 30000 + 1.5, delta=0.04)
+        self.assertEqual(r.subtitle_tracks, ["English"])
+
+    def test_the_subtitle_filter_that_draws_the_first_track_comes_after_the_feed(self):
+        r, root, work = self.project()
+        burns = self.burns(root)
+        self.assertEqual(len(burns), 1)
+        p = props(burns[0])
+        self.assertEqual((p["feed"], p["shotcut:filter"], p["vet:own"]), ("English", "subtitles", "1"))
+        self.assertEqual((p["halign"], p["valign"]), ("center", "bottom"))
+        tractor = root.find("tractor")
+        filters = [f for f in tractor.findall("filter") if f.get("track") is None]
+        self.assertEqual([props(f)["mlt_service"] for f in filters], ["subtitle_feed", "subtitle"])
+
+    def test_a_translation_is_a_track_of_its_own_and_only_the_first_is_drawn(self):
+        from tests.test_export_lang import JA, put_translations
+        name = self.id().split(".")[-1]
+        work = self.root / f"work-{name}"
+        work.mkdir(exist_ok=True)
+        put_translations(work, "ja", JA)
+        r, root, work = self.make_project(self.tl_with_cues(), work, subtitle_langs=("en", "ja"))
+        feeds = self.feeds(root)
+        self.assertEqual([(props(f)["feed"], props(f)["lang"]) for f in feeds], [("English", "eng"), ("Japanese", "jpn")])
+        ja = words.parse_srt(props(feeds[1])["text"])
+        self.assertEqual([c["text"].replace("\n", "") for c in ja], list(JA.values()))
+        self.assertEqual(len(self.burns(root)), 1)
+        self.assertEqual(props(self.burns(root)[0])["feed"], "English")
+
+    def test_a_language_without_translations_stops_the_export_and_names_the_command(self):
+        with self.assertRaises(export_shotcut.ShotcutError) as cm:
+            self.project(subtitle_langs=("en", "th"))
+        self.assertIn("subtitles translate", str(cm.exception))
+        self.assertFalse((self.root / f"work-{self.id().split('.')[-1]}" / "film.mlt").exists())
+
+    def test_no_track_without_cues_or_when_none_is_asked_for(self):
+        r, root, work = self.project(self.make_tl(loud=False), name="nocues")
+        self.assertEqual((self.feeds(root), self.burns(root)), ([], []))
+        self.assertEqual(r.subtitle_tracks, [])
+        r, root, work = self.project(subtitle_langs=(), name="none")
+        self.assertEqual((self.feeds(root), self.burns(root)), ([], []))
+
+    def test_the_cues_of_a_scene_that_is_switched_off_are_not_in_the_track(self):
+        tl = self.tl_with_cues()
+        tl.data["segments"][1]["enabled"] = False
+        r, root, work = self.project(tl)
+        parsed = words.parse_srt(props(self.feeds(root)[0])["text"])
+        self.assertEqual([c["text"] for c in parsed], ["First scene.", "Third scene."])
+        # the third scene now starts at frame 60
+        self.assertAlmostEqual(parsed[1]["start_s"], 60 * 1001 / 30000 + 0.5, delta=0.04)
+
+    def test_the_subtitle_text_is_xml_escaped_and_comes_back_whole(self):
+        tl = self.tl_with_cues([dict(CUES[0], text="Salt & pepper <fresh> \"now\".")])
+        r, root, work = self.project(tl)
+        parsed = words.parse_srt(props(self.feeds(root)[0])["text"])
+        self.assertEqual(parsed[0]["text"], "Salt & pepper <fresh> \"now\".")
+
+    @unittest.skipUnless(HAVE_MELT, "melt (Shotcut) is not installed")
+    def test_melt_reads_the_track_and_keeps_it_when_it_writes_the_project_again(self):
+        r, root, work = self.project()
+        info = export_shotcut.check_with_melt(r.path, frames=30)
+        self.assertEqual(info["frames_rendered"], 30)
+        text = Path(r.path).read_text().replace(' producer="main_bin"', "")
+        probe = work / "again.mlt"
+        again = work / "again-out.mlt"
+        probe.write_text(text)
+        done = subprocess.run([MELT, str(probe), "in=0", "out=0", "-consumer", f"xml:{again}"],
+                              capture_output=True, text=True, env=export_shotcut.melt_env())
+        self.assertEqual(done.returncode, 0, done.stderr)
+        back = ET.parse(again).getroot()
+        # melt writes the loaded project as one producer that stands for the tractor, with the tractor's filters on it
+        feeds = [f for f in back.iter("filter") if props(f).get("mlt_service") == "subtitle_feed"]
+        self.assertEqual(len(feeds), 1)
+        self.assertEqual(props(feeds[0])["feed"], "English")
+        self.assertEqual(words.parse_srt(props(feeds[0])["text"])[0]["text"], "First scene.")
+
+    @unittest.skipUnless(HAVE_MELT, "melt (Shotcut) is not installed")
+    def test_melt_draws_the_cue_on_its_frames_and_on_no_other(self):
+        name = self.id().split(".")[-1]
+        with_text, root, work = self.project(name=name + "-with")
+        plain, root2, work2 = self.project(subtitle_langs=(), name=name + "-without")
+        frames = {}
+        for label, res in (("with", with_text), ("without", plain)):
+            text = Path(res.path).read_text().replace(' producer="main_bin"', "")
+            mlt = self.root / f"melt-{name}-{label}.mlt"
+            mlt.write_text(text)
+            out = self.root / f"melt-{name}-{label}.mp4"
+            subprocess.run([MELT, str(mlt), "-consumer", f"avformat:{out}", "an=1", "vcodec=libx264", "crf=8",
+                            "preset=veryfast", "pix_fmt=yuv420p", "real_time=-1"], capture_output=True,
+                           env=export_shotcut.melt_env(), check=True)
+            frames[label] = media.read_yuv_frames(out, 160, 90)
+        diff = lambda f: float(np.abs(frames["with"][f][0].astype(int) - frames["without"][f][0].astype(int)).sum())
+        self.assertGreater(diff(25), 200)            # 0.83 s: inside the first cue (0.5 s to 1.5 s)
+        self.assertLess(diff(5), 5)                  # before it
+        self.assertLess(diff(50), 5)                 # after it, before the next
+
+
+TINT_CUBE = "LUT_3D_SIZE 2\n" + "\n".join(
+    f"{r} {g} {0.2 + 0.8 * b}" for b in (0, 1) for g in (0, 1) for r in (0, 1)) + "\n"     # black becomes (0, 0, 51)
+
+
+@unittest.skipUnless(HAVE_MELT, "melt (Shotcut) is not installed")
+class LetterboxLutTests(ShotcutFixture):
+    """Step 6, SPECS 8.6 (measured on the first shoot with the slay Film cube, which lifts black to (0, 4, 14)): the
+    creative LUT is a filter on the video track, and MLT adds the black bars of a wide preview copy before it. Does the
+    LUT tint the bars? One frame of the project is rendered by melt (no window) and the pixels of the bars are read. The
+    cube here lifts black to (0, 0, 51), so a tinted bar would be clear in the numbers."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        (cls.luts / "tint.cube").write_text(TINT_CUBE)
+
+    def frame(self, tl, film_frame, name):
+        work = self.root / f"work-{name}"
+        r, root, work = self.make_project(tl, work)
+        text = Path(r.path).read_text().replace(' producer="main_bin"', "").replace("avformat-novalidate", "avformat")
+        mlt = work / "frame.mlt"
+        mlt.write_text(text)
+        png = work / "frame.png"
+        if png.exists():
+            png.unlink()
+        done = subprocess.run([MELT, str(mlt), f"in={film_frame}", f"out={film_frame}", "-consumer", f"avformat:{png}",
+                               "vcodec=png", "pix_fmt=rgb24", "real_time=-1"], capture_output=True, text=True,
+                              env=export_shotcut.melt_env())
+        self.assertEqual(done.returncode, 0, done.stderr[-400:])
+        from PIL import Image
+        return np.asarray(Image.open(png).convert("RGB")).astype(int)
+
+    def test_the_bars_of_a_wide_clip_stay_black_when_the_creative_lut_lifts_black(self):
+        tl = self.make_tl(lut=self.luts / "tint.cube", loud=False)
+        a = self.frame(tl, 90, "tint-wide")                  # film frame 90 is in the scene of the wide clip B
+        self.assertEqual(a.shape, (90, 160, 3))
+        bar = np.concatenate([a[:10].reshape(-1, 3), a[-10:].reshape(-1, 3)])
+        self.assertEqual(bar.max(), 0, "the LUT tinted the bars of the letterbox")
+        picture = a[12:78].reshape(-1, 3)
+        self.assertGreaterEqual(picture[:, 2].min(), 50)     # the picture has the lifted blue: the LUT acts
+
+    def test_the_same_cube_on_a_scene_without_bars_tints_everything(self):
+        tl = self.make_tl(lut=self.luts / "tint.cube", loud=False)
+        a = self.frame(tl, 30, "tint-full")                  # film frame 30 is in a scene of the full clip A
+        self.assertGreaterEqual(a[:, :, 2].min(), 50)
+
+    def test_without_a_creative_lut_the_bars_are_black_too(self):
+        a = self.frame(self.make_tl(loud=False), 90, "tint-none")
+        self.assertEqual(np.concatenate([a[:10].reshape(-1, 3), a[-10:].reshape(-1, 3)]).max(), 0)
 
 
 @unittest.skipUnless(HAVE_MELT, "melt (Shotcut) is not installed")

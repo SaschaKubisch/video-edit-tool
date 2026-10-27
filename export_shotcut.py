@@ -40,6 +40,8 @@ import render
 import safety
 import timeline
 import tools
+import translate
+import words
 
 SHOTCUT_VERSION = "26.9.28"          # the version the writer was tested against
 MELT = "/Applications/Shotcut.app/Contents/MacOS/melt"
@@ -171,6 +173,7 @@ class ProjectResult:
     profile: tuple = ()
     shotcut_version: str = ""
     warnings: list = field(default_factory=list)
+    subtitle_tracks: list = field(default_factory=list)      # the names of the subtitle tracks written
 
 
 def segment_gains(tl, plan, loader=None, cache=None) -> tuple:
@@ -188,9 +191,37 @@ def segment_gains(tl, plan, loader=None, cache=None) -> tuple:
     return gains, mix.levels, mix.warnings
 
 
-def build_project(tl, work_dir: str, audio_files: dict, gains_db: dict, profile=None) -> ET.Element:
+def subtitle_tracks(tl, work_dir: str, langs) -> list:
+    """The subtitle tracks of the project, one per language in `langs` ("en" and the codes of the translations): a list
+    of {"name", "lang" (three letters), "text" (the SRT document with film times)}. The English text is the film's
+    cues as `subtitles export` writes them; another language is what `subtitles translate` left in the cache. A film
+    without cues has no track. A language that was not translated is an error that names the command."""
+    spans = words.cue_spans(tl.data)
+    out = []
+    if not spans:
+        return out
+    for lang in langs:
+        if lang not in config.SHOTCUT_SUBTITLE_TRACKS:
+            raise ShotcutError(f"unknown language {lang!r}; the languages are: "
+                               f"{', '.join(config.SHOTCUT_SUBTITLE_TRACKS)}")
+        name, code = config.SHOTCUT_SUBTITLE_TRACKS[lang]
+        if lang == config.SUBTITLE_LANGUAGE:
+            text = words.srt_text(spans, words.RULES_FACTORY(tl.data))
+        else:
+            try:
+                final = translate.final_texts(spans, work_dir, lang)
+            except translate.TranslateError as e:
+                raise ShotcutError(str(e))
+            text = words.srt_text([dict(s, text="\n".join(translate.wrap_translation(final[s["id"]], lang)))
+                                   for s in spans])
+        out.append({"name": name, "lang": code, "text": text})
+    return out
+
+
+def build_project(tl, work_dir: str, audio_files: dict, gains_db: dict, profile=None, subtitles=()) -> ET.Element:
     """The MLT XML tree of the timeline `tl` (SPECS 8.6). `audio_files` maps a clip id to the
-    path of its shifted WAV, `gains_db` a segment id to its gain in dB."""
+    path of its shifted WAV, `gains_db` a segment id to its gain in dB. `subtitles` are the
+    tracks of `subtitle_tracks`."""
     data = tl.data
     plan = render.make_plan(tl, preview_width=None)
     fps = data["film"]["fps"]
@@ -349,7 +380,31 @@ def build_project(tl, work_dir: str, audio_files: dict, gains_db: dict, profile=
         curve = segs[k].curve_in
         track_filter(track_of[segs[k - 1].id], "volume", f0 - h, f0 + h - 1, level=_fade_keys(2 * h, curve, False))
         track_filter(track_of[segs[k].id], "volume", f0 - h, f0 + h - 1, level=_fade_keys(2 * h, curve, True))
+    _subtitle_filters(tr, subtitles, int(root.find("profile").get("height")))
     return root
+
+
+def _subtitle_filters(tractor, tracks, h_profile: int) -> None:
+    """The subtitle tracks as Shotcut 24 and later keeps them (the source of Shotcut: subtitlesmodel.cpp,
+    subtitlesdock.cpp): one `subtitle_feed` filter on the tractor for each track, `feed` the name, `lang` the code,
+    `text` the SRT, hidden in the filter list (`shotcut:hidden`); and, for the first track, the `subtitle` filter that
+    draws it (`shotcut:filter` `subtitles`, `feed` the same name), with the values of Shotcut's own "Burn in on
+    timeline" (white, outlined, the lower middle, the size a twentieth of the height). The feeds come before the filter
+    that draws them. Every one is marked as the writer's own."""
+    def add(**props):
+        f = ET.SubElement(tractor, "filter")
+        for k, v in props.items():
+            _prop(f, k.replace("__", ":"), v)
+        _prop(f, OWN, 1)
+        return f
+
+    for t in tracks:
+        add(mlt_service="subtitle_feed", feed=t["name"], lang=t["lang"], text=t["text"], shotcut__hidden=1)
+    if tracks:
+        add(mlt_service="subtitle", shotcut__filter="subtitles", feed=tracks[0]["name"], family="Helvetica",
+            fgcolour="#ffffffff", bgcolour="#00000000", olcolour="#aa000000", outline=3, weight=700, style="normal",
+            shotcut__usePointSize=1, size=max(1, h_profile // 20), geometry="20%/75%:60%x20%", valign="bottom",
+            halign="center", typewriter=0)
 
 
 def _profile_size(tl) -> tuple:
@@ -370,11 +425,13 @@ def _profile_size(tl) -> tuple:
 
 
 def write_project(tl, work_dir: str, out_path: str = None, protected=None, loader=None, cache=None,
-                  ffmpeg: str = None, log=print, check: bool = True) -> ProjectResult:
+                  ffmpeg: str = None, log=print, check: bool = True,
+                  subtitle_langs=(config.SUBTITLE_LANGUAGE,)) -> ProjectResult:
     """Write the Shotcut project of the timeline `tl` (SPECS 8.6): the shifted WAV files in
     `<work_dir>/audio-synced/`, then `film.mlt` (or `out_path`), written atomically; with
     `check` it is read by melt before this returns. A Shotcut version other than the tested
-    one is a warning."""
+    one is a warning. `subtitle_langs` are the subtitle tracks (SPECS 8.6): the film's English cues by default, more
+    languages when they were translated, none with an empty list; the first is drawn."""
     out_path = out_path or os.path.join(work_dir, "film.mlt")
     if tl.data.get("kind") == "short" or tl.data["film"].get("fit") == "fill":
         raise ShotcutError("A short has no Shotcut project: the project has no 9:16 window (fill and crop), so Shotcut "
@@ -405,7 +462,9 @@ def write_project(tl, work_dir: str, out_path: str = None, protected=None, loade
     gains, levels, warnings = segment_gains(tl, plan, loader, cache)
     result.gains_db = gains
     result.warnings += warnings
-    root = build_project(tl, work_dir, result.audio_files, gains)
+    tracks = subtitle_tracks(tl, work_dir, list(subtitle_langs or ()))
+    result.subtitle_tracks = [t["name"] for t in tracks]
+    root = build_project(tl, work_dir, result.audio_files, gains, subtitles=tracks)
     result.profile = (int(root.find("profile").get("width")), int(root.find("profile").get("height")))
     ET.indent(root, space="  ")
     text = '<?xml version="1.0" standalone="no"?>\n' + ET.tostring(root, encoding="unicode") + "\n"

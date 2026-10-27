@@ -57,7 +57,7 @@ when you run the command again.
 preview copies, because Shotcut cannot read BRAW) and `DIR/audio-synced/`, and checks the project with Shotcut's
 `melt` without opening Shotcut. After the hand work, `main.py import-shotcut --work DIR` reads the cut points and
 the order back into the timeline file (the old file is kept as a snapshot); filters, transitions and audio edits made
-in Shotcut do not come back, and the command lists them. Then `render` makes the 4K film from the `.braw` files.
+in Shotcut do not come back, and the command lists them. Then `render` makes the 4K film from the `.braw` files. The film's subtitles go into the project as a subtitle track, the form Shotcut 24 and later keeps (`--lang en,ja` for more tracks, `--lang none` for none; a translation must have been made with `subtitles translate`); the first track is drawn over the picture and all of them are in Shotcut's Subtitles panel. `import-shotcut` does not read them back; it says whether the English track was changed in Shotcut and how to keep the changes (save the track as an SRT file, then `subtitles import FILE.srt --replace`). The creative LUT does not tint the black bars of a wide clip in Shotcut (measured with `melt`).
 
 **Sync offset per clip.** The tool measures one offset per clip when it matches the files (the seconds by which a sound comes later in the recorder's file than in the camera's). If one is wrong, the Film tab has a card, Sync offset per clip: type the right offset in seconds (a minus sign is allowed). The tool stores it in the timeline file as `audio_offset_hand_s`, beside the measured `audio_offset_s`, which is never changed. The sound of that clip's scenes uses the typed offset; the pictures do not change, so the next preview renders only sound again. Empty the field, or press Original, to use the measured offset again. A value beyond 30 seconds is refused, and a typed offset that leaves the recorder file without sound for a scene is a warning. `timeline summary` lists the offsets set by hand, and `assemble --replace` keeps them. `project.json` is not written. `PRD.md` and `SPECS.md` describe the plan and say which parts are built.
 
@@ -142,8 +142,19 @@ EOF
 
 Times in the files are film seconds (a cue or title with `"anchor": "s017"` counts from the start of that scene). Every
 command goes through the validator and keeps the old file as a snapshot (`timeline undo`). `subtitles check` reports
-cues that do not fit the safe area. Not built: burned-in subtitles in Chinese, Japanese or Thai (Inter has no such
-glyphs; the SRT files are fine) and subtitles and titles in the Shotcut project. See `SPECS.md` section 9.
+cues that do not fit the safe area. Not built: titles in the Shotcut project (the film's subtitles are in it as a
+subtitle track, see the Shotcut paragraph above). See `SPECS.md` section 9.
+
+**Burned-in translations (Japanese, Simplified Chinese, Thai and the other three).** After `subtitles translate` has made the translations, the film or a short can be rendered with its subtitles drawn in a language:
+
+```bash
+export VET_NOTO_FONT_DIR=/Volumes/SSD/fonts/noto     # NotoSansJP-Bold.otf, NotoSansSC-Bold.otf, NotoSansThai-SemiBold.ttf (SIL Open Font License 1.1), not installed on the system
+.venv/bin/python main.py render --export film-4k --lang ja --work /Volumes/SSD/work        # film-4k.ja.mp4 next to film-4k.mp4
+.venv/bin/python main.py render --export film-4k --lang th --subtitles both --work /Volumes/SSD/work   # also film-4k.th.srt
+.venv/bin/python main.py short --file /Volumes/SSD/work/exports/short-60.json --lang zh-Hans --work /Volumes/SSD/work
+```
+
+The text of each cue is read from the translation cache without a request; a cue with no translation stops the render before it writes anything and names the command to run. Inter has no glyphs for these three languages, so each uses its own Noto font (Thai with Pillow's raqm layout, which the tool checks for), its own line height (Japanese and Chinese 1.3 em, Thai 1.45 em, measured) and lines cut at phrase boundaries inside the safe width of the picture. Latin letters and digits inside a cue are drawn by the same font. The English film is not touched; the file of a language has the code in its name, and its credit file (`<film>.<lang>.credit.txt`) names the font and its licence after the line of the LUT. Pt-BR, German and Russian are drawn with Inter. `SPECS.md` 9.6 and 9.13 have the numbers and the run on the first shoot.
 
 ## Prompt edits (step 5, work in progress)
 
@@ -206,7 +217,7 @@ export VET_FONT_DIR=/Volumes/SSD/fonts/inter                      # for burned-i
 
 **The window.** The 9:16 window is cut from the full-size picture: 29.7 percent of the width of a 4096 x 2160 clip and 23.6 percent of a 4096 x 1720 clip (the wide ones, which the short enlarges by 11.6 percent). It is centred unless a scene sets it with `scenes crop`. There is no subject tracking: you or Claude Code look at `scenes crop SCENE --still` (a picture of a frame with the window outlined, and what the window shows) and choose the place. A short has no black bars, because it cuts the window out of the picture instead of fitting the picture into the frame.
 
-**Subtitles and titles.** The subtitles of the film that fall in a kept stretch come along, laid out again for the 9:16 frame: two lines of about 24 characters, a long subtitle split into several, all inside the safe area (top 15, bottom 35, left 4, right 18 percent), in the same size as always. A subtitle that is cut stays only if at least 1 second, or 0.8 of it, whichever is more, stays. A title of the film goes to the scene that held its start, if that stretch is kept. The `lower_third` title sits above the bottom 35 percent too. The form of the subtitles is a setting of the export (`burned` for a short; `--subtitles srt|burned|both|none` changes it).
+**Subtitles and titles.** The subtitles of the film that fall in a kept stretch come along, laid out again for the 9:16 frame: two lines of about 24 characters, a long subtitle split into several, all inside the safe area (top 15, bottom 35, left 4, right 18 percent), in the same size as always. A subtitle that is cut stays only if at least 1 second, or 0.8 of it, whichever is more, stays. A title of the film goes to the scene that held its start, if that stretch is kept. The `lower_third` title sits above the bottom 35 percent too. The form of the subtitles is a setting of the export (`burned` for a short; `--subtitles srt|burned|both|none` changes it). `--lang LANG` renders the short with its subtitles in a translated language (`short-60.ja.mp4`; the plan stays English; see the section on subtitles).
 
 **Files.** `short-60.mp4`, the plan `short-60.json` next to it (a timeline file of kind `short`: edit it, validate it with `timeline validate`, render it again with `short --file short-60.json`), `short-60.credit.txt` when the LUT asks for a credit, and with `--stills` one still per scene in `short-60.stills/` and the contact sheet `short-60.contact.jpg`. The film file is not changed; only `scenes pin` and `scenes crop` write to it, on request. Planning again over an existing plan keeps the old plan as a snapshot (`timeline undo --file short-60.json`). `--detach` renders in the background with a log. `SPECS.md` section 11 has the rules and the run on the first shoot.
 
@@ -242,7 +253,7 @@ python3 main.py scenes remove|keep|restore ID[,ID...] [--dry-run] [--file timeli
 python3 main.py scenes cut SCENE --from S --to S [--dry-run] [--file timeline.json]
 python3 main.py scenes pin|unpin ID[,ID...] [--dry-run] [--file timeline.json]            # step 6
 python3 main.py scenes crop SCENE (--x X | --from A --to B | --clear) [--still] [--at S] [--dry-run]
-python3 main.py short [--file timeline.json] [--length S] [--output FILE.mp4] [--size WxH] [--prefer|--only|--exclude IDS] [--dry-run] [--no-render] [--stills] [--detach]
+python3 main.py short [--file timeline.json] [--length S] [--output FILE.mp4] [--size WxH] [--prefer|--only|--exclude IDS] [--lang LANG] [--dry-run] [--no-render] [--stills] [--detach]
 ```
 
 - `match` writes `project.json` and the thumbnails.
