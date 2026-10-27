@@ -24,6 +24,7 @@ Commands:
   render   render the final film from the .braw files (levelled sound, LUTs, DCI 4K)
   subtitles list, write, import and change the subtitles; a text box per scene; Whisper; translations
   title    add, change, remove and import titles
+  scenes   prompt edits: the scene index and sheets to read; remove, keep, cut and restore scenes
 
 Usage:
   python main.py
@@ -1237,6 +1238,74 @@ def cmd_title(args):
 
 
 
+def _originals_of(tl) -> list:
+    return sorted({str(Path(src[k]).parent) for src in tl.data["sources"].values()
+                   for k in ("original_video", "audio")})
+
+
+def cmd_scenes(args):
+    """Prompt edits (SPECS 10): the scene index and sheets Claude Code reads, and the commands that
+    remove, keep, cut and restore scenes."""
+    import edits
+    import safety
+    import sceneindex
+
+    def fail(message, code=1):
+        print(f"Error: {message}", file=sys.stderr)
+        sys.exit(code)
+
+    sub = args.scenes_command
+    tl, path = _load_timeline_or_exit(args)
+    work = _work_dir_of(args, lambda m: fail(m, 2))
+    try:
+        safety.assert_not_inside(work, _originals_of(tl))
+    except safety.OriginalsProtectedError as e:
+        fail(str(e), 2)
+
+    if sub == "frames":
+        try:
+            every = sceneindex.parse_step(args.every)
+        except ValueError as e:
+            fail(str(e), 2)
+        try:
+            result = sceneindex.draw_frames(tl, path, work, args.scene, every, from_s=args.from_s, to_s=args.to_s)
+        except sceneindex.SheetError as e:
+            fail(str(e))
+        for w in result["warnings"]:
+            print(f"warning: {w}", file=sys.stderr)
+        for p in result["paths"]:
+            print(p)
+        return
+
+    if sub == "sheets" or (sub == "index" and args.sheets):
+        try:
+            report = sceneindex.draw_sheets(tl, path, work, log=lambda m: print(m, file=sys.stderr))
+        except sceneindex.SheetError as e:
+            fail(str(e))
+        for w in report["warnings"]:
+            print(f"warning: {w}", file=sys.stderr)
+        if sub == "sheets":
+            n = len(report["drawn"]) + len(report["reused"])
+            pages = report["overview"]["drawn"] + report["overview"]["reused"]
+            print(f"Sheets of {n} scenes in {report['folder']}/sheets: {len(report['drawn'])} drawn, "
+                  f"{len(report['reused'])} kept, {len(report['deleted'])} deleted, {report['seconds']:.1f} s.")
+            print(f"Overview pages: {len(pages)} ({len(report['overview']['drawn'])} drawn): "
+                  f"{os.path.join(report['folder'], pages[0])} ... {os.path.join(report['folder'], pages[-1])}"
+                  if pages else "Overview pages: none")
+    index = sceneindex.write_index(tl, path, work)
+    print(f"Index of {os.path.basename(path)} (hash {index['timeline_hash'][:8]}): {index['scenes_in_film']} scenes "
+          f"in the film, {index['scenes_removed']} removed, film {edits.clock(index['film_seconds'])}.")
+    print(f"  {index['paths']['markdown']}")
+    print(f"  {index['paths']['json']}")
+    drawn = sum(1 for r in index["scenes"] if r["sheet"]["exists"])
+    if drawn < len(index["scenes"]):
+        print(f"  {drawn} of {len(index['scenes'])} sheets are drawn. Draw the rest: "
+              f"python main.py scenes sheets --file {path} --work {work}")
+    if index["clips_without_transcript"]:
+        print(f"  {len(index['clips_without_transcript'])} clip(s) have no transcript, so their scenes have no "
+              f"'heard' lines.")
+
+
 def cmd_export_shotcut(args):
     """Write the Shotcut project of the timeline file (SPECS 8.6)."""
     import export_shotcut
@@ -1654,6 +1723,29 @@ def build_parser():
     sp.add_argument("--replace", action="store_true", help="Remove all titles first")
     p_title.set_defaults(func=cmd_title)
 
+
+    # ── scenes ──
+    p_scenes = subparsers.add_parser("scenes",
+        help="Prompt edits: the scene index and sheets to read, and commands to remove, keep, cut and restore scenes")
+    sc = p_scenes.add_subparsers(dest="scenes_command", required=True)
+
+    def scenes_cmd(name, text, work=True):
+        sp = sc.add_parser(name, help=text)
+        sp.add_argument("--file", "-f",
+            help=f"Timeline file (default: {config.TIMELINE_FILE} next to the project file)")
+        if work:
+            sp.add_argument("--work", "-w", help="Work folder on the SSD (default: work_dir of the project file)")
+        return sp
+
+    sp = scenes_cmd("index", "Write the scene index (index.json and index.md) into <work>/index/<timeline name>/")
+    sp.add_argument("--sheets", action="store_true", help="Draw the sheets first (the same as `scenes sheets`)")
+    scenes_cmd("sheets", "Draw one still sheet per scene and the overview pages; sheets that are up to date are kept")
+    sp = scenes_cmd("frames", "A finer look inside one scene: a still every N seconds, on pages")
+    sp.add_argument("scene", help="Scene id, for example s017")
+    sp.add_argument("--every", default="1s", help="Step between stills: 1s, 0.5s or 500ms (default 1s)")
+    sp.add_argument("--from", dest="from_s", type=float, help="Start of the stretch, in film seconds (default: the scene's start)")
+    sp.add_argument("--to", dest="to_s", type=float, help="End of the stretch, in film seconds (default: the scene's end)")
+    p_scenes.set_defaults(func=cmd_scenes)
 
     # ── render ──
     p_render = subparsers.add_parser("render",
