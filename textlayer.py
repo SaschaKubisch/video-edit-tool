@@ -228,7 +228,16 @@ def title_place(frame, template: str, size: int, w: int, h: int) -> tuple:
     x = int(round(cx - w / 2.0)) if t["align"] == "center" else x0 - pad
     y_ref = t["y_pct"] / 100.0 * H
     y = int(round(y_ref - h / 2.0)) if t["y_ref"] == "center" else int(round(y_ref - h + pad))
-    return textlayout.even(x), textlayout.even(y)
+    # The text stays inside the safe area of the frame (SPECS 11.6). In a 16:9 frame the templates lie inside it
+    # already; in a 9:16 frame the bottom 35 percent are free, which the lower third (72 percent) would take.
+    # A block taller than the safe area starts at its top.
+    ink_h = h - 2 * pad
+    y = textlayout.even(y)
+    if y + pad + ink_h > safe[3]:                       # too low: up to an even row that is inside
+        y = 2 * math.floor((safe[3] - ink_h - pad) / 2.0)
+    if y + pad < safe[1]:                               # too high, or taller than the area: the top wins
+        y = 2 * math.ceil((safe[1] - pad) / 2.0)
+    return textlayout.even(x), y
 
 
 # ── Building the plan ───────────────────────────────────────────

@@ -54,6 +54,62 @@ TITLE = {"id": "t001", "text": "Sunday kitchen", "anchor": "film", "start_s": 1.
 FULL = {"s001": (0, 0, W, H), "s002": (0, 0, W, H), "s003": (0, 0, W, H)}
 
 
+def ink_rows(frame, template, text="Sunday kitchen"):
+    """The rows (top, bottom) and columns (left, right) the text of a title covers, without the room around it
+    for the outline and the shadow, found by wrapping, measuring and placing (nothing is drawn)."""
+    lines, size, _, _ = textlayer.title_lines(frame, {"id": "t001", "text": text, "template": template})
+    w, h = textlayer.title_box(frame, lines, size)
+    x, y = textlayer.title_place(frame, template, size, w, h)
+    st = config.TEXT_STYLE
+    pad = max(1, round(size * st["outline_em"])) + max(1, round(size * st["shadow_offset_em"])) \
+        + 2 * max(1, round(size * st["shadow_blur_em"]))
+    return (y + pad, y + h - pad), (x + pad, x + w - pad)
+
+
+class TitlesAndTheSafeZoneTests(unittest.TestCase):
+    """SPECS 11.6: in a 9:16 frame no text goes into the bottom 35 percent (and none into the top 15, the left 4
+    and the right 18). The lower third lay at 72 percent of the height, which is inside the bottom 35 percent
+    (found in the research for step 6)."""
+
+    VERTICAL = (1080, 1920)
+
+    def setUp(self):
+        builtin_font(self)
+
+    def test_every_template_lies_inside_the_safe_area_of_a_9_16_frame(self):
+        g = textlayout.geometry(self.VERTICAL)
+        self.assertEqual(g.safe, (43, 288, 886, 1248))
+        for template in config.TITLE_TEMPLATES:
+            for text in ("Sunday kitchen", "Sunday kitchen\nat the farm", "Sunday\nkitchen\nat the farm"):
+                (top, bottom), (left, right) = ink_rows(self.VERTICAL, template, text)
+                self.assertGreaterEqual(top, g.safe[1], (template, text))
+                self.assertLessEqual(bottom, g.safe[3], (template, text))
+                self.assertGreaterEqual(left, g.safe[0] - 1, (template, text))
+                self.assertLessEqual(right, g.safe[2] + 1, (template, text))
+
+    def test_the_lower_third_ends_at_the_bottom_of_the_safe_area_in_a_9_16_frame(self):
+        (_, bottom), _ = ink_rows(self.VERTICAL, "lower_third")
+        self.assertIn(bottom, (1247, 1248))             # rows are even; the text is placed on an even row
+
+    def test_the_lower_third_stays_at_72_percent_in_a_16_9_frame(self):
+        for frame in ((960, 540), (4096, 2160), (1920, 1080)):
+            (_, bottom), _ = ink_rows(frame, "lower_third")
+            self.assertAlmostEqual(bottom, 0.72 * frame[1], delta=1, msg=frame)
+
+    def test_the_other_templates_do_not_move_in_a_16_9_frame(self):
+        for frame in ((960, 540), (4096, 2160)):
+            for template in ("center", "opening"):
+                (top, bottom), _ = ink_rows(frame, template)
+                middle = (top + bottom) / 2
+                want = config.TITLE_TEMPLATES[template]["y_pct"] / 100 * frame[1]
+                self.assertAlmostEqual(middle, want, delta=2, msg=(frame, template))
+
+    def test_a_title_taller_than_the_safe_area_starts_at_its_top(self):
+        text = "\n".join(f"line {i}" for i in range(12))
+        (top, _), _ = ink_rows(self.VERTICAL, "center", text)
+        self.assertIn(top, (288, 289))
+
+
 class PlanTests(unittest.TestCase):
     def setUp(self):
         self.real_get_font = builtin_font(self)
