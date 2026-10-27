@@ -183,7 +183,7 @@ class RequestTests(TranslateCase):
         tl.data["subtitles"]["cues"] = [
             {"id": f"c{i + 1:03d}", "anchor": "s001", "start_s": i * 0.4, "end_s": i * 0.4 + 0.3,
              "text": f"Cue {i + 1}.", "origin": "manual"} for i in range(70)]
-        self.go(tl, "de")
+        self.go(tl, "de", shorten=False)                                        # the cues are 0.3 s long: no follow-up here
         self.assertEqual(self.server.count, 3)                                  # 30 + 30 + 10
         sizes = [len(json.loads(r["body"]["messages"][-1]["content"])["translate"]) for r in self.server.requests]
         self.assertEqual(sizes, [30, 30, 10])
@@ -291,9 +291,9 @@ class RetryTests(TranslateCase):
              "text": f"Cue {i + 1}.", "origin": "manual"} for i in range(70)]
         self.server.script = ["ok", "http500", "http500", "http500"]
         with self.assertRaises(translate.TranslateError):
-            self.go(tl, "de")
+            self.go(tl, "de", shorten=False)                                      # 0.3 s cues: no follow-up here
         before = self.server.count
-        self.go(tl, "de")
+        self.go(tl, "de", shorten=False)
         self.assertEqual(self.server.count - before, 2)                           # the first 30 cues were kept
 
 
@@ -364,6 +364,7 @@ class ReportTests(TranslateCase):
     def test_reading_speed_over_the_limit_of_a_language_is_a_warning(self):
         tl = film(1, output=str(self.out))
         tl.data["subtitles"]["cues"][0].update(start_s=1.0, end_s=2.0, text="x" * 30)           # 30 characters in 1 s
+        self.server.shorten_mode = "same"                                      # the model cannot make it shorter
         report = self.go(tl, "ja,de")
         self.assertTrue(any("ja" in w and "per second" in w for w in report["warnings"]), report["warnings"])
 

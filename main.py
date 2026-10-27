@@ -1734,6 +1734,8 @@ def build_parser():
     sp.add_argument("--export", metavar="NAME", help="The export whose film the files belong to (default: the first)")
     sp.add_argument("--model", help="The OpenRouter model (default: VET_TRANSLATE_MODEL)")
     sp.add_argument("--dry-run", action="store_true", help="Count what would be sent and the cost; send nothing")
+    sp.add_argument("--no-shorten", action="store_true",
+        help="Do not ask the model for a shorter text where a translation does not fit its cue")
     p_sub.set_defaults(func=cmd_subtitles)
 
     # ── title ──

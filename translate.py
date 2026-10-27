@@ -20,6 +20,12 @@ the files line up.
 - Translations are kept by the hash of the English text, the language and the model
   (<work>/translations/cache.json), so a second run, or a run after one cue was edited, sends only the cues
   that are new.
+- A translation that does not fit its cue (more than two lines at phrase boundaries, or read faster than its language
+  allows) is sent once more in a follow-up request, with the English text, the translation and a maximum number of
+  characters: the smaller of (2 lines x the line limit) and (reading speed x the cue's duration). The shorter text is
+  kept when it fits better; otherwise the first stays and the warning stays. The follow-up is counted in the tokens and
+  the cost and is cached under a key of its own (the maximum is part of the key). `shorten=False` or
+  `--no-shorten` switches it off.
 - Each translation is wrapped again for its language: 42 characters per line for pt-BR, de and ru, 35 for Thai
   (tone marks and vowel marks not counted), 16 for Simplified Chinese, 13 full-width characters for Japanese;
   two lines at most. A line of Chinese, Japanese or Thai has no spaces, so it is cut at the phrase boundaries that
@@ -29,6 +35,7 @@ the files line up.
 
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -231,6 +238,39 @@ def wrap_translation(text: str, lang: str) -> list:
     return layout_translation(text, lang)[0]
 
 
+def max_chars_for(lang: str, duration_s: float) -> int:
+    """The most characters a translation may have to fit its cue: the smaller of (lines x the line limit) and
+    (the reading speed of the language x the duration), rounded down, in the unit of the language (visual_len)."""
+    rule = config.TRANSLATE_LANGUAGE_RULES[lang]
+    return int(math.floor(min(config.SUBTITLE_MAX_LINES * rule["max_chars"], rule["cps"] * duration_s) + 1e-9))
+
+
+def assess(text: str, lang: str, duration_s: float) -> dict:
+    """How a translation fits its cue: {lines, speed, problems, excess}. `problems` holds "lines" (more lines than
+    the film allows), "speed" (read faster than the language allows; the speed counts the characters of the text, not
+    the break between lines) and "split" (a phrase wider than a line was cut inside). `excess` is how far over the
+    limits it is, to compare two texts that both have problems."""
+    text = flat(text)
+    rule = config.TRANSLATE_LANGUAGE_RULES[lang]
+    lines, split = layout_translation(text, lang)
+    speed = visual_len(text, lang) / max(1e-6, duration_s)
+    problems = []
+    if len(lines) > config.SUBTITLE_MAX_LINES:
+        problems.append("lines")
+    if speed > rule["cps"] + 1e-9:
+        problems.append("speed")
+    if split:
+        problems.append("split")
+    excess = max(0, len(lines) - config.SUBTITLE_MAX_LINES) + max(0.0, speed / rule["cps"] - 1.0)
+    return {"lines": lines, "speed": speed, "problems": problems, "excess": excess}
+
+
+def better(candidate: dict, first: dict) -> bool:
+    """Does the candidate (an `assess` result) fit better than the first? Fewer problems, then less excess. Equal is
+    not better: the first translation stays."""
+    return (len(candidate["problems"]), candidate["excess"]) < (len(first["problems"]), first["excess"] - 1e-9)
+
+
 # ── The cache ───────────────────────────────────────────────────
 
 def cache_path(work_dir: str) -> str:
@@ -239,6 +279,12 @@ def cache_path(work_dir: str) -> str:
 
 def cache_key(model: str, lang: str, text: str) -> str:
     return hashlib.sha256(f"{model}\x00{lang}\x00{text}".encode("utf-8")).hexdigest()
+
+
+def short_cache_key(model: str, lang: str, text: str, max_chars: int) -> str:
+    """The key of the shorter translation of `text` that asked for at most `max_chars` characters. It is not the key of
+    the first translation, so the first one is never taken for the shorter one."""
+    return hashlib.sha256(f"{model}\x00{lang}\x00short\x00{max_chars}\x00{text}".encode("utf-8")).hexdigest()
 
 
 def load_cache(work_dir: str) -> dict:
@@ -317,6 +363,32 @@ def build_messages(lang: str, batch: list, before: list, after: list) -> list:
             {"role": "user", "content": json.dumps(user, ensure_ascii=False)}]
 
 
+SHORTEN_SYSTEM = """You shorten subtitle translations for a film. The target language is {name}.
+You get one JSON object with "target_language" and "shorten": a list of {{"id", "english", "translation", "max_chars"}}.
+For each item, write a shorter translation of the English text in {name}: at most "max_chars" characters.{unit}
+Answer with one JSON object and nothing else: it maps every id in "shorten" to the shorter translation, as a string.
+Rules:
+- Keep what matters most of the meaning, and keep names and numbers. Leave out detail first.
+- Natural, spoken {name}, as a good subtitler would write it. One line, without line breaks.
+- Never more than "max_chars" characters. Use every id exactly once and no other id. Never leave a translation empty.
+  Do not explain, do not add notes.
+- The film is a quiet cooking and ambient film; the speaker talks informally."""
+
+_UNIT_NOTES = {
+    "width": " A full-width character (kana, kanji, full-width punctuation) counts 1; a half-width character "
+             "(Latin letters, digits, spaces) counts 0.5.",
+    "thai": " The tone marks and vowel marks written above or below a consonant are not counted.",
+}
+
+
+def build_shorten_messages(lang: str, items: list) -> list:
+    """The follow-up request: `items` is a list of {id, english, translation, max_chars}."""
+    rule = config.TRANSLATE_LANGUAGE_RULES[lang]
+    user = {"target_language": lang, "shorten": items}
+    return [{"role": "system", "content": SHORTEN_SYSTEM.format(name=rule["name"], unit=_UNIT_NOTES.get(rule["unit"], ""))},
+            {"role": "user", "content": json.dumps(user, ensure_ascii=False)}]
+
+
 def parse_answer(content, ids: list) -> dict:
     """The translations in an answer: {id: text}. Raises _Retry when it is not what was asked for."""
     if not isinstance(content, str):
@@ -368,26 +440,101 @@ def _cost(model: str, tokens_in: int, tokens_out: int):
 
 
 def _warnings(spans, texts, lang) -> list:
-    """Readability warnings for one language: lines over the limit, more than two lines, reading faster than the
-    limit of the language. The times are the English cue's, so they are reported, not changed."""
+    """Readability warnings for one language: lines over the limit, more than two lines, a phrase cut inside, reading
+    faster than the limit of the language. The times are the English cue's, so they are reported, not changed."""
     rule = config.TRANSLATE_LANGUAGE_RULES[lang]
     out = []
     for s in spans:
-        t = texts[s["id"]]
-        lines = wrap_translation(t, lang)
-        if len(lines) > config.SUBTITLE_MAX_LINES:
-            out.append(f"{lang} {s['id']}: {len(lines)} lines")
-        dur = max(1e-6, s["end_s"] - s["start_s"])
-        speed = visual_len(" ".join(lines), lang) / dur
-        if speed > rule["cps"] + 1e-9:
-            out.append(f"{lang} {s['id']}: {speed:.1f} characters per second, more than the {rule['cps']:g} "
+        found = assess(texts[s["id"]], lang, s["end_s"] - s["start_s"])
+        if "lines" in found["problems"]:
+            out.append(f"{lang} {s['id']}: {len(found['lines'])} lines")
+        if "split" in found["problems"]:
+            out.append(f"{lang} {s['id']}: a phrase is wider than a line and was cut inside")
+        if "speed" in found["problems"]:
+            out.append(f"{lang} {s['id']}: {found['speed']:.1f} characters per second, more than the {rule['cps']:g} "
                        f"that the Netflix guide for {lang} allows")
     return out
 
 
+def _ask(client, model: str, messages: list, ids: list, report: dict, follow_up: bool = False):
+    """One request, tried config.TRANSLATE_TRIES times. Returns (the answer {id: text}, "") or (None, why it failed).
+    The tokens of every answer that comes back are added to the report, also those of an answer that cannot be used;
+    a rejected key or no credit raises TranslateError at once."""
+    why = ""
+    for attempt in range(config.TRANSLATE_TRIES):
+        if follow_up:
+            report["follow_up_requests"] += 1
+        try:
+            resp = client.chat(model, messages)
+            usage = resp.get("usage") or {}
+            report["tokens_in"] += int(usage.get("prompt_tokens") or 0)
+            report["tokens_out"] += int(usage.get("completion_tokens") or 0)
+            choice = (resp.get("choices") or [{}])[0].get("message", {}).get("content")
+            return parse_answer(choice, ids), ""
+        except _Retry as e:
+            why = str(e)
+            if attempt + 1 < config.TRANSLATE_TRIES:
+                time.sleep(config.TRANSLATE_RETRY_WAIT_SEC[min(attempt, len(config.TRANSLATE_RETRY_WAIT_SEC) - 1)])
+    return None, why
+
+
+def _shorten(client, model: str, lang: str, spans: list, firsts: dict, cache: dict, work_dir: str, report: dict,
+             log, on_batch) -> dict:
+    """The final text of every cue of one language: the first translation, or a shorter one when the first does not
+    fit the cue and the shorter one fits better. Asks the model once for each cue that does not fit and has no
+    shorter text in the cache. Returns {cue id: text}."""
+    final = dict(firsts)
+    plan = []                                           # [(span, english, max_chars, cache key, assessment of the first)]
+    for s in spans:
+        duration = max(1e-6, s["end_s"] - s["start_s"])
+        found = assess(firsts[s["id"]], lang, duration)
+        limit = max_chars_for(lang, duration)
+        if found["problems"] and limit >= config.TRANSLATE_SHORTEN_MIN_CHARS:
+            english = flat(s["text"])
+            plan.append((s, english, limit, short_cache_key(model, lang, english, limit), found))
+    pending, seen = [], set()
+    for s, english, limit, key, found in plan:
+        if key not in cache and key not in seen:
+            seen.add(key)
+            pending.append((s, english, limit, key))
+    failed = {}                                         # cache key -> why the follow-up request failed
+    for b in range(0, len(pending), config.TRANSLATE_BATCH):
+        batch = pending[b:b + config.TRANSLATE_BATCH]
+        items = [{"id": s["id"], "english": english, "translation": firsts[s["id"]], "max_chars": limit}
+                 for s, english, limit, key in batch]
+        ids = [i["id"] for i in items]
+        answer, why = _ask(client, model, build_shorten_messages(lang, items), ids, report, follow_up=True)
+        on_batch(f"{lang}: asked for shorter texts of {min(b + len(batch), len(pending))} of {len(pending)} cues")
+        report["follow_up_cues"] += len(batch)
+        if answer is None:
+            for s, english, limit, key in batch:
+                failed[key] = why
+            continue
+        for s, english, limit, key in batch:
+            cache[key] = {"lang": lang, "model": model, "kind": "short", "max_chars": limit, "text": answer[s["id"]]}
+        save_cache(work_dir, cache)
+    for s, english, limit, key, found in plan:
+        cid = s["id"]
+        if key not in cache:
+            report["warnings"].append(f"{lang} {cid}: no shorter translation, the follow-up request failed "
+                                      f"({failed.get(key, 'no answer')})")
+            continue
+        candidate = cache[key]["text"]
+        duration = max(1e-6, s["end_s"] - s["start_s"])
+        if better(assess(candidate, lang, duration), found):
+            final[cid] = candidate
+            report["shortened"].append({"lang": lang, "id": cid, "max_chars": limit, "before": firsts[cid],
+                                        "after": candidate, "before_chars": visual_len(firsts[cid], lang),
+                                        "after_chars": visual_len(candidate, lang)})
+            log(f"{lang} {cid}: shortened from {visual_len(firsts[cid], lang):g} to {visual_len(candidate, lang):g} "
+                f"characters (at most {limit})")
+    return final
+
+
 def translate_film(tl, work_dir: str, entry: dict, langs: list, model: str = None, progress=None, client=None,
-                   dry_run: bool = False, log=lambda s: None) -> dict:
+                   dry_run: bool = False, log=lambda s: None, shorten: bool = True) -> dict:
     """Translate the film's cues into `langs` and write the SRT files next to the export's file. Returns the report.
+    With `shorten`, a translation that does not fit its cue is asked for once more, shorter (see the module text).
     Raises TranslateError (the message names the language and the cues that failed)."""
     spans = words.cue_spans(tl.data)
     if not spans:
@@ -399,7 +546,8 @@ def translate_film(tl, work_dir: str, entry: dict, langs: list, model: str = Non
     todo = {lang: [c for c in cues if cache_key(model, lang, c["text"]) not in cache] for lang in langs}
     report = {"version": 1, "model": model, "export": entry["name"], "languages": {}, "written": [], "warnings": [],
               "sent_cues": 0, "cached_cues": 0, "to_send_cues": sum(len(v) for v in todo.values()),
-              "tokens_in": 0, "tokens_out": 0, "cost_usd": 0.0, "estimate_usd": None, "dry_run": dry_run}
+              "tokens_in": 0, "tokens_out": 0, "cost_usd": 0.0, "estimate_usd": None, "dry_run": dry_run,
+              "follow_up_requests": 0, "follow_up_cues": 0, "shortened": []}
     report["estimate_usd"] = _estimate_todo(todo, model)
     if dry_run:
         for lang in langs:
@@ -408,12 +556,16 @@ def translate_film(tl, work_dir: str, entry: dict, langs: list, model: str = Non
     check_ready()
     client = client or Client()
     started = time.time()
-    batches_total = sum(-(-len(v) // config.TRANSLATE_BATCH) for v in todo.values())
-    batches_done = 0
+    progress_state = {"done": 0, "total": sum(-(-len(v) // config.TRANSLATE_BATCH) for v in todo.values())}
     index = {c["id"]: i for i, c in enumerate(cues)}
     english = srt_file(entry, "en")
     os.makedirs(os.path.dirname(os.path.abspath(english)), exist_ok=True)
     rules = words.RULES_FACTORY(tl.data)
+
+    def step(message):
+        progress_state["done"] += 1
+        if progress:
+            progress(progress_state["done"], progress_state["total"], message)
 
     for lang in langs:
         sent = 0
@@ -425,20 +577,7 @@ def translate_film(tl, work_dir: str, entry: dict, langs: list, model: str = Non
             after = cues[last + 1:last + 1 + config.TRANSLATE_CONTEXT]
             messages = build_messages(lang, batch, before, after)
             ids = [c["id"] for c in batch]
-            answer, why = None, ""
-            for attempt in range(config.TRANSLATE_TRIES):
-                try:
-                    resp = client.chat(model, messages)
-                    choice = (resp.get("choices") or [{}])[0].get("message", {}).get("content")
-                    answer = parse_answer(choice, ids)
-                    usage = resp.get("usage") or {}
-                    report["tokens_in"] += int(usage.get("prompt_tokens") or 0)
-                    report["tokens_out"] += int(usage.get("completion_tokens") or 0)
-                    break
-                except _Retry as e:
-                    why = str(e)
-                    if attempt + 1 < config.TRANSLATE_TRIES:
-                        time.sleep(config.TRANSLATE_RETRY_WAIT_SEC[min(attempt, len(config.TRANSLATE_RETRY_WAIT_SEC) - 1)])
+            answer, why = _ask(client, model, messages, ids, report)
             if answer is None:
                 raise TranslateError(
                     f"The translation into {lang} stopped: {config.TRANSLATE_TRIES} tries failed for the cues "
@@ -448,11 +587,18 @@ def translate_film(tl, work_dir: str, entry: dict, langs: list, model: str = Non
                 cache[cache_key(model, lang, c["text"])] = {"lang": lang, "model": model, "text": answer[c["id"]]}
             save_cache(work_dir, cache)
             sent += len(batch)
-            batches_done += 1
-            if progress:
-                progress(batches_done, batches_total, f"{lang}: {sent} of {len(pending)} cues")
+            step(f"{lang}: {sent} of {len(pending)} cues")
             log(f"{lang}: {sent} of {len(pending)} cues translated")
-        texts = {c["id"]: cache[cache_key(model, lang, c["text"])]["text"] for c in cues}
+        firsts = {c["id"]: cache[cache_key(model, lang, c["text"])]["text"] for c in cues}
+        shortened_before = len(report["shortened"])
+        if shorten:
+            def on_batch(message):
+                progress_state["total"] += 1
+                step(message)
+                log(message)
+            texts = _shorten(client, model, lang, spans, firsts, cache, work_dir, report, log, on_batch)
+        else:
+            texts = firsts
         out = [dict(s, text="\n".join(wrap_translation(texts[s["id"]], lang))) for s in spans]
         if english not in report["written"]:        # the English file comes with the first language that is done
             fsutil.write_text_atomic(english, words.srt_text(spans, rules))
@@ -463,7 +609,7 @@ def translate_film(tl, work_dir: str, entry: dict, langs: list, model: str = Non
         warns = _warnings(spans, texts, lang)
         report["warnings"] += warns
         report["languages"][lang] = {"cues": len(cues), "sent": sent, "cached": len(cues) - sent, "file": path,
-                                     "warnings": len(warns)}
+                                     "warnings": len(warns), "shortened": len(report["shortened"]) - shortened_before}
         report["sent_cues"] += sent
         report["cached_cues"] += len(cues) - sent
     report["cost_usd"] = _cost(model, report["tokens_in"], report["tokens_out"]) or 0.0
@@ -524,6 +670,7 @@ def cli(args, timeline_path: str, work_dir_of) -> None:
         langs = parse_languages(args.lang)
         entry = pick_export(tl.data, args.export)
         report = translate_film(tl, work, entry, langs, model=args.model, dry_run=args.dry_run,
+                                shorten=not getattr(args, "no_shorten", False),
                                 log=lambda s: print(f"{time.strftime('%H:%M:%S')}  {s}", flush=True))
     except TranslateError as e:
         fail(str(e))
@@ -534,6 +681,14 @@ def cli(args, timeline_path: str, work_dir_of) -> None:
         return
     print(f"{report['sent_cues']} cue(s) sent, {report['cached_cues']} taken from the cache; {report['tokens_in']} "
           f"tokens in, {report['tokens_out']} out" + (f", about ${report['cost_usd']:.4f}" if report["cost_usd"] else ""))
+    if report["follow_up_cues"]:
+        print(f"{report['follow_up_cues']} cue(s) asked for a shorter text in {report['follow_up_requests']} request(s) "
+              f"(counted in the tokens above)")
+    if report["shortened"]:
+        print(f"{len(report['shortened'])} cue(s) have a shorter translation than the first one:")
+        for item in report["shortened"]:
+            print(f"  {item['lang']} {item['id']}: {item['before_chars']:g} -> {item['after_chars']:g} characters "
+                  f"(at most {item['max_chars']})")
     for path in report["written"]:
         print(f"  {path}")
     for w in report["warnings"]:

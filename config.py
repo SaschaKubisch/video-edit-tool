@@ -237,6 +237,9 @@ TRANSLATE_KEYCHAIN_TIMEOUT_SEC = 20
 TRANSLATE_BATCH = 30               # cues per request
 TRANSLATE_CONTEXT = 3              # cues of context before and after a batch
 TRANSLATE_TRIES = 3                # requests per batch before the run stops
+# A translation that does not fit its cue is sent once more with a limit on its length (SPECS 9.9). A limit below
+# this many characters is not asked for: the cue is too short for a sentence, and the warning stays.
+TRANSLATE_SHORTEN_MIN_CHARS = 4
 TRANSLATE_TIMEOUT_SEC = 120
 TRANSLATE_RETRY_WAIT_SEC = (1.0, 3.0)
 
