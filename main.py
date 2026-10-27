@@ -1246,6 +1246,56 @@ def _originals_of(tl) -> list:
 def cmd_scenes(args):
     """Prompt edits (SPECS 10): the scene index and sheets Claude Code reads, and the commands that
     remove, keep, cut and restore scenes."""
+    if args.scenes_command in ("remove", "keep", "restore", "cut"):
+        return cmd_scenes_edit(args)
+    return cmd_scenes_read(args)
+
+
+def cmd_scenes_edit(args):
+    """remove, keep, restore and cut (SPECS 10.4). Each goes through the validator and keeps the old file as one
+    snapshot; --dry-run prints what would change and writes nothing."""
+    import sceneedit
+    import store
+    import timeline
+
+    def fail(message, code=1):
+        print(f"Error: {message}", file=sys.stderr)
+        sys.exit(code)
+
+    sub = args.scenes_command
+    tl, path = _load_timeline_or_exit(args)
+    notes = []
+    try:
+        if sub == "cut":
+            ids = [args.scene]
+            new_data = sceneedit.cut(tl.data, args.scene, args.from_s, args.to_s, notes)
+            command = f"scenes cut {args.scene} --from {args.from_s:g} --to {args.to_s:g}"
+        else:
+            ids = sceneedit.parse_ids(args.scene_ids)
+            new_data = getattr(sceneedit, sub)(tl.data, ids, notes)
+            command = f"scenes {sub} {','.join(ids)}"
+    except sceneedit.SceneEditError as e:
+        fail(str(e), 2 if str(e).startswith("name at least one") else 1)
+    new = timeline.Timeline(new_data, tl.duplicates)
+    findings = new.validate(file_checks=False)
+    if timeline.has_errors(findings):
+        print(json.dumps([f.as_dict() for f in findings], indent=2))
+        fail("The change breaks a rule of the timeline file; nothing was saved." if not args.dry_run else
+             "The change would break a rule of the timeline file, so it would be refused. Nothing was written.")
+    rep = sceneedit.report(tl, new, notes, sceneedit.new_warnings(tl.validate(file_checks=False), findings))
+    print(sceneedit.format_report(rep, command, args.dry_run), end="")
+    if rep["no_change"] or args.dry_run:
+        return
+    store.save(new, path)
+    snapshot = os.path.basename(store.list_snapshots(path)[-1])[:-5]
+    print(f"Saved {os.path.basename(path)}. The version before is snapshot {snapshot}: "
+          f"`python main.py timeline undo` takes this change back.")
+    print("Next: `python main.py timeline validate`; the film times after this change have moved, so run "
+          "`python main.py scenes index` again before reading it.")
+
+
+def cmd_scenes_read(args):
+    """index, sheets and frames: what Claude Code reads to find a scene."""
     import edits
     import safety
     import sceneindex
@@ -1745,6 +1795,23 @@ def build_parser():
     sp.add_argument("--every", default="1s", help="Step between stills: 1s, 0.5s or 500ms (default 1s)")
     sp.add_argument("--from", dest="from_s", type=float, help="Start of the stretch, in film seconds (default: the scene's start)")
     sp.add_argument("--to", dest="to_s", type=float, help="End of the stretch, in film seconds (default: the scene's end)")
+
+    def edit_cmd(name, text):
+        sp = scenes_cmd(name, text, work=False)
+        sp.add_argument("--dry-run", action="store_true",
+            help="Print what would change (scenes, film length before and after, subtitles) and write nothing")
+        return sp
+
+    sp = edit_cmd("remove", "Take scenes out of the film (they stay in the file; `scenes restore` brings them back)")
+    sp.add_argument("scene_ids", nargs="+", metavar="ID", help="Scene ids, for example s017 or s017,s018")
+    sp = edit_cmd("keep", "Keep only these scenes: every other scene is taken out of the film")
+    sp.add_argument("scene_ids", nargs="+", metavar="ID", help="Scene ids, for example s017,s018,s030")
+    sp = edit_cmd("restore", "Put removed scenes back into the film")
+    sp.add_argument("scene_ids", nargs="+", metavar="ID", help="Scene ids, for example s017 or s017,s018")
+    sp = edit_cmd("cut", "Take a moment out of one scene by splitting it (film seconds)")
+    sp.add_argument("scene", help="Scene id, for example s017")
+    sp.add_argument("--from", dest="from_s", type=float, required=True, help="Film second where the cut moment starts")
+    sp.add_argument("--to", dest="to_s", type=float, required=True, help="Film second where the cut moment ends")
     p_scenes.set_defaults(func=cmd_scenes)
 
     # ── render ──
