@@ -178,6 +178,7 @@ class ResumeTests(ResumeFixture):
         self.assertTrue(r.ok, r.problems)
         self.assertEqual(r.chunks, {"total": 3, "reused": 1, "rendered": 2})
         self.assertTrue(self.decodes_clean(r.path))
+        self.assertFalse((self.work_dir / "render-left-behind").exists())         # the scratch of the killed run is cleaned
 
     def test_a_render_that_is_running_blocks_a_second_one(self):
         tl = self.tl()

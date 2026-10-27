@@ -1009,6 +1009,9 @@ def render_export(tl, name: str, work_dir: str, decoder, timeline_hash: str = No
     os.makedirs(work_dir, exist_ok=True)
     lock = _Lock(work_dir)
     lock.acquire()
+    for left in Path(work_dir).glob("render-*"):          # the scratch of a render that was killed (the lock is ours now)
+        if left.is_dir():
+            shutil.rmtree(left, ignore_errors=True)
     scratch = None
     partial = out_path + ".partial"
     started = time.time()

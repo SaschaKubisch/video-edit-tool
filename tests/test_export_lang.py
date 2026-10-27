@@ -129,6 +129,27 @@ class RefusalTests(LangFixture):
         self.nothing_written(name)
 
 
+class LatinLanguageTests(LangFixture):
+    """German, Portuguese and Russian are drawn with Inter and the English layout: no Noto folder is needed."""
+
+    def test_german_is_drawn_into_a_file_of_its_own_with_the_translated_text(self):
+        from tests.fonts import builtin_font
+        builtin_font(self)
+        put_translations(self.work_dir, "de", {"First scene.": "Erste Szene.", "Second scene with bars.":
+                                               "Zweite Szene mit Streifen.", "Third scene.": "Dritte Szene."})
+        base = self.base()
+        result, tl, name = self.go("both", "de")
+        self.assertTrue(result.ok, result.problems)
+        self.assertEqual(result.path, str(self.out / f"{name}.de.mp4"))
+        d = np.abs(self.luma(result.path) - self.luma(base.path))
+        self.assertTrue(self.shown(d, 20))
+        parsed = words.parse_srt(Path(result.srt_file).read_text(encoding="utf-8"))
+        self.assertEqual([c["text"].replace("\n", " ") for c in parsed],
+                         ["Erste Szene.", "Zweite Szene mit Streifen.", "Dritte Szene."])
+        self.assertIn("Inter", Path(result.credit_file).read_text(encoding="utf-8"))
+        self.assertNotIn("Noto", Path(result.credit_file).read_text(encoding="utf-8"))
+
+
 @requires_noto
 class BurnedLanguageTests(LangFixture):
     def test_the_translation_is_drawn_on_its_frames_into_a_file_of_its_own(self):
