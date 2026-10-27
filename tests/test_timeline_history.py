@@ -40,8 +40,9 @@ class Base(unittest.TestCase):
         return timeline.Timeline.load(str(self.path)).data["segments"][0]["label"]
 
     def names(self, folder=None):
+        """The snapshot files of a folder; the owner records beside them (NNNN.owner.json) are left out."""
         folder = folder or self.history
-        return sorted(p.name for p in folder.iterdir()) if folder.exists() else []
+        return sorted(p.name for p in folder.iterdir() if not p.name.endswith(".owner.json")) if folder.exists() else []
 
 
 class UndoTests(Base):
@@ -159,6 +160,8 @@ class UndoTests(Base):
         for _ in range(5):
             store.undo(str(self.path), keep=3)
         self.assertEqual(self.names(self.history / "undone"), ["0003.json", "0004.json", "0005.json"])
+        records = sorted(p.name for p in (self.history / "undone").iterdir() if p.name.endswith(".owner.json"))
+        self.assertEqual(records, ["0003.owner.json", "0004.owner.json", "0005.owner.json"])      # pruned with their copies
 
 
 class SnapshotAfterAValidateTests(Base):

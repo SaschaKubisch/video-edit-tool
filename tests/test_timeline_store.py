@@ -38,7 +38,7 @@ class StoreTests(unittest.TestCase):
         d["segments"][0]["label"] = "changed"
         store.save(timeline.Timeline(d), str(self.path))
         snaps = sorted((self.dir / "timeline.history").iterdir())
-        self.assertEqual([p.name for p in snaps], ["0001.json"])
+        self.assertEqual([p.name for p in snaps], ["0001.json", "0001.owner.json"])   # the copy and the record of its file
         self.assertEqual(snaps[0].read_bytes(), old)
         self.assertIn("changed", self.path.read_text())
 
@@ -48,8 +48,11 @@ class StoreTests(unittest.TestCase):
             d = example()
             d["segments"][0]["label"] = f"v{i}"
             store.save(timeline.Timeline(d), str(self.path), keep=5)
-        names = sorted(p.name for p in (self.dir / "timeline.history").iterdir())
+        found = sorted(p.name for p in (self.dir / "timeline.history").iterdir())
+        names = [n for n in found if not n.endswith(".owner.json")]
         self.assertEqual(names, [f"{n:04d}.json" for n in range(3, 8)])
+        self.assertEqual([n for n in found if n.endswith(".owner.json")],               # a record goes with its snapshot
+                         [f"{n:04d}.owner.json" for n in range(3, 8)])
         self.assertEqual(store.list_snapshots(str(self.path)),
                          [str(self.dir / "timeline.history" / n) for n in names])
 

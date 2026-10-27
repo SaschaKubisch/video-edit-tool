@@ -520,8 +520,10 @@ def cmd_timeline(args):
 
 
 def cmd_timeline_history(args, path):
-    """List the versions of the timeline file with time and a one-line change (SPECS 4.3)."""
+    """List the versions of the timeline file with time and a one-line change (SPECS 4.3). Only the snapshots made
+    from this file are its versions; the others in the shared history folder are named apart. Writes nothing."""
     import store
+    import timeline
     if not os.path.isfile(path):
         print(f"Error: timeline file not found: {path}", file=sys.stderr)
         sys.exit(2)
@@ -534,12 +536,29 @@ def cmd_timeline_history(args, path):
     if not snapshots:
         print(f"{name}: no earlier version is kept yet. A version is kept when the file is "
               "saved over, or when `timeline validate` finds it valid.")
+    else:
+        print(f"{name}: {len(snapshots)} earlier version(s) kept in {store.history_dir(path)}")
+        print(f"{'no.':8} {'time':19}  {'hash':8}  change from the version before")
+        for r in rows:
+            number = "current" if r["current"] else f"{r['number']:04d}"
+            print(f"{number:8} {store.format_time(r['time']):19}  {r['hash'][:8]}  {r['change']}")
+    others = store.other_snapshots(path)
+    if not others["other_files"] and not others["unowned"]:
         return
-    print(f"{name}: {len(snapshots)} earlier version(s) kept in {store.history_dir(path)}")
-    print(f"{'no.':8} {'time':19}  {'hash':8}  change from the version before")
-    for r in rows:
-        number = "current" if r["current"] else f"{r['number']:04d}"
-        print(f"{number:8} {store.format_time(r['time']):19}  {r['hash'][:8]}  {r['change']}")
+    print()
+    print("Not shown (the history folder is shared by the timeline files of this folder; each snapshot belongs to the "
+          "file it was made from, and `timeline undo` uses only the snapshots of the file named by --file):")
+    for owner, snaps in others["other_files"].items():
+        numbers = ", ".join(f"{store._number(s):04d}" for s in snaps)
+        print(f"  {len(snaps)} snapshot(s) of {owner}: {numbers}")
+    if others["unowned"]:
+        print(f"  {len(others['unowned'])} snapshot(s) without a recorded file. They were made before snapshots "
+              "recorded the file they belong to, so no command can tell whose they are and none restores them. "
+              "To use one, copy it by hand to a file name of your own.")
+        print(f"  {'no.':8} {'time':19}  {'hash':8}  holds")
+        for s in others["unowned"]:
+            print(f"  {store._number(s):04d}     {store.format_time(os.path.getmtime(s)):19}  "
+                  f"{timeline.file_hash(s)[:8]}  {store.describe_snapshot(s)}")
 
 
 def cmd_timeline_undo(args, path):
