@@ -304,6 +304,15 @@ class PlanChoiceTests(unittest.TestCase):
         plan = build(film, length_s=8)
         self.assertEqual([s["x_film_segment"] for s in short_segments(plan)], ["s003", "s006"])
 
+    def test_among_scenes_with_subtitles_the_one_whose_subtitles_can_be_shown_wins(self):
+        # s001 has more subtitle seconds (10 s), but a window of about 4 s can never hold a cue of 10 s; s002 has a
+        # cue of 2 s that the window holds whole
+        long_cue = {"id": "c001", "anchor": "s001", "start_s": 2.0, "end_s": 12.0, "text": "A long one.", "origin": "manual"}
+        short_cue = {"id": "c002", "anchor": "s002", "start_s": 2.0, "end_s": 4.0, "text": "A short one.", "origin": "manual"}
+        film = make_film([20, 20, 20, 20], cues=[long_cue, short_cue])
+        plan = build(film, length_s=8)
+        self.assertEqual([s["x_film_segment"] for s in short_segments(plan)][0], "s002")
+
     def test_a_pinned_scene_wins_over_a_scene_with_text(self):
         film = make_film([5, 40, 6, 7, 6, 38], text={0: "Words."}, priority={2: "must"})
         plan = build(film, length_s=8)
@@ -365,6 +374,11 @@ class PlanChoiceTests(unittest.TestCase):
         last = short_segments(plan)[-1]
         self.assertGreaterEqual(seg_frames(last) / FPS, 2.25)
         self.assertNotEqual(last["x_film_segment"], "s010")
+
+    def test_a_film_whose_only_scene_is_too_short_for_the_fades_gives_an_error_that_says_so(self):
+        with self.assertRaises(shorts.ShortError) as ctx:
+            build(make_film([2.3]), length_s=60)
+        self.assertIn("long enough", str(ctx.exception))
 
     def test_the_cap_is_raised_when_the_scenes_cannot_reach_the_length(self):
         film = make_film([40, 40, 40])

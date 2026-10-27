@@ -88,6 +88,18 @@ class ProjectContentTests(ShotcutFixture):
             self.assertTrue(chains[c]["resource"].endswith(".mp4"))
             self.assertIn("copies", chains[c]["resource"])
 
+    def test_a_short_has_no_shotcut_project(self):
+        """Step 6: the project has no code for `fill` and `crop`, so a short would show the wide pictures letterboxed in
+        a vertical profile. It is refused, with the reason, before anything is written."""
+        tl = self.make_tl()
+        tl.data["film"]["fit"] = "fill"
+        work = self.root / "work-short-refused"
+        with self.assertRaises(export_shotcut.ShotcutError) as ctx:
+            export_shotcut.write_project(tl, str(work), str(work / "film.mlt"), log=lambda s: None)
+        self.assertIn("short", str(ctx.exception))
+        self.assertFalse((work / "film.mlt").exists())
+        self.assertFalse((work / "audio-synced").exists())
+
     def test_a_disabled_segment_is_not_in_the_project(self):
         tl = self.make_tl()
         tl.data["segments"][1]["enabled"] = False

@@ -10,10 +10,11 @@ import main
 ROOT = Path(__file__).resolve().parent.parent
 TEXT = (ROOT / "CLAUDE.md").read_text(encoding="utf-8")
 
-PLACEHOLDERS = {"FILE": "x.json", "DIR": "work", "SCENE": "s001", "ID": "s001", "S": "1", "WORDS": "salad"}
+PLACEHOLDERS = {"FILE": "x.json", "DIR": "work", "SCENE": "s001", "ID": "s001", "IDS": "s001,s002", "S": "1",
+                "WORDS": "salad", "SECONDS": "30", "PLAN": "short.json", "MP4": "short.mp4"}
 
 
-COMMAND_WORDS = ("scenes", "timeline", "subtitles")
+COMMAND_WORDS = ("scenes", "timeline", "subtitles", "short")
 
 
 def commands():
@@ -72,6 +73,17 @@ class ClaudeMdTests(unittest.TestCase):
         for needle in ("scenes index", "scenes frames", "--dry-run", "timeline validate", "timeline undo",
                        "scenes restore", "scenes keep", "scenes cut", "scenes remove"):
             self.assertIn(needle, TEXT)
+
+    def test_it_tells_how_to_make_a_short(self):
+        """Step 6: a request such as "make a 30 second short of the salad" is handled with these commands."""
+        self.assertIn("## Making a vertical short from a request", TEXT)
+        for needle in ("short --file FILE --work DIR --length", "--only", "--prefer", "--dry-run", "--stills",
+                       "scenes pin", "scenes crop", "--still", "scenes index", "make a 30 second short of the salad",
+                       "60 seconds"):
+            self.assertIn(needle, TEXT)
+        section = TEXT[TEXT.index("## Making a vertical short from a request"):]
+        self.assertLess(section.index("--dry-run"), section.index("--stills"))
+        self.assertIn("Ask the owner", section)
 
     def test_it_says_that_the_owner_confirms_before_the_change(self):
         self.assertIn("Ask the owner to confirm", TEXT)

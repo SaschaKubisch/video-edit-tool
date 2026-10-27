@@ -176,6 +176,23 @@ def _window_score(start: int, window: int, cues, fps) -> float:
     return round(score, 9)
 
 
+def shown_seconds(length: int, window: int, cues, fps) -> float:
+    """How many seconds of subtitles the best window of `window` frames in a scene of `length` frames shows: whole
+    cues, and the part of a cut cue that stays. A scene whose cues are all longer than the window shows none."""
+    if not cues:
+        return 0.0
+    fps = Fraction(fps)
+    window = min(window, length)
+    s = best_window(length, window, cues, fps)
+    w0, w1 = float(Fraction(s) / fps), float(Fraction(s + window) / fps)
+    total = 0.0
+    for c0, c1 in cues:
+        kept = keep_cue(c0, c1, w0, w1)
+        if kept is not None:
+            total += kept[1] - kept[0]
+    return total
+
+
 def best_window(length: int, window: int, cues, fps) -> int:
     """The first frame of the window of `window` frames inside a scene of `length` frames with the best score.
     `cues` are (start, end) in seconds from the start of the scene. The score is the speech the window holds
@@ -222,6 +239,7 @@ class Cand:
     tier: int                  # 3 pinned or named, 2 scene text or subtitles, 1 the rest
     cue_s: float               # seconds of subtitles in the scene
     cues: list                 # (start, end) in seconds from the start of the scene
+    shown_s: float = 0.0       # seconds of subtitles that a window of about the aim length shows
 
     @property
     def id(self) -> str:
@@ -229,8 +247,9 @@ class Cand:
 
     @property
     def key(self) -> tuple:
-        """Sort key, highest first when reversed: importance, then speech, then length, then the earlier scene."""
-        return (self.tier, round(self.cue_s, 6), self.frames, -self.pos)
+        """Sort key, the highest wins: importance, then the subtitles a window can show, then the seconds of subtitles
+        in the scene, then the longer scene, then the earlier one."""
+        return (self.tier, round(self.shown_s, 6), round(self.cue_s, 6), self.frames, -self.pos)
 
 
 @dataclass
@@ -325,6 +344,8 @@ def _select(pool, parts, floors, named_ids):
         label = f"part {rank + 1} of {len(order)}"
         why[best.id] = (f"{label}: has scene text or subtitles" if best.tier == 2 and len(options) > 1
                         else f"{label}: the longest" if len(options) > 1 else f"{label}: the only scene")
+        if best.tier == 2 and best.shown_s <= 0 and best.cues:
+            why[best.id] += " (a window cannot show them)"
     return _order(list(kept.values())), why
 
 
@@ -350,7 +371,7 @@ def _fit_floors(kept, floors, total, notes, fps):
                              f"the short it needs {_seconds(f, fps):.2f} s for the fades and joins")
         movable = [c for c in kept if c.tier < 3]
         if movable:
-            drop = min(movable, key=lambda c: (c.tier, round(c.cue_s, 6), c.frames, -c.pos))
+            drop = min(movable, key=lambda c: c.key)
             notes.append(f"{drop.id} was left out: the floors of the kept scenes did not fit the length")
             kept.remove(drop)
             continue
@@ -446,7 +467,8 @@ def plan_short(film: dict, film_path: str = "", length_s: float = None, size=Non
         has_text = bool((seg.get("text") or "").strip()) or bool(cues)
         tier = 3 if seg.get("priority") == "must" or sid in prefer else 2 if has_text else 1
         pool.append(Cand(row=row, pos=len(pool), frames=row["frames"], tier=tier,
-                         cue_s=sum(b - a for a, b in cues), cues=cues))
+                         cue_s=sum(b - a for a, b in cues), cues=cues,
+                         shown_s=shown_seconds(row["frames"], frames_of(config.SHORT_AIM_SCENE_SEC, fps), cues, fps)))
     if not pool:
         raise ShortError("no scene is left to make the short from (every scene is removed, dropped or excluded)")
 
@@ -504,6 +526,11 @@ def plan_short(film: dict, film_path: str = "", length_s: float = None, size=Non
         fl = _floors_for(kept, floors)
         shares = allocate([c.frames for c in kept], fl, [min(cap, c.frames) for c in kept], target)
         total_frames = target
+
+    if not kept:
+        raise ShortError("no scene is long enough for its place in the short: the first scene needs "
+                         f"{_seconds(floors['first'], fps):.2f} s (the fade-in), the last {_seconds(floors['last'], fps):.2f} s "
+                         f"(the fade-out), a single scene {_seconds(floors['only'], fps):.2f} s")
 
     # windows, crop, cues, titles
     seg_rows = []
@@ -699,11 +726,11 @@ def format_plan(plan: ShortPlan, film_name: str = "the film", plan_path: str = N
                      f"{s['short_in_s']:8.2f} - {s['short_out_s']:8.2f}   {_seconds(s['frames'], fps):5.2f} s   "
                      f"{_crop_text(s['crop']):12} {len(c['kept'])}/{len(c['dropped'])}                 {s['reason']}")
     if plan.cues_kept or plan.cues_dropped:
-        lines.append(f"Subtitles: {len(plan.cues_kept)} of the film's cues stay "
-                     f"({len(plan.data.get('subtitles', {}).get('cues', []))} cues after the layout for 9:16), "
-                     f"{len(plan.cues_dropped)} are dropped.")
+        lines.append(f"Subtitles: the kept scenes have {len(plan.cues_kept) + len(plan.cues_dropped)} cues in the film; "
+                     f"{len(plan.cues_kept)} stay ({len(plan.data.get('subtitles', {}).get('cues', []))} cues after "
+                     f"the layout for 9:16), {len(plan.cues_dropped)} are dropped.")
         for d in plan.cues_dropped:
-            lines.append(f"  dropped {d['id']} of {d['scene']} \"{d['text']}\": {d['why']}")
+            lines.append(f"  dropped {d['id']} of {d['scene']} \"{' '.join(str(d['text']).split())}\": {d['why']}")
     if plan.data.get("titles") or plan.titles_dropped:
         lines.append(f"Titles: {len(plan.titles_kept)} stay, {len(plan.titles_dropped)} do not"
                      + (f" ({', '.join(plan.titles_dropped)})" if plan.titles_dropped else "") + ".")
@@ -826,3 +853,56 @@ def draw_window_still(tl, scene_id: str, work_dir: str, size=None, at_s: float =
         out_path = os.path.join(folder, f"crop-{scene_id}-{label}-at{at_s:.1f}s.jpg")
     out.save(out_path, quality=config.SHEET_JPEG_QUALITY)
     return {"path": out_path, "info": info, "film_s": at_s}
+
+
+# ── Stills of a rendered short ──────────────────────────────────
+
+def scene_stills(short_data: dict, mp4_path: str, folder: str = None) -> dict:
+    """One still per scene of a rendered short, for Claude Code and the owner to look at: the middle frame of each scene,
+    cut from the finished file into `<output without .mp4>.stills/<scene id>.jpg`, and a contact sheet
+    `<output without .mp4>.contact.jpg` that shows them side by side with the scene id, the scene of the film it
+    came from, its length and its crop. Returns {"folder", "stills": [paths], "contact": path}."""
+    import subprocess
+
+    import tools
+    from PIL import Image, ImageDraw, ImageFont
+
+    base = os.path.splitext(mp4_path)[0]
+    folder = folder or base + ".stills"
+    os.makedirs(folder, exist_ok=True)
+    f = short_data["film"]["fps"]
+    fps = Fraction(f["num"], f["den"])
+    stills, start = [], 0
+    for seg in short_data["segments"]:
+        if not seg.get("enabled", True):
+            continue
+        n = seg["out"] - seg["in"]
+        mid = start + n // 2
+        out = os.path.join(folder, f"{seg['id']}.jpg")
+        cmd = [tools.ffmpeg_path(), "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
+               "-ss", f"{float((mid + Fraction(1, 2)) / fps):.6f}", "-i", mp4_path, "-frames:v", "1",
+               "-q:v", "2", out]
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        if r.returncode != 0 or not os.path.isfile(out):
+            raise ShortError(f"ffmpeg could not cut the still of {seg['id']} from {mp4_path}: {r.stderr.strip()[-300:]}")
+        stills.append((seg, n, out))
+        start += n
+    cols = config.SHORT_CONTACT_COLUMNS
+    tw = 270
+    th = round(tw * short_data["film"]["frame"]["height"] / short_data["film"]["frame"]["width"])
+    label_h, gap = 34, 8
+    rows = (len(stills) + cols - 1) // cols
+    sheet = Image.new("RGB", (cols * (tw + gap) + gap, rows * (th + label_h + gap) + gap), (20, 20, 28))
+    d = ImageDraw.Draw(sheet)
+    font = ImageFont.load_default(16)
+    for k, (seg, n, path) in enumerate(stills):
+        im = Image.open(path).convert("RGB").resize((tw, th), Image.LANCZOS)
+        x, y = gap + (k % cols) * (tw + gap), gap + (k // cols) * (th + label_h + gap)
+        sheet.paste(im, (x, y))
+        crop = seg.get("crop")
+        crop_text = "centre" if not crop else f"x {crop['x']:g}" if "x" in crop else f"pan {crop['x_from']:g}-{crop['x_to']:g}"
+        d.text((x + 2, y + th + 2), f"{seg['id']}  from {seg.get('x_film_segment', '?')}  {float(Fraction(n) / fps):.1f} s", fill=(235, 235, 235), font=font)
+        d.text((x + 2, y + th + 18), f"crop {crop_text}", fill=(180, 180, 180), font=font)
+    contact = base + ".contact.jpg"
+    sheet.save(contact, quality=config.SHEET_JPEG_QUALITY)
+    return {"folder": folder, "stills": [p for _, _, p in stills], "contact": contact}

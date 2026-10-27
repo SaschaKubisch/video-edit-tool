@@ -11,7 +11,7 @@ Ambient Video Automation: a local tool that turns BMPCC 4K clips (BRAW) and Zoom
 
 The owner describes a change ("cut out the scene where I am frying a sausage"). A **scene** is one segment of the timeline file; its id (`s017`) is what the commands take. **Film time** counts from the first frame of the film and is what the owner and the commands use. You cannot see the film. The tool writes what you can read: an index of every scene and one still sheet per scene.
 
-How the owner's words are read until the owner decides otherwise (open decision D14): "cut out", "remove", "delete" a scene means `scenes remove`; "keep only" means `scenes keep`; "cut out the part where ..." or a stretch of seconds inside a scene means `scenes cut`; "put back" means `scenes restore`. Say which reading you used.
+How the owner's words are read (decision D14, settled by the owner on 2026-10-27): "cut out", "remove", "delete" a scene means `scenes remove`; "keep only" means `scenes keep`; "cut out the part where ..." or a stretch of seconds inside a scene means `scenes cut`; "put back" means `scenes restore`. Say which reading you used.
 
 Do this, in this order:
 
@@ -39,3 +39,20 @@ Rules for every edit of the timeline file:
 - One request is one change and one snapshot. Do not change anything the owner did not ask for.
 - Titles are placed by film time. After a change that moves film times, say which titles may now be over other scenes (the dry run lists them).
 - Do not start Shotcut or open a browser for this.
+
+## Making a vertical short from a request
+
+The owner says "make a 30 second short of the salad" or "a short of the whole day". A **short** is a 9:16 video for phones, cut from the film. The tool plans it, renders it from the `.braw` files and writes the plan next to the file. The film is not changed. If the owner names no length, the short is 60 seconds (decision D15). Do this, in this order:
+
+1. **Prepare and find the scenes.** As in the section above: `python main.py scenes index --sheets --file FILE --work DIR`, then read the index and look at the overview pages and the sheets. If the request names a subject ("of the salad"), list the scenes that show it, with scene id, film time and how sure you are, and say what you could not see. If it names no subject, you need no list.
+2. **Ask the owner to confirm** the scenes and the length. Say how the choice works: `short` keeps about one scene per 4 seconds, takes one scene from each equal part of the film (the longest one, unless a scene has scene text or subtitles, or is pinned or named), gives each scene time in proportion to its length (at least 2 seconds, at most 8) and takes the middle of the scene or the stretch that holds whole subtitles.
+3. **Tell the tool the subject.** For this short only: `--only ID,ID,...` makes the short from those scenes alone; `--prefer ID,ID,...` keeps those scenes and fills the rest from the whole film; `--exclude ID,ID,...` leaves scenes out. For every later short too: `scenes pin ID[,ID...]` (take it off with `scenes unpin`); a pinned scene is always kept. Say which you used.
+4. **Dry run.** `python main.py short --file FILE --work DIR --length SECONDS --only IDS --dry-run`. Read the table: the kept scenes with film time and short time, the length (exact to the frame), the subtitles that stay and go, the notes and warnings. Tell the owner what it says. Nothing is written.
+5. **Look at the window.** The 9:16 window shows 23.6 percent of the width of a wide clip (4096 x 1720) and 29.7 percent of the other clips (4096 x 2160), and it is centred unless a scene says otherwise. For each kept scene run `python main.py scenes crop SCENE --still --file FILE --work DIR` and look at the picture it prints: the yellow outline is the window, the right side is what the short shows. If the subject is not inside, choose a place with `--x X` (0 is the left edge, 0.5 the centre, 1 the right edge); try places with `--x X --still --dry-run` first, and save the one that works with `--x X`. For a subject that moves use `--from A --to B`. `scenes crop SCENE --clear` goes back to the centre. The crop is stored in the film, so every later short uses it. There is no subject tracking: you choose the place by looking.
+6. **Render.** `python main.py short --file FILE --work DIR --length SECONDS --only IDS --stills`. A short of 60 seconds takes about 3 minutes; for a longer one add `--detach` and watch the log. The tool writes the MP4, `short-N.json` (the plan) and, with `--stills`, one still per scene and `short-N.contact.jpg`. Look at the contact sheet and say what you see: whether the subject is in each picture, whether a black bar shows, whether the subtitles are readable. Give the owner the path of the MP4 and the plan.
+7. **Change it.** To change a scene's crop, use `scenes crop` and run `short` again (the old plan is kept as a snapshot). To change one thing in a short that is planned, edit the plan file or use `scenes` and `subtitles` commands on it, then `python main.py short --file PLAN` renders it as it is.
+
+Rules for shorts:
+- The short is a derived file. Never write to the film to make a short, except the crop and pin marks above, which the owner asked for by asking for a short.
+- Titles and subtitles of the film come along when they fall in a kept stretch; a subtitle that is cut stays only if most of it stays. The text is laid out again for the narrow frame and stays out of the bottom 35 percent, where the platforms show their buttons. Say which subtitles were dropped.
+- If a render fails, say so with the message of the tool. Do not start a second render while one runs.

@@ -376,6 +376,10 @@ def write_project(tl, work_dir: str, out_path: str = None, protected=None, loade
     `check` it is read by melt before this returns. A Shotcut version other than the tested
     one is a warning."""
     out_path = out_path or os.path.join(work_dir, "film.mlt")
+    if tl.data.get("kind") == "short" or tl.data["film"].get("fit") == "fill":
+        raise ShotcutError("A short has no Shotcut project: the project has no 9:16 window (fill and crop), so Shotcut "
+                           "would show the wide pictures letterboxed in a vertical frame. Cut the short in the tool: "
+                           "python main.py short, and change its scenes with the scenes command.")
     if protected:
         safety.assert_not_inside(out_path, protected)
         safety.assert_not_inside(work_dir, protected)

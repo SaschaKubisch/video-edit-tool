@@ -186,6 +186,30 @@ part. The scene search is Claude Code reading still sheets, the scene texts and,
 Whisper transcript. It can be wrong; the dry run, the preview and `timeline undo` are there for that. See `SPECS.md`
 section 10.
 
+## Vertical shorts (step 6, work in progress)
+
+A short is a 9:16 video for phones, cut from the film and rendered from the `.braw` files with the same look, loudness (-14 LUFS, true peak at most -1 dBTP) and fades as the film. You say how long it should be (60 seconds if you say nothing); the tool picks the scenes, gives each its time, cuts the 9:16 window from the picture, lays the subtitles out again for the narrow frame, and renders MP4, H.264, 1080 x 1920, 29.97 frames per second, about 8 Mbit/s, AAC at 48 kHz.
+
+```bash
+export VET_FONT_DIR=/Volumes/SSD/fonts/inter                      # for burned-in subtitles and titles
+.venv/bin/python main.py short --file timeline.json --work /Volumes/SSD/work --length 60 --dry-run   # the plan, nothing written
+.venv/bin/python main.py short --file timeline.json --work /Volumes/SSD/work --length 60 --stills    # plan, render, stills
+.venv/bin/python main.py short --file timeline.json --work /Volumes/SSD/work --length 30 --only s040,s041,s042,s043   # of these scenes
+.venv/bin/python main.py scenes pin s012,s040                     # a short always keeps pinned scenes
+.venv/bin/python main.py scenes crop s040 --still --file timeline.json --work /Volumes/SSD/work   # the window on a frame
+.venv/bin/python main.py scenes crop s040 --x 0.3                 # move the window (0 left, 0.5 centre, 1 right)
+.venv/bin/python main.py scenes crop s040 --from 0.2 --to 0.6     # a slow pan
+.venv/bin/python main.py short --file /Volumes/SSD/work/exports/short-60.json --work /Volumes/SSD/work   # render the plan as it is
+```
+
+**What the tool chooses.** About one scene per 4 seconds of the short. It cuts the film into that many parts of equal length and keeps one scene of each part: a pinned scene or one you named with `--prefer`, else a scene that has scene text or subtitles, else the longest. Each kept scene gets time in proportion to its length in the film, at least 2.0 seconds (the last scene at least 2.25 seconds, because of the 2 seconds of fade-out), at most 8 seconds; the times add up to the length you asked for, to the frame. Inside a scene it takes the middle, or the stretch that holds whole subtitles and does not cut through one. The short fades in over 1 second and out over 2, as the film does. A film that is shorter than the length you ask for becomes a short that is the whole film.
+
+**The window.** The 9:16 window is cut from the full-size picture: 29.7 percent of the width of a 4096 x 2160 clip and 23.6 percent of a 4096 x 1720 clip (the wide ones, which the short enlarges by 11.6 percent). It is centred unless a scene sets it with `scenes crop`. There is no subject tracking: you or Claude Code look at `scenes crop SCENE --still` (a picture of a frame with the window outlined, and what the window shows) and choose the place. A short has no black bars, because it cuts the window out of the picture instead of fitting the picture into the frame.
+
+**Subtitles and titles.** The subtitles of the film that fall in a kept stretch come along, laid out again for the 9:16 frame: two lines of about 24 characters, a long subtitle split into several, all inside the safe area (top 15, bottom 35, left 4, right 18 percent), in the same size as always. A subtitle that is cut stays only if at least 1 second, or 0.8 of it, whichever is more, stays. A title of the film goes to the scene that held its start, if that stretch is kept. The `lower_third` title sits above the bottom 35 percent too. The form of the subtitles is a setting of the export (`burned` for a short; `--subtitles srt|burned|both|none` changes it).
+
+**Files.** `short-60.mp4`, the plan `short-60.json` next to it (a timeline file of kind `short`: edit it, validate it with `timeline validate`, render it again with `short --file short-60.json`), `short-60.credit.txt` when the LUT asks for a credit, and with `--stills` one still per scene in `short-60.stills/` and the contact sheet `short-60.contact.jpg`. The film file is not changed; only `scenes pin` and `scenes crop` write to it, on request. Planning again over an existing plan keeps the old plan as a snapshot (`timeline undo --file short-60.json`). `--detach` renders in the background with a log. `SPECS.md` section 11 has the rules and the run on the first shoot.
+
 ## UI workflow
 
 1. **Match** - pick the video folder and the audio folder, click Match. The result list shows each pair, its offset and a confidence value (green high, red low - check red ones by hand).
@@ -216,6 +240,9 @@ python3 main.py scenes index|sheets [--file timeline.json] [--work DIR]       # 
 python3 main.py scenes frames SCENE [--every 1s] [--from S --to S] [--file timeline.json] [--work DIR]
 python3 main.py scenes remove|keep|restore ID[,ID...] [--dry-run] [--file timeline.json]
 python3 main.py scenes cut SCENE --from S --to S [--dry-run] [--file timeline.json]
+python3 main.py scenes pin|unpin ID[,ID...] [--dry-run] [--file timeline.json]            # step 6
+python3 main.py scenes crop SCENE (--x X | --from A --to B | --clear) [--still] [--at S] [--dry-run]
+python3 main.py short [--file timeline.json] [--length S] [--output FILE.mp4] [--size WxH] [--prefer|--only|--exclude IDS] [--dry-run] [--no-render] [--stills] [--detach]
 ```
 
 - `match` writes `project.json` and the thumbnails.

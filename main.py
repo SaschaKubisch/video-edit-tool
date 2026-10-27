@@ -20,7 +20,8 @@ Commands:
   render   render the final film from the .braw files (levelled sound, LUTs, DCI 4K)
   subtitles list, write, import and change the subtitles; a text box per scene; Whisper; translations
   title    add, change, remove and import titles
-  scenes   prompt edits: the scene index and sheets to read; remove, keep, cut and restore scenes
+  scenes   prompt edits: the scene index and sheets to read; remove, keep, cut and restore scenes; pin, crop
+  short    make a vertical 9:16 short of a chosen length from the film
 
 Usage:
   python main.py
@@ -32,6 +33,7 @@ import json
 import os
 import sys
 import time
+from fractions import Fraction
 from pathlib import Path
 
 import config
@@ -845,6 +847,165 @@ def cmd_render(args, decoder=None):
               "start over.", flush=True)
         sys.exit(130)
     sys.exit(1 if failed else 0)
+
+
+def _id_list(text):
+    """'s003, s004' -> ['s003', 's004']"""
+    return [p for p in str(text or "").replace(",", " ").split() if p]
+
+
+def cmd_short(args, decoder=None):
+    """Make a vertical short from the film (SPECS 11): plan it, save the plan next to the output, render it from the
+    .braw files, and optionally write a still of each scene. A timeline file of kind short is rendered as it is."""
+    import export
+    import safety
+    import shorts
+    import store
+    import timeline
+    from decoder import BrawSourceDecoder
+
+    def fail(message, code=1):
+        print(f"Error: {message}", file=sys.stderr)
+        sys.exit(code)
+
+    tl, path = _load_timeline_or_exit(args)
+    findings = tl.validate(file_checks=False)
+    if timeline.has_errors(findings):
+        print(json.dumps([f.as_dict() for f in findings], indent=2))
+        fail("The timeline is not valid, so nothing was done.", 1)
+    originals = timeline_originals(tl.data)
+    log = lambda s: print(f"{time.strftime('%H:%M:%S')}  {s}", flush=True)
+
+    if tl.data["kind"] == "short":
+        given = [n for n, v in (("--length", args.length), ("--size", args.size), ("--prefer", args.prefer),
+                                ("--only", args.only), ("--exclude", args.exclude), ("--output", args.output),
+                                ("--subtitles", args.subtitles)) if v]
+        if given:
+            fail(f"{path} is a short that is already planned, and a plan is rendered as it is. {', '.join(given)} "
+                 "belong to a new short: give the film file instead. To change this short, edit the plan file "
+                 "(its scenes, crops and subtitles) or use the `scenes` and `subtitles` commands on it.", 2)
+        plan = None
+        short_tl = tl
+        entry = next((e for e in short_tl.data.get("exports") or [] if e.get("enabled", True)), None)
+        if entry is None:
+            fail("the short has no export that is switched on", 1)
+        out_path, plan_path = entry["output"], path
+        print(shorts.format_plan(_plan_from_file(short_tl), os.path.basename(path), plan_path), end="")
+        if args.dry_run or args.no_render:
+            print("Dry run: nothing was written." if args.dry_run else "The plan is as it is; nothing to write.")
+            return
+    else:
+        size = parse_size(args.size) if args.size else config.SHORT_FRAME
+        work = None
+        if args.output is None or not (args.dry_run or args.no_render):
+            work = _work_dir_of(args, lambda m: fail(m, 2))
+        length = args.length if args.length is not None else config.SHORT_DEFAULT_LENGTH_SEC
+        out_path = os.path.abspath(args.output) if args.output else os.path.join(
+            work, "exports", f"short-{length:g}.mp4")
+        try:
+            plan = shorts.plan_short(tl.data, film_path=os.path.abspath(path), length_s=length, size=size,
+                                     prefer=_id_list(args.prefer), only=_id_list(args.only),
+                                     exclude=_id_list(args.exclude), output=out_path,
+                                     film_hash=timeline.file_hash(path), subtitles=args.subtitles or "burned")
+        except shorts.ShortError as e:
+            fail(str(e))
+        print(shorts.format_plan(plan, os.path.basename(path)), end="")
+        try:
+            safety.assert_not_inside(out_path, originals)
+        except safety.OriginalsProtectedError as e:
+            fail(str(e), 2)
+        if args.dry_run:
+            print("Dry run: nothing was written.")
+            return
+        plan_path = plan.plan_path
+        os.makedirs(os.path.dirname(plan_path), exist_ok=True)
+        short_tl = timeline.Timeline(plan.data)
+        existed = os.path.isfile(plan_path)
+        store.save(short_tl, plan_path)
+        if existed:
+            snapshot = os.path.basename(store.list_snapshots(plan_path)[-1])[:-5]
+            print(f"The plan file existed; the version before is snapshot {snapshot} (`timeline undo --file {plan_path}`).")
+        print(f"Plan saved: {plan_path}")
+        if args.no_render:
+            print(f"Render it with: python main.py short --file {plan_path} --work <work folder>")
+            return
+
+    work = _work_dir_of(args, lambda m: fail(m, 2))
+    name = next(e for e in short_tl.data["exports"] if e.get("enabled", True))["name"]
+    if args.detach:
+        argv = [sys.executable, os.path.abspath(__file__), "short", "--file", plan_path, "--work", work]
+        if args.stills:
+            argv.append("--stills")
+        log_path = os.path.join(work, "reports", f"short-{name}.log")
+        pid_path = os.path.join(work, "reports", f"short-{name}.pid")
+        try:
+            pid = export.spawn_detached(argv, log_path, pid_path)
+        except export.AlreadyRunning as e:
+            fail(str(e), 1)
+        print(f"Render started as process {pid}, in a session of its own.")
+        print(f"  Log:     {log_path}")
+        print(f"  Watch:   tail -f '{log_path}'")
+        print(f"  Stop:    kill {pid}   (SIGTERM: the render removes its files and exits)")
+        return
+    decoder = decoder or BrawSourceDecoder()
+    try:
+        decoder.check()
+    except RuntimeError as e:
+        fail(str(e), 2)
+    install_graceful_stop()
+    started = time.time()
+    try:
+        result = export.render_export(short_tl, name, work, decoder, timeline_hash=timeline.file_hash(plan_path),
+                                      protected=originals, report_name="short-report", subtitles=args.subtitles,
+                                      log=log)
+    except (export.ExportError, safety.OriginalsProtectedError) as e:
+        fail(str(e))
+    except KeyboardInterrupt:
+        print("Interrupted. The files of the render were removed. Run the same command again to start over.", flush=True)
+        sys.exit(130)
+    for w in result.warnings:
+        print(f"  warning: {w}", flush=True)
+    if result.srt_file:
+        print(f"  subtitles file: {result.srt_file}", flush=True)
+    if result.credit_file:
+        print(f"  credit for the video description: {result.credit_file}", flush=True)
+    if not result.ok:
+        print("The file failed its checks: " + "; ".join(result.problems), file=sys.stderr)
+        sys.exit(1)
+    print(f"Short: {result.path}  {result.frames} frames, {result.seconds:.3f} s, {result.bytes / 1e6:.1f} MB, "
+          f"{result.mbps} Mbit/s, rendered in {time.time() - started:.0f} s")
+    if args.stills:
+        try:
+            made = shorts.scene_stills(short_tl.data, result.path)
+        except shorts.ShortError as e:
+            fail(str(e))
+        print(f"Stills: {made['folder']}  (one per scene)")
+        print(f"Contact sheet: {made['contact']}")
+
+
+def _plan_from_file(short_tl):
+    """A ShortPlan to print for a short that is read from its file (nothing is planned again)."""
+    import shorts
+    data = short_tl.data
+    f = data["film"]["fps"]
+    fps = Fraction(f["num"], f["den"])
+    scenes, at = [], 0
+    for seg in data["segments"]:
+        if not seg.get("enabled", True):
+            continue
+        n = seg["out"] - seg["in"]
+        scenes.append({"id": seg["id"], "film_id": seg.get("x_film_segment", "?"), "source": seg["source"],
+                       "size": data["sources"][seg["source"]]["size"],
+                       "film_in_s": seg.get("x_film_in_s", 0.0), "film_out_s": seg.get("x_film_out_s", 0.0),
+                       "short_in_s": round(float(Fraction(at) / fps), 3),
+                       "short_out_s": round(float(Fraction(at + n) / fps), 3), "frames": n, "scene_frames": n,
+                       "crop": seg.get("crop"), "reason": seg.get("note", ""), "tier": 0,
+                       "cues": {"kept": [c["id"] for c in (data.get("subtitles") or {}).get("cues", [])
+                                         if c["anchor"] == seg["id"]], "dropped": [], "pieces": 0}})
+        at += n
+    target = round(data["derived_from"]["target_length_s"] * fps)
+    return shorts.ShortPlan(data=data, plan_path="", target_frames=int(target), frames=at, fps=fps, scenes=scenes,
+                            pool_scenes=len(scenes))
 
 
 def _words_change(args, ops, file_checks=False):
@@ -1812,6 +1973,33 @@ def build_parser():
     sp.add_argument("--at", type=float, help="Film second of the frame for --still (default: the middle of the scene)")
     sp.add_argument("--size", help=f"Size of the short for the window, WIDTHxHEIGHT (default {config.SHORT_FRAME[0]}x{config.SHORT_FRAME[1]})")
     p_scenes.set_defaults(func=cmd_scenes)
+
+    # ── short ──
+    p_short = subparsers.add_parser("short",
+        help="Make a vertical 9:16 short from the film (or render a short that is already planned)")
+    p_short.add_argument("--file", "--from", "-f", dest="file",
+        help=f"The film (default: {config.TIMELINE_FILE} next to the project file), or a short that is already planned")
+    p_short.add_argument("--work", "-w", help="Work folder (default: work_dir of the project file)")
+    p_short.add_argument("--length", "-l", type=float, metavar="SECONDS",
+        help=f"Length of the short in seconds, exact to the frame (default {config.SHORT_DEFAULT_LENGTH_SEC:g})")
+    p_short.add_argument("--output", "-o", metavar="FILE.mp4",
+        help="The MP4 to write; the plan file sits next to it with the extension .json (default: "
+             "<work>/exports/short-<length>.mp4)")
+    p_short.add_argument("--size", metavar="WxH",
+        help=f"The frame of the short, a vertical size (default {config.SHORT_FRAME[0]}x{config.SHORT_FRAME[1]})")
+    p_short.add_argument("--prefer", metavar="IDS", help="Scenes the short must keep, for example s012,s040")
+    p_short.add_argument("--only", metavar="IDS", help="Make the short only from these scenes")
+    p_short.add_argument("--exclude", metavar="IDS", help="Do not use these scenes")
+    p_short.add_argument("--subtitles", choices=config.SUBTITLE_FORMS,
+        help="The form of the subtitles: srt, burned, both or none (default for a short: burned)")
+    p_short.add_argument("--dry-run", action="store_true",
+        help="Print the plan (kept scenes, film and short times, kept and dropped subtitles) and write nothing")
+    p_short.add_argument("--no-render", action="store_true", help="Write the plan file and stop")
+    p_short.add_argument("--stills", action="store_true",
+        help="After the render, write one still per scene and a contact sheet next to the MP4")
+    p_short.add_argument("--detach", action="store_true",
+        help="Render in the background, in a session of its own, with a log and a pid file in <work>/reports")
+    p_short.set_defaults(func=cmd_short)
 
     # ── render ──
     p_render = subparsers.add_parser("render",
