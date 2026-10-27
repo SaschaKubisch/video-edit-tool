@@ -105,6 +105,16 @@ macOS login keychain: a generic password whose service name is `OPENROUTER_API_K
 `security find-generic-password -s OPENROUTER_API_KEY -w` when it needs the key, so macOS may ask once whether to allow
 the access. The key goes into one request header and is never printed, logged, cached or written to a file.
 
+**Lines of the translations.** Each language is wrapped for its own limit (42 characters for pt-BR, de and ru, 35 for
+Thai, 16 for Chinese, 13 full-width characters for Japanese; two lines). Chinese, Japanese and Thai have no spaces, so
+the lines are cut only at phrase boundaries (the `budoux` package), and never so that a line starts with a closing
+mark, a small kana or `ー`, or ends with an opening bracket. A translation that needs more than two lines or is read
+faster than its language allows (Japanese 4, Chinese 9, the others 17 characters per second) is sent to the model once
+more, with the most characters it may have (the smaller of two lines and the reading speed times the length of the
+cue). The shorter text is kept only when it fits better; the first text and its warning stay otherwise. The command
+prints how many cues were asked again and which were shortened; the follow-up counts in the tokens and the cost.
+`--no-shorten` leaves it out.
+
 **Claude Code writes subtitles and titles from a prompt** by running these commands, or by writing a JSON file that the
 tool checks and imports. Example: the owner says "put the title Sunday kitchen over the first 4 seconds, and subtitle the
 sausage scene with what I say in it". Claude Code looks (`timeline summary`, `timeline frames`), then:

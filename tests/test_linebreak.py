@@ -1,4 +1,4 @@
-"""Check 4.18: line breaks of Japanese, Simplified Chinese and Thai subtitles (SPECS 9.9). The cuts fall at phrase
+"""Check 4.13 (SPECS 9.10): line breaks of Japanese, Simplified Chinese and Thai subtitles (SPECS 9.9). The cuts fall at phrase
 boundaries that BudouX gives, the line-start and line-end rules of W3C JLREQ and CLREQ are kept, and the lines are
 balanced within the limit of the language. The strings are those of the first real translation of 11 cues
 (2026-10-27, model google/gemini-2.5-flash-lite), whose lines were cut inside words: ハン|ドブレンダー, 倒|进, จา|ก,

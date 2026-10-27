@@ -1,4 +1,4 @@
-"""Check 4.19: the follow-up request for a shorter translation (SPECS 9.9). A translated cue that does not fit in two
+"""Check 4.14 (SPECS 9.10): the follow-up request for a shorter translation (SPECS 9.9). A translated cue that does not fit in two
 lines at phrase boundaries, or is read faster than its language allows, is sent once more with a stated maximum
 number of characters: the smaller of (2 lines x the line limit) and (reading speed x the cue's duration). The shorter
 text is kept when it fits better; otherwise the first translation stays and the warning stays. The follow-up is counted

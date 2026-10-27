@@ -2,6 +2,17 @@
 
 ## Unreleased (editor, step 2 in progress)
 
+### Fixed (translations, line breaks)
+- Japanese, Chinese and Thai lines are cut at phrase boundaries only (`linebreak.py`, the `budoux` package,
+  Apache-2.0, pinned in `requirements.txt`), with the line-start and line-end rules of W3C JLREQ and CLREQ. Before,
+  the lines were cut by the count of characters: `ハン|ドブレンダー`, `倒|进`, `จา|ก`, and a line could begin with
+  `ー` (first real run, 2026-10-27).
+- A translated cue that needs more than two lines or is read faster than its language allows is sent once more to the
+  model with a maximum number of characters (the smaller of two lines and the reading speed times the cue's
+  duration). The shorter text is kept when it fits better. The follow-up is in the token and cost report, is cached
+  under its own key, and `subtitles translate --no-shorten` leaves it out.
+- The reading speed of a translation no longer counts the space that joined its lines.
+
 ### Added (step 5, prompt edits)
 - The scene index (`scenes index`): `index.json` and `index.md` in `<work>/index/<timeline name>/` with one entry per
   scene (film times, clip and frames, the speech the transcript has in the scene, the scene text, the cues, the sheet),
