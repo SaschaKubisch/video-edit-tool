@@ -1,9 +1,9 @@
 # Product Requirements Document - Ambient Video Auto
 
-**Version:** 2.3 (draft for the owner's review)
+**Version:** 2.4 (draft for the owner's review)
 **Date:** 2026-10-27
 **Owner:** Sascha Kubisch
-**Status:** Matching and sync (requirements M1 to M6) are built and released as v1.1.0. Step 1, the conversion test, is done: its results are in section 5 and in `SPECS.md` section 6. Of the rest, step 2 is built on the branch `editor-step2` (the `convert` command, the timeline file's loader and validator, the clap finder, the steady-scene finder, the assembly, the film preview and the Film tab with trim controls); the drift measurement (`analyse --drift`) is built too; of step 3 the loudness levelling, the creative LUT, the final film from the `.braw` files with its presets and the ProRes master, and the Shotcut project with its read-back are built on the same branch, and everything else in steps 3 to 6 is planned and not built. Section 3 records the owner's decisions of 2026-10-26 on storage, colour, frame, Python and export. Section 2 replaces the goal of v1.1. Version 2.2 records the owner's decisions of 2026-10-26 on the clap (D6), steady scenes (D7, including the clip with no steady scene), transitions (D8), reading cuts back from Shotcut (D11) and the encoder (D17); step 2 is being built. Version 2.3 records the owner's answer of 2026-10-27 on which creative LUTs to install (D10): "slay Film + Portrait".
+**Status:** Matching and sync (requirements M1 to M6) are built and released as v1.1.0. Step 1, the conversion test, is done: its results are in section 5 and in `SPECS.md` section 6. Of the rest, step 2 is built on the branch `editor-step2` (the `convert` command, the timeline file's loader and validator, the clap finder, the steady-scene finder, the assembly, the film preview and the Film tab with trim controls); the drift measurement (`analyse --drift`) is built too; of step 3 the loudness levelling, the creative LUT, the final film from the `.braw` files with its presets and the ProRes master, and the Shotcut project with its read-back are built on the same branch, and everything else in steps 3 to 6 is planned and not built. Section 3 records the owner's decisions of 2026-10-26 on storage, colour, frame, Python and export. Section 2 replaces the goal of v1.1. Version 2.2 records the owner's decisions of 2026-10-26 on the clap (D6), steady scenes (D7, including the clip with no steady scene), transitions (D8), reading cuts back from Shotcut (D11) and the encoder (D17); step 2 is being built. Version 2.3 records the owner's answer of 2026-10-27 on which creative LUTs to install (D10): "slay Film + Portrait". Version 2.4 records the owner's answers of 2026-10-27 on the Whisper model (D12), the subtitle form and font (D13), how subtitles are written (a text box per scene), the one subtitle style and the translations; step 4 is being built on the branch `editor-step2`.
 
 Companion document: `SPECS.md` (how it is built, the timeline file format, the tests).
 
@@ -67,7 +67,7 @@ The tool does all automatic work on one timeline file. It renders a preview and 
 
 ## 3. Settled Decisions (Owner)
 
-These decisions are settled. This document builds on them and does not reopen them. Each is also a row in section 12 or a requirement in section 9. D1, D2, D3 and D5 were open decisions in version 2.0; the owner answered them on 2026-10-26 (section 14 lists what remains open). D6, D7, D8, D11 and D17 were answered later the same day; the last part of D7 (a clip with no steady scene) was answered after that. D9 (loudness), D10 (creative LUT sources) and the question about the offsets of two clips were answered after that, also on 2026-10-26. The owner's choice of creative LUT packs (D10) was answered on 2026-10-27.
+These decisions are settled. This document builds on them and does not reopen them. Each is also a row in section 12 or a requirement in section 9. D1, D2, D3 and D5 were open decisions in version 2.0; the owner answered them on 2026-10-26 (section 14 lists what remains open). D6, D7, D8, D11 and D17 were answered later the same day; the last part of D7 (a clip with no steady scene) was answered after that. D9 (loudness), D10 (creative LUT sources) and the question about the offsets of two clips were answered after that, also on 2026-10-26. The owner's choice of creative LUT packs (D10) was answered on 2026-10-27. D12, D13, the subtitle input, the subtitle style and the translations were answered on 2026-10-27, too.
 
 | Area | Decision |
 |------|----------|
@@ -89,6 +89,13 @@ These decisions are settled. This document builds on them and does not reopen th
 | Creative LUT sources (D10) | **"Research free packs".** A research step finds free LUT packs whose licence allows use in the owner's videos, and shows stills of the owner's footage with each look. The owner picks which packs to install. The base look stays Gen 5 Film to Video. Built in step 3. **Pick, 2026-10-27: "slay Film + Portrait".** The two LUTs are `slay-04-film.cube` and `slay-05-portrait.cube` from the slay pack (github.com/slaycamera/luts, licence CC BY 4.0, which asks for the credit line `LUTs: [slay](https://www.slaycamera.com/?utm_source=github&utm_medium=repo&utm_campaign=luts) (CC BY 4.0)` wherever work made with them is published). They are installed on the owner's drive, with the licence text and a `CREDIT.txt`, in the folder that `VET_LUT_DIR` names, and are not committed. The creative LUT is applied after the base look, on Rec.709. No creative LUT is applied unless the owner chooses one. When a film uses a slay LUT, the export writes the credit line into a text file next to the film, for the YouTube description. |
 | Delivery | 4K films. Vertical 9:16 shorts are cut from the 4K source. |
 | Speech | English. This covers subtitles and transcript search. |
+| Whisper model (D12) | **"large-v3-turbo"**, run with whisper.cpp (2026-10-27). The `whisper-cli` program in Shotcut's app folder is run as a command-line program only; Shotcut itself is not started. The model file `ggml-large-v3-turbo.bin` is downloaded once from the whisper.cpp repository on Hugging Face into the work folder, checked against the published sha256 and named by the setting `VET_WHISPER_MODEL`. A timing test on a two-minute sample of the real film came first (`SPECS.md` section 9.2 has the numbers). The model is not trained to translate; the subtitle language is English. |
+| Subtitle form (D13) | **"This should be configurable actually."** (2026-10-27). The form is a setting of each export: `srt` (an SRT file next to the film), `burned` (drawn into the picture) or `both`. Starting values, not decisions: the main film `srt`, a vertical short `burned`. The setting is changed in the export settings, on the command line and in the Film tab. |
+| Subtitle font (D13) | **"Inter"** (2026-10-27). Inter (SIL Open Font License 1.1) from github.com/rsms/inter, kept in a folder on the SSD with its licence file, not installed on the system and not committed. |
+| Subtitle language | **"English"** (2026-10-27, asked again for the text box). Version 1 of the timeline file supports English only. |
+| How subtitles are written | The owner (2026-10-27): **"Maybe it's best to just have a text input where I use my local Superwhisper model and then just fill a text box with text. And then in the background we will split this text up into subtitles that we then spread across the video wherever it fits. And then I as a user can also move these sections myself."** Follow-up answers: **"One box per scene"**; placement **"Across the whole scene"**; suggestion for the text **"Local cleanup rules"**; language **"English"**. Superwhisper is the owner's own dictation program; the tool records no audio. The automatic Whisper subtitles (W1, W2) stay as a second way. |
+| Subtitle style | One style for every film and every export, defined once in the tool's configuration (Inter, size, weight, colour, outline, line spacing, bottom position in the safe area, centred), never per film. Text is wrapped by its measured width with the real font and never leaves the safe area; a cue that does not fit is split into more cues, never drawn smaller. The owner asked for the common readability practice: about 42 characters per line, at most 2 lines, reading speed at most about 17 characters per second, cues of about 1 to 7 s, a small gap between cues, line breaks at natural phrase points, a bottom-heavy 2-line layout. The numbers and their sources are in `SPECS.md` section 9.3. |
+| Subtitle translations | The owner (2026-10-27): **"Would be good to also translate the subtitles into Portuguese, Chinese, Thai and German. To have them as exportable files that I can then use for the YouTube subtitles and so on."** Then: **"also japanese and russian"**. Translator: **"openrouter cheap model"**. Portuguese: **"Brazilian (pt-BR)"**. Chinese: **"Simplified (zh-Hans)"**. So the six target languages are pt-BR, zh-Hans, th, de, ja and ru; the files are SRT files, one per language, next to the film. |
 | Installs allowed | `ffmpeg-full` (Homebrew, GPL, keg-only, installed beside the existing ffmpeg), VapourSynth with the BRAW plugin in the tool's own Python 3.12 environment, OpenCV, and Shotcut (installed on 2026-10-26, version 26.9.28 [measured]). |
 | Originals | The tool never modifies or deletes the `.braw` and WAV originals. (Kept from v1.1.) |
 
@@ -153,11 +160,11 @@ Each step is usable on its own. A later step starts only when the step before it
 | 1 | Conversion test. **Done** on 2026-10-26: the conversion test, and its addendum, the preview-copy check. Results in section 5.1. | The owner knows how long one real clip takes to convert, how large the copies are and that the colour is right. Two preview copies exist and open in QuickTime-compatible players and in Shotcut's `melt`. | - |
 | 2 | Preview copies, timeline file and assembly. **Built** on the branch `editor-step2` (the owner has not yet watched a preview). | Get preview copies of all clips (the `convert` command, requirements C1 to C7), then a rough film in recording order, without clap and camera movement, with audio crossfades and film fades. Watch it in the page and trim it. | Step 1 result; D6, D7 and D8 are settled (section 3) |
 | 3 | Look and sound | Get a levelled, graded DCI 4K film in MP4 (H.264, about 45 Mbit/s), rendered from the `.braw` files. Choose a creative LUT from stills if wanted. Get the Shotcut project and read its cuts back, and the ProRes master if ticked. | D11 (audio form in the Shotcut project); D9 and D10 are settled (section 3) |
-| 4 | Words | Get English subtitles and titles, burned in or as a file. | D12 (Whisper model), D13 (subtitle form and fonts) |
+| 4 | Words | Get English subtitles and titles, burned in or as a file, and SRT files in six more languages. **Being built** on the branch `editor-step2`. | D12 (Whisper model) and D13 (subtitle form and font) are settled (section 3) |
 | 5 | Prompt edits | Change the film by describing scenes to Claude Code. | D14 (meaning of "cut out", search method) |
 | 6 | Vertical shorts | Get a 9:16 short of a chosen length from the 16:9 film. | D15 (default length), D16 (crop and importance) |
 
-D4 (the Resolve option) can be answered at any time. The open decisions are in section 14. D1, D2, D3, D5, D6, D7, D8, D9, D10, D17 and the preview-size part of D11 are answered (section 3).
+D4 (the Resolve option) can be answered at any time. The open decisions are in section 14. D1, D2, D3, D5, D6, D7, D8, D9, D10, D12, D13, D17 and the preview-size part of D11 are answered (section 3).
 
 ## 8. Scope
 
@@ -201,7 +208,7 @@ The wording is the owner's, as recorded.
 | Smooth audio fade out and in between scenes | A5 | 2 |
 | Apply state-of-the-art LUTs | L1, L2, L3 | 3 |
 | Levelise all audio loudness | L4, L5 | 3 |
-| Titles and subtitles manually or automatically via a prompt | W1 to W5 | 4 |
+| Titles and subtitles manually or automatically via a prompt | W1 to W8 | 4 |
 | Prompt-driven edits via Claude Code that find scenes by description ("please cut out the scene where I am frying a sausage") | P1 to P4 | 5 |
 | Fade in video and audio at the start and fade out at the end of the film | A6 | 2 |
 | Save the project | T4 | 2 |
@@ -305,8 +312,11 @@ Step 1 tested this method on two clips (section 5.1). These requirements describ
 | W1 | English transcript with times, from the H2N audio, only where speech is detected. | Must |
 | W2 | Subtitles built from the transcript and mapped onto the segments. Text is editable by hand. | Must |
 | W3 | Titles by hand (in the file) or by prompt (Claude Code writes them). | Must |
-| W4 | Burn subtitles and titles into the film, and write an SRT file. Which of the two is used is D13. | Must |
+| W4 | Burn subtitles and titles into the film, and write an SRT file. Which of the two is used is a setting of each export (D13, section 3): `srt`, `burned` or `both`. Titles are always drawn into the picture. | Must |
 | W5 | Search the transcript by words. | Should |
+| W6 | A text box per scene. The owner types or dictates the words of the scene; the tool cleans the text locally, splits it into cues by the readability rules and spreads them across the scene. The owner can move and resize each cue. | Must |
+| W7 | One subtitle style for all films, with the readability limits of section 3 (Inter; wrapped by measured width; two lines at most; never outside the safe area). | Must |
+| W8 | Translate the English cues into pt-BR, zh-Hans, th, de, ja and ru and write one SRT file per language, with the times of the English cues. | Should |
 
 **P - Prompt edits (step 5)**
 
@@ -382,6 +392,12 @@ Step 1 tested this method on two clips (section 5.1). These requirements describ
 | The stored offsets of `A002_01011851_C047` and `A002_01060813_C101` stay; the owner types offsets per clip in the Film tab. | Owner | Use the lined-up offsets +0.02 s and +0.18 s from the clap report. | The owner answered "Leave them, I set them". The lined-up values are an inference from two sounds that the camera and the recorder each heard once; they were not checked by ear [inference]. A hand offset is stored in the timeline file next to the offset from matching, so the original stays visible and can be restored (`SPECS.md` section 3.2, `audio_offset_hand_s`). |
 | Loudness: level each scene to the same loudness, then the whole film to -14 LUFS integrated with a true peak of at most -1 dBTP. (D9) | Owner | Level the film as a whole only (mode `film_only`, which keeps the differences between scenes). | The owner answered "Each scene, then film". The numbers are those shown with the question; YouTube is described as targeting about -14 LUFS with a -1 dBTP peak, from secondary sources only [documented, secondary, Src12]. |
 | Creative LUTs come from free packs found by a research step, and the owner picks which to install. (D10) | Owner | Name one LUT collection now; bundle a pack with the tool. | The owner answered "Research free packs". The licences of free packs were not read before this answer [documented, secondary]; the research step reads them, and a pack whose licence does not allow use in the owner's videos is not offered. The research step read the licence of the slay pack (CC BY 4.0, free for personal and commercial use with credit [documented, the pack's README and LICENSE]). The owner then picked "slay Film + Portrait" (2026-10-27). The credit is the condition of the licence, so the export writes it next to the film. |
+| The Whisper model is large-v3-turbo, run by whisper.cpp's `whisper-cli` from Shotcut's folder. (D12) | Owner | A smaller or English-only model; `mlx-whisper`; the `whisper` filter of `ffmpeg-full`. | The owner answered "large-v3-turbo". The installed ffmpeg 8.1 has no `whisper` filter [measured]; `whisper-cli` 1.8.3 in Shotcut's app folder is a universal binary with Metal and runs from the command line [measured]. The model file is 1.6 GB and was checked against the sha256 that Hugging Face publishes. |
+| The subtitle form is a setting of each export: `srt`, `burned` or `both`. (D13) | Owner | One form for all exports. | The owner answered "This should be configurable actually." The starting values (film `srt`, short `burned`) are the plan's guess, not an answer. |
+| Subtitles and titles are drawn with Inter. (D13) | Owner | A system font. | The owner answered "Inter". The installed ffmpeg has no `libass`, `freetype` or `drawtext` [measured], so the tool draws the text with Pillow and lays it over the picture with ffmpeg's `overlay` filter. |
+| Subtitles come mainly from a text box per scene; automatic Whisper subtitles are the second way. | Owner | Whisper only. | The owner wants to dictate with Superwhisper and fill a box. On the first shoot, Whisper heard "Thank you." and "*Pain*" in ambient sound, where nobody speaks [measured, `SPECS.md` 9.2], so its text needs a person's check. |
+| One subtitle style for all films, in the configuration. | Owner | A style per film. | The owner asked for one consistent style. |
+| Subtitle translations go through OpenRouter with a cheap model, one SRT file per language. | Owner | A local translation model; DeepL. | The owner answered "openrouter cheap model". |
 | 4K films; shorts cut from the 4K source. | Owner | 1080p. | A 9:16 window of a 1080p frame is 608 pixels wide and would be enlarged to 1080 [arithmetic]. |
 | English speech only. | Owner | Several languages. | Fixes the Whisper model class and the subtitle rules. |
 | Duration-first matching with an order-preserving alignment. | Kept | Pure audio correlation of all pairs. | Camera microphone against H2N gave weak scores (8 to 18 percent) and many extractions; durations are cheap and near-identical for pairs [reported in the v1.1 PRD]. |
@@ -415,7 +431,7 @@ Step 1 tested this method on two clips (section 5.1). These requirements describ
 
 Nothing here is decided. Where the owner has said something, it is quoted. The current plan in `SPECS.md` is a technical default, not a decision. Each question is needed before the step named.
 
-Answered on 2026-10-26 and moved to section 3 (settled decisions) and section 12 (rationale): **D1** storage (option A), **D2** colour, **D3** Python and packages, **D5** frame shape, the default LUT of **D10**, **D6** the clap, **D7** steady scenes (including the clip with no steady scene: "Leave it out, list it"), **D8** transitions and fades, **D9** loudness ("Each scene, then film"), the rest of **D10** ("Research free packs"), **D17** the encoder, and the preview-size part of **D11**. The question about the offsets of `A002_01011851_C047` and `A002_01060813_C101` ("Leave them, I set them") was also answered; it has no number. These numbers are not reused. **D17** came from the speed measurements of step 1.
+Answered on 2026-10-26 and moved to section 3 (settled decisions) and section 12 (rationale): **D1** storage (option A), **D2** colour, **D3** Python and packages, **D5** frame shape, the default LUT of **D10**, **D6** the clap, **D7** steady scenes (including the clip with no steady scene: "Leave it out, list it"), **D8** transitions and fades, **D9** loudness ("Each scene, then film"), the rest of **D10** ("Research free packs"), **D17** the encoder, the preview-size part of **D11**, and on 2026-10-27 **D12** (Whisper model: "large-v3-turbo") and **D13** (subtitle form: "This should be configurable actually."; font: "Inter"). The question about the offsets of `A002_01011851_C047` and `A002_01060813_C101` ("Leave them, I set them") was also answered; it has no number. These numbers are not reused. **D17** came from the speed measurements of step 1.
 
 **Any time**
 
@@ -424,11 +440,6 @@ Answered on 2026-10-26 and moved to section 3 (settled decisions) and section 12
 **Before step 3**
 
 - **D11. Shotcut project, the part not answered.** The owner answered the question about the preview size: "Tool reads cuts back" (section 3). Open: in the Shotcut project, separate audio clips per segment, already shifted by the offset (the plan), or one premixed audio track.
-
-**Before step 4**
-
-- **D12. Whisper model.** Open: which model size and where it is downloaded from. The choice follows a timing test on a two-minute sample in step 4. Shotcut's folder holds a `whisper-cli` program [measured]; whether it suits is not checked.
-- **D13. Subtitle form.** Open: burned into the picture, as an SRT file next to the film, or both. Open: the font for subtitles and titles.
 
 **Before step 5**
 
@@ -450,7 +461,12 @@ Answered on 2026-10-26 and moved to section 3 (settled decisions) and section 12
 - Per-scene trims in seconds from the start and the end (`trim_start`, `trim_end`, `selection_trims`) are replaced by segment in-points and out-points in the timeline file. The owner's `project.json` has an empty selection and no trims, so nothing needs to move [measured].
 - The v1.1 open item "ship `resolve_import.py`" depends on D4.
 
-**Changed in version 2.2 (this version) against version 2.1**
+**Changed in version 2.4 against version 2.3 (2026-10-27)**
+
+- Decisions moved from open to settled: D12 ("large-v3-turbo") and D13 (form: "This should be configurable actually."; font: "Inter"). Section 3 has new rows for them and for the subtitle language, the text box per scene, the one subtitle style and the translations; section 12 has the reasons; section 14 loses D12 and D13.
+- New requirements W6 (text box per scene), W7 (one style) and W8 (translations).
+
+**Changed in version 2.2 against version 2.1**
 
 - Decisions moved from open to settled: D6 ("Only at the start"), D7 ("Every steady scene"), D8 ("Hard cut"), D17 ("Hardware (fast)") and the preview-size part of D11 ("Tool reads cuts back"). Section 3 has new rows, section 12 new rows, section 14 shrinks.
 - Reading cut points and order back from Shotcut is now in scope (new requirement E7, step 3). It was out of scope in version 2.1. E4 no longer says "one-way".

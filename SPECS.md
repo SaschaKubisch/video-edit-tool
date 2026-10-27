@@ -1,10 +1,12 @@
 # Technical Specification - Ambient Video Auto
 
-**Version:** 2.3 (draft for the owner's review)
+**Version:** 2.4 (draft for the owner's review)
 **Date:** 2026-10-27
 Companion to `PRD.md`. Sections 1 to 17 specify the planned editor. Appendix A describes the system built as v1.1.0, which the plan reuses. Appendix B lists the sources.
 
 Of sections 1 to 17, step 2 is built on the branch `editor-step2`, except the contact sheets of 7.4: the Python 3.12 move, the `convert` command (section 6, with `decoder.py`, `safety.py`, `tools.py`), the timeline file's loader, validator and saver with `timeline validate` and `timeline summary` (section 3, rules V0 to V23), the clap finder with `analyse --clap` (section 7.2), the drift measurement with `analyse --drift` (7.3), the steady-scene finder with `analyse --scenes` (7.4), the assembly with `assemble` (7.5), the film preview with `preview` (5.5; the render plan of 5.1 and the sound path of 5.4 are built, the final film of 5.3 is not), saving with snapshots, the hash check, `timeline undo`, `timeline history` and `timeline frames` (4.1, 4.3), the page's operations (4.4), the owner's sync offset per clip (3.2, V23, 7.6) and the Film tab with its endpoints (7.6, section 12). Of step 3 (section 8) the following is built on the same branch: the levelling of every segment and of the film with the true-peak limiter (5.4, 8.4), the creative LUT (`look`, 8.2, 8.3), the final film from the `.braw` files with the presets and the checks (`render`, `export`, 5.3, 5.6, 5.7, 8.5) and the ProRes master. The Shotcut project (`export-shotcut`) and its read-back (`import-shotcut`, 8.6) are built too; the page's part of step 3 (8.7) is not built unless a line there says so. The module table in section 2.3 says which module is built. Where the build found the plan wrong, the text says "changed in the build". The test of step 1 was run by hand with scripts that are not in the repository (section 6.1). Every other interface named here (commands, endpoints, file names, module names) is planned, and names may change when the code is written.
+
+Version 2.4 records the owner's answers of 2026-10-27 for step 4: the Whisper model (D12, "large-v3-turbo"), the subtitle form (D13, "This should be configurable actually."), the font (D13, "Inter"), a text box per scene, one subtitle style for all films and the translations. Section 9.0 quotes them. Step 4 is being built on the branch `editor-step2`; where it says "As built", the code does it.
 
 Version 2.2 adds the owner's decisions on the clap (D6), steady scenes (D7, with the clip that has no steady scene: "Leave it out, list it"), transitions (D8), reading Shotcut cuts back (D11), the encoder (D17), loudness (D9, "Each scene, then film"), the sources of creative LUTs (D10, "Research free packs") and the offsets of two clips ("Leave them, I set them"). Step 2 is being built on the branch `editor-step2`; where the build found the plan wrong, the text is changed and marked "changed in the build".
 
@@ -166,6 +168,9 @@ The code stays flat in the repository folder, as today.
 | VapourSynth R81 with `vapoursynth-brawsource` 0.5.0 | Decoding BRAW (decoder 1): the preview copies and the final render | Python import in the tool's environment [measured: both clips decode]. |
 | Blackmagic RAW SDK | Decoding BRAW (decoder 2, only if the plugin fails) | Not written yet. |
 | Shotcut 26.9.28 | Hand work; opening `film.mlt`. Its `melt` program checks the project file. | `/Applications/Shotcut.app`; `melt` at `/Applications/Shotcut.app/Contents/MacOS/melt` (version 7.41.0) [measured]. Run `melt` with `QT_QPA_PLATFORM=offscreen` so that no window opens. |
+| `whisper-cli` 1.8.3 (whisper.cpp) | Speech to text for the automatic subtitles (step 4, D12) | `VET_WHISPER_BIN`, else `whisper-cli` in `/Applications/Shotcut.app/Contents/MacOS/`, else on `PATH` [measured]. Run as a command-line program only; Shotcut is not started. |
+| The model `ggml-large-v3-turbo.bin` | Whisper (D12) | `VET_WHISPER_MODEL`. Downloaded once by hand, never by the tool. |
+| Inter 4.1 (SIL Open Font License 1.1) | The font of subtitles and titles (D13) | `VET_FONT_DIR`, the folder with `Inter-SemiBold.ttf`, `Inter-Bold.ttf` and `LICENSE.txt`. Not installed on the system, not committed. |
 
 A command `python3 main.py tools check` prints each program, its version and whether the needed filters exist: `lut3d`, `pad`, `subtitles`, `ebur128`, `alimiter`, `whisper`, `crop`, `scale`, and the encoders `libx264`, `h264_videotoolbox`, `hevc_videotoolbox`, `prores_videotoolbox`, `prores_ks`. [unverified until `ffmpeg-full` is installed; the existing ffmpeg 8.1 has all of them except `subtitles` and `whisper`.]
 
@@ -1321,6 +1326,23 @@ A tab **Look** shows the stills sheets. A tab **Export** lists the entries of `e
 
 ## 9. Step 4: Words
 
+### 9.0 Decisions of 2026-10-27
+
+The owner's words, as recorded. The numbers and rules that follow from them are in 9.2 to 9.9.
+
+| Topic | The owner's answer |
+|-------|--------------------|
+| D12, Whisper model | "large-v3-turbo". Run with whisper.cpp. |
+| D13, subtitle form | "This should be configurable actually." So the form is a setting of each export (`srt`, `burned`, `both`). Starting values, marked as such: the main film `srt`, a vertical short `burned`. |
+| D13, font | "Inter". |
+| Subtitle language | "English" (settled earlier, asked again). |
+| How subtitles are written | "Maybe it's best to just have a text input where I use my local Superwhisper model and then just fill a text box with text. And then in the background we will split this text up into subtitles that we then spread across the video wherever it fits. And then I as a user can also move these sections myself." Follow-up: "One box per scene". Placement: "Across the whole scene". Suggestion for the text: "Local cleanup rules". Language: "English". |
+| Translations | "Would be good to also translate the subtitles into Portuguese, Chinese, Thai and German. To have them as exportable files that I can then use for the YouTube subtitles and so on." Then: "also japanese and russian". Translator: "openrouter cheap model". Portuguese: "Brazilian (pt-BR)". Chinese: "Simplified (zh-Hans)". |
+
+**Whisper, measured by hand on 2026-10-27** before the tool existed. `whisper-cli` is in `/Applications/Shotcut.app/Contents/MacOS/` (whisper.cpp 1.8.3 with ggml 0.9.5, a universal binary with Metal; it was started as a command-line program, Shotcut was not started). The model `ggml-large-v3-turbo.bin` (1,624,555,275 bytes) was downloaded from `huggingface.co/ggerganov/whisper.cpp` to `/Volumes/Untitled/video-edit-tool-work/models/`; its sha256 `1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69` equals the value that the repository's file listing publishes. Timing test on the first 120 s of the film's sound (the mix of the first four scenes of `timeline-full.json`, mono 16 kHz, loudness -35 LUFS): the program reported 21.5 s in total, of which 1.3 s was loading the model and 12.2 s the encoder (four 30 s windows, 3.0 s each), on an Apple M4 with 4 threads and the Metal backend, a load average of about 5 [measured]. That is 5.6 times real time including the load. The text was `*Pain*` in every window: there is no speech in these two minutes, and the model wrote a stock phrase for the ambient sound [measured]. A clip with more going on (`A002_01040645_C063`, 271 s) gave "Good morning." for the first 5 s and then "Thank you.", "I'll see you next time.", "We'll be right back." and "*Clapping*", one phrase per 30 s window [measured]; whether anyone speaks in those windows was not checked by ear [unverified]. Whisper models write stock phrases for sound without speech [documented, widely reported; here measured twice], so section 9.2 filters its output and 9.1 makes the scene text box the main way.
+
+**Spoken language.** The language detection of the model (`-dl`, the first 30 s and the 30 s from 60 s of 14 of the louder clips) gave English with a probability of 0.86 to 0.96 where the clip has speech-like sound (`A002_01040645_C063`, `A002_01040651_C064` at 60 s), English with 0.27 to 0.58 for five more, and French, Japanese or Korean with 0.26 to 0.65 for six clips [measured]. The low values come with ambient sound; no clip gave a confident answer other than English. The model is not trained for translation, so a clip in another language would get wrong English text, not a translation [documented, the model card of Whisper large-v3-turbo]. Nothing was changed because of this; section 18 lists it as an open issue for the owner.
+
 ### 9.1 Purpose and outputs
 
 English transcript, subtitles and titles (W1 to W5).
@@ -1590,7 +1612,14 @@ The server is configured by `app --timeline FILE --work DIR --no-browser`; witho
   | `VET_REAL_BRAW` | One real `.braw` clip. |
   | `VET_WORK_DIR` | A work directory on the SSD. |
   | `VET_LUT_DIR` | The folder with the owner's `.cube` files. |
-  | `VET_WHISPER_MODEL` | The Whisper model file. |
+  | `VET_WHISPER_MODEL` | The Whisper model file (D12): `ggml-large-v3-turbo.bin`. |
+  | `VET_WHISPER_BIN` | The `whisper-cli` program. Default: the one in Shotcut's app folder, else on `PATH`. |
+  | `VET_WHISPER_VAD_MODEL` | Optional. A whisper.cpp voice-activity model (for example `ggml-silero-v5.1.2.bin`). Not downloaded by this build (section 9.2). |
+  | `VET_FONT_DIR` | The folder with the Inter font files (D13). |
+  | `VET_TRANSLATE_MODEL` | The OpenRouter model that translates the subtitles (section 9.9). |
+  | `OPENROUTER_API_KEY` | The OpenRouter key. Read from the environment only; never written to any file. |
+  | `VET_OPENROUTER_URL` | Optional. Replaces `https://openrouter.ai/api/v1` (the tests point it at a fake server on a local port). |
+  | `VET_REAL_WHISPER` | `1` runs the test that starts the real `whisper-cli` (needs `VET_WHISPER_MODEL`). |
   | `VET_SLOW` | `1` adds the 4K variants of render tests. |
 
 - A test whose requirement is missing is **skipped with its reason printed**. A skipped test is not a pass. A step is done when its checks marked real or by hand have been run and their output is saved under `<work_dir>/reports/`.
@@ -1650,8 +1679,8 @@ The questions are set out in `PRD.md` section 14, with the owner's words. This t
 | D9 | Loudness target; per segment or per film. **Settled 2026-10-26: "Each scene, then film".** | Mode `segment_then_film`: every segment is levelled to the same loudness, then the film to -14 LUFS integrated with a true peak of at most -1 dBTP (the values shown to the owner). `target_lufs` is still required when the mode is not `off`. | 3 |
 | D10 | LUT collection and sources. **Default settled 2026-10-26: Gen 5 Film to Video. Creative LUT sources settled the same day: "Research free packs". Pick settled 2026-10-27: "slay Film + Portrait".** | The base LUT is the Resolve file (section 8.2). A research step finds free LUT packs whose licence allows use in the owner's videos and shows stills of the owner's footage with each look; the owner picks which to install, into the folder that `VET_LUT_DIR` names. Nothing is bundled. | 3 |
 | D11 | Audio in the Shotcut project; Shotcut works at preview size. **Preview size settled 2026-10-26: "Tool reads cuts back".** The audio form is open. | One synced audio clip per segment (the plan; not decided). Shotcut uses the preview copies; the tool reads the cuts back and renders the 4K film (section 8.6). | 3 |
-| D12 | Whisper model | `VET_WHISPER_MODEL`. A timing test on a two-minute sample comes first. | 4 |
-| D13 | Subtitle form; font | `mode` and `font` are required in the file when subtitles are burned. | 4 |
+| D12 | Whisper model. **Settled 2026-10-27: "large-v3-turbo".** | whisper.cpp, `whisper-cli` from Shotcut's folder; the model file is named by `VET_WHISPER_MODEL` (section 9.2). | 4 |
+| D13 | Subtitle form; font. **Settled 2026-10-27: form "This should be configurable actually."; font "Inter".** | A setting of each export: `srt`, `burned`, `both` (starting values: film `srt`, short `burned`). Inter, from `VET_FONT_DIR` (section 9.5). | 4 |
 | D14 | Meaning of "cut out" in prompts; scene search method | "Cut out" is read as remove. `keep` exists. Search is by Claude Code reading sheets and the transcript. | 5 |
 | D15 | Default short length | `--length` is required. | 6 |
 | D16 | Crop and importance | Crop 0.5 (centre) unless set. Weights of section 11.3 as starting values. | 6 |
