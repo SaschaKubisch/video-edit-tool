@@ -2,6 +2,15 @@
 
 ## Unreleased (editor, step 2 in progress)
 
+### Fixed (`timeline undo` and the shared history folder)
+- All timeline files of one folder share one `timeline.history` folder, and `timeline undo` took the newest snapshot
+  that differed from the file, even one made from another file, and wrote that file's film into this one. Each
+  snapshot now has a record `NNNN.owner.json` with the resolved absolute path of the file it was made from.
+  `undo`, `history`, `snapshot_if_changed` and the limit of 200 snapshots use only the snapshots of the file named by
+  `--file`. A snapshot without a record (made before this change) belongs to no file: no command restores it, nothing
+  deletes it, and `history` lists it apart with a note. The advice in `CLAUDE.md` to run `timeline history` first is
+  gone.
+
 ### Fixed (translations, line breaks)
 - Japanese, Chinese and Thai lines are cut at phrase boundaries only (`linebreak.py`, the `budoux` package,
   Apache-2.0, pinned in `requirements.txt`), with the line-start and line-end rules of W3C JLREQ and CLREQ. Before,

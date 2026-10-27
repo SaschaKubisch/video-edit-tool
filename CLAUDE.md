@@ -26,7 +26,7 @@ Do this, in this order:
 5. **Dry run.** `python main.py scenes remove ID[,ID...] --dry-run --file FILE` (or `keep`, `restore`, `cut ID --from S --to S`, film seconds). Read the output: scenes leaving the film, film length before and after, subtitles and titles affected, new warnings. Tell the owner what it says.
 6. **Do it.** The same command without `--dry-run`. It validates and keeps the old file as one snapshot.
 7. **Check.** `python main.py timeline validate --file FILE` (exit 0). `python main.py scenes index --file FILE --work DIR` again. Tell the owner the new film length and the snapshot number.
-8. **Undo.** `python main.py timeline undo --file FILE` restores the version before the last change (run `timeline history` first if the folder holds several timeline files, because the history folder is shared). `scenes restore ID` puts one removed scene back and leaves later changes alone.
+8. **Undo.** `python main.py timeline undo --file FILE` restores the version before the last change of FILE (each timeline file has its own snapshots, even when the folder holds several). `scenes restore ID` puts one removed scene back and leaves later changes alone.
 
 For `scenes cut`:
 - Look at the stills at both edges first (`scenes frames SCENE --every 0.5s --from S --to S`). Stay about 0.5 s away from speech and do not cut through a sound event: the sound crossfades over half a second at the new join, so it takes in a quarter second on each side of the cut.
