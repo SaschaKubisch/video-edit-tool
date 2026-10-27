@@ -72,7 +72,7 @@ export VET_WHISPER_MODEL=/Volumes/SSD/models/ggml-large-v3-turbo.bin   # only fo
 .venv/bin/python main.py title add --text "Sunday kitchen" --start 1 --length 4 --template center
 .venv/bin/python main.py export set film-4k --subtitles both     # srt, burned, both or none
 .venv/bin/python main.py render --export film-4k --work /Volumes/SSD/work
-export OPENROUTER_API_KEY=...                                    # only for translate; read from the environment, never written
+export OPENROUTER_API_KEY=...                                    # only for translate; or keep the key in the macOS keychain (below)
 .venv/bin/python main.py subtitles translate --lang pt-BR,zh-Hans,th,de,ja,ru --work /Volumes/SSD/work
 ```
 
@@ -97,6 +97,13 @@ the tool drops stock phrases, loops and phrases over sound at the noise floor an
 `reports/subtitles-auto-report.json`. What is kept still needs a person's check. A voice-activity model
 (`VET_WHISPER_VAD_MODEL`, for example `ggml-silero-v5.1.2.bin` from the whisper.cpp project) improves this; it is not
 downloaded for you.
+
+**The OpenRouter key** is read from the environment variable `OPENROUTER_API_KEY`; when that is not set, from the
+macOS login keychain: a generic password whose service name is `OPENROUTER_API_KEY` (the setting
+`VET_OPENROUTER_KEYCHAIN_SERVICE` names another service; an empty value switches the keychain off). Add it once with
+`security add-generic-password -a OPENROUTER_API_KEY -s OPENROUTER_API_KEY -w` (it asks for the key). The tool runs
+`security find-generic-password -s OPENROUTER_API_KEY -w` when it needs the key, so macOS may ask once whether to allow
+the access. The key goes into one request header and is never printed, logged, cached or written to a file.
 
 **Claude Code writes subtitles and titles from a prompt** by running these commands, or by writing a JSON file that the
 tool checks and imports. Example: the owner says "put the title Sunday kitchen over the first 4 seconds, and subtitle the

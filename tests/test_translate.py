@@ -1,7 +1,8 @@
 """Check 4.17: translating the subtitles through OpenRouter (SPECS 9.9). A fake OpenRouter on a local port
 answers; the key is a made-up one. The tests check what is asked, what is written (one SRT file per language with
 the times of the English cues), the cache, the retries, the refusal to guess, and that the key never
-reaches a file or a message. One test with the real service runs only when OPENROUTER_API_KEY is set."""
+reaches a file or a message. One test with the real service runs only when OPENROUTER_API_KEY is set or
+VET_REAL_OPENROUTER=1 (then the key is read from the keychain, tests/test_translate_keychain.py)."""
 
 import contextlib
 import io
@@ -452,9 +453,19 @@ class CommandTests(TranslateCase):
         self.assertIn("c001", err)
 
 
-@unittest.skipUnless(os.environ.get("OPENROUTER_API_KEY") and not os.environ.get("VET_OPENROUTER_URL"),
-                     "OPENROUTER_API_KEY is not set")
+@unittest.skipUnless((os.environ.get("OPENROUTER_API_KEY") or os.environ.get("VET_REAL_OPENROUTER") == "1")
+                     and not os.environ.get("VET_OPENROUTER_URL"),
+                     "OPENROUTER_API_KEY is not set and VET_REAL_OPENROUTER is not 1 (the key is then read "
+                     "from the keychain)")
 class RealOpenRouterTests(unittest.TestCase):
+    def setUp(self):
+        # the test package switches the keychain lookup off; this test is the one that may use it
+        old = os.environ.pop(translate.KEYCHAIN_ENV, None)
+        self.addCleanup(lambda: os.environ.__setitem__(translate.KEYCHAIN_ENV, old) if old is not None else None)
+        translate.forget_key()
+        self.addCleanup(translate.forget_key)
+        self.assertTrue(translate.has_key(), "no key: set OPENROUTER_API_KEY or add the keychain item")
+
     def test_three_cues_into_all_six_languages(self):
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp) / "renders" / "film.mp4"

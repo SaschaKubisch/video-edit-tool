@@ -210,7 +210,7 @@ WHISPER_MIN_MEAN_PROB = 0.55       # a phrase whose tokens average a lower proba
 WHISPER_MIN_ACTIVITY = 0.10        # ... or whose sound is mostly at the noise floor
 WHISPER_REPEAT_RUN = 3             # the same phrase this many times in a row is a loop and is dropped
 
-# Translation through OpenRouter (SPECS 9.9). The key is read from OPENROUTER_API_KEY only.
+# Translation through OpenRouter (SPECS 9.9). The key is read from OPENROUTER_API_KEY, else from the keychain.
 # The languages of the owner's answer (2026-10-27) as YouTube writes them, with the limits of the Netflix
 # Timed Text Style Guide of each language (read on 2026-10-27): characters per line, adult reading speed in
 # characters per second, and how a line is measured. `name` is what the translator is told.
@@ -229,6 +229,11 @@ TRANSLATE_LANGUAGE_RULES = {
 TRANSLATE_MODEL = "google/gemini-2.5-flash-lite"
 TRANSLATE_PRICES = {"google/gemini-2.5-flash-lite": (0.10, 0.40)}
 TRANSLATE_URL = "https://openrouter.ai/api/v1"
+# Without OPENROUTER_API_KEY in the environment the key is read from the macOS login keychain: a generic
+# password whose service name is this (VET_OPENROUTER_KEYCHAIN_SERVICE changes it; an empty value switches the
+# keychain off). The lookup is stopped after the timeout, because a first use can wait for a dialog.
+TRANSLATE_KEYCHAIN_SERVICE = "OPENROUTER_API_KEY"
+TRANSLATE_KEYCHAIN_TIMEOUT_SEC = 20
 TRANSLATE_BATCH = 30               # cues per request
 TRANSLATE_CONTEXT = 3              # cues of context before and after a batch
 TRANSLATE_TRIES = 3                # requests per batch before the run stops

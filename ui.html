@@ -652,7 +652,7 @@
         <p>Translate the English subtitles into other languages and write one SRT file per language next to the film
            (<span class="film-mono">film.pt-BR.srt</span> and so on), for YouTube. Every translation has the times of its
            English subtitle. The text is sent to OpenRouter; the key is read from the environment variable
-           OPENROUTER_API_KEY and is never shown or written.</p>
+           OPENROUTER_API_KEY, or from the macOS keychain, and is never shown or written.</p>
         <div class="film-row2" id="filmTransExport"></div>
         <div class="lang-grid" id="filmLangs"></div>
         <div class="film-row2">
@@ -1852,7 +1852,7 @@ function renderFilmTranslate(w, busy) {
        ${escapeHtml(l.name)}<small>${l.translated} of ${l.cues} translated${l.file ? ", file written" : ""}</small></label>`).join("");
   let msg = "Model " + (tr.model || "?");
   if (tr.estimate_usd !== null && tr.estimate_usd !== undefined) msg += ", about $" + tr.estimate_usd.toFixed(3) + " for all six languages (an estimate)";
-  if (!tr.key) msg += ". No key: set OPENROUTER_API_KEY in the environment and start the app again.";
+  if (!tr.key) msg += ". No key: set OPENROUTER_API_KEY in the environment, or add it to the macOS keychain (see the README), and start the app again.";
   if (tr.problem) msg += " " + tr.problem;
   document.getElementById("filmTransMsg").textContent = msg;
   document.getElementById("filmTransBtn").disabled = busy || !tr.key || !exportsList.length || !w.cues.some(c => c.in_film);

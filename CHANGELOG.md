@@ -38,7 +38,7 @@
 - Commands: `subtitles` (`list`, `add`, `edit`, `remove`, `shift`, `sort`, `text`, `import`, `export`, `check`,
   `auto`, `translate`), `title` (`list`, `add`, `edit`, `remove`, `import`), `export set NAME --subtitles FORM`.
 - `subtitles translate`: the cues into pt-BR, zh-Hans, th, de, ja and ru through an OpenRouter model
-  (`VET_TRANSLATE_MODEL`, key from `OPENROUTER_API_KEY` only), batches with context, answers checked, cached by
+  (`VET_TRANSLATE_MODEL`, key from `OPENROUTER_API_KEY` or, when that is not set, from the macOS keychain), batches with context, answers checked, cached by
   text and model, one SRT per language with the times of the English cues.
 - The Film tab: a Subtitles card (a text box per scene, a strip of cues to drag and resize, numeric times, the
   form of each export, Whisper, the SRT file), a Translations card, a Titles card, and a caption the page draws

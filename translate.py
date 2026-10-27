@@ -9,8 +9,10 @@ the files line up.
 
 - The service is OpenRouter's chat completions API (OpenAI-compatible). The model is a setting:
   VET_TRANSLATE_MODEL, or `--model`; the starting default is config.TRANSLATE_MODEL.
-- The key comes from the environment variable OPENROUTER_API_KEY and from nowhere else. It is put in one
-  request header. It is not written to a file, a log, a report or a message.
+- The key comes from the environment variable OPENROUTER_API_KEY, or, when that is not set, from the macOS login
+  keychain (`security find-generic-password -s SERVICE -w`; the service name is config.TRANSLATE_KEYCHAIN_SERVICE,
+  or VET_OPENROUTER_KEYCHAIN_SERVICE) and from nowhere else. It is put in one request header. It is not written to
+  a file, a log, a report or a message.
 - Cues go in batches of config.TRANSLATE_BATCH with the cues around them as context. The answer must be a JSON
   object that maps every id of the batch, and only those, to a text that is not empty. A batch that fails
   (a network error, an answer that is not valid) is tried again config.TRANSLATE_TRIES times; then the run stops and names the
@@ -29,6 +31,8 @@ import hashlib
 import json
 import os
 import re
+import shutil
+import subprocess
 import time
 import unicodedata
 import urllib.error
@@ -61,16 +65,92 @@ def base_url() -> str:
     return (os.environ.get("VET_OPENROUTER_URL") or config.TRANSLATE_URL).rstrip("/")
 
 
+KEY_ENV = "OPENROUTER_API_KEY"
+KEYCHAIN_ENV = "VET_OPENROUTER_KEYCHAIN_SERVICE"
+_keys = {}                       # service name -> the key found there, for the run of the program
+
+
+def keychain_service() -> str:
+    """The service name of the keychain item. An empty VET_OPENROUTER_KEYCHAIN_SERVICE switches the lookup off."""
+    value = os.environ.get(KEYCHAIN_ENV)
+    return config.TRANSLATE_KEYCHAIN_SERVICE if value is None else value.strip()
+
+
+def forget_key() -> None:
+    """Drop the key kept from the keychain, so the next use reads the keychain again."""
+    _keys.clear()
+
+
+def _security(args: list):
+    """Run macOS `security` with `args`. Returns (the finished process, None), or (None, why it did not run).
+    The output is captured: a password never goes to the terminal."""
+    program = shutil.which("security") or "/usr/bin/security"
+    try:
+        return subprocess.run([program, *args], capture_output=True, text=True,
+                              timeout=config.TRANSLATE_KEYCHAIN_TIMEOUT_SEC), None
+    except FileNotFoundError:
+        return None, "there is no `security` program on this computer (the keychain is a macOS feature)"
+    except subprocess.TimeoutExpired:
+        return None, (f"the keychain did not answer within {config.TRANSLATE_KEYCHAIN_TIMEOUT_SEC} s "
+                      "(a dialog may be waiting for you to allow the access)")
+    except OSError as e:
+        return None, f"`security` could not be started ({type(e).__name__})"
+
+
+def _why_not(done, service: str) -> str:
+    """What went wrong with a keychain lookup that did not give a key. Never holds a password."""
+    first = (done.stderr or "").strip().splitlines()[:1]
+    if done.returncode == 44 or "could not be found" in (done.stderr or ""):
+        return f"the login keychain has no item with the service name '{service}'"
+    return f"the keychain lookup was refused (security exit {done.returncode}" + (f": {first[0]}" if first else "") + ")"
+
+
+def find_key() -> tuple:
+    """The OpenRouter key and, when there is none, why: (key, None) or (None, reason). First the environment
+    variable OPENROUTER_API_KEY; then the keychain item named by keychain_service(). The key found in the keychain is kept
+    for the run. The reason never holds a key."""
+    env = os.environ.get(KEY_ENV, "").strip()
+    if env:
+        return env, None
+    service = keychain_service()
+    if not service:
+        return None, f"{KEY_ENV} is not set and the keychain lookup is switched off ({KEYCHAIN_ENV} is empty)"
+    if service in _keys:
+        return _keys[service], None
+    done, problem = _security(["find-generic-password", "-s", service, "-w"])
+    if done is None:
+        return None, problem
+    key = (done.stdout or "").strip() if done.returncode == 0 else ""
+    if not key:
+        return None, _why_not(done, service) if done.returncode != 0 else \
+            f"the keychain item '{service}' has an empty password"
+    _keys[service] = key
+    return key, None
+
+
 def has_key() -> bool:
-    return bool(os.environ.get("OPENROUTER_API_KEY", "").strip())
+    """Whether a key is available, for the page. The keychain is asked whether the item exists, not for its
+    password, so no dialog opens and the password is not read."""
+    if os.environ.get(KEY_ENV, "").strip():
+        return True
+    service = keychain_service()
+    if not service:
+        return False
+    if service in _keys:
+        return True
+    done, _ = _security(["find-generic-password", "-s", service])
+    return done is not None and done.returncode == 0
 
 
 def check_ready() -> None:
     """Raises TranslateError, before any request, when there is no key."""
-    if not has_key():
-        raise TranslateError("No OpenRouter key. Set the environment variable OPENROUTER_API_KEY (for example in the "
-                             "shell that starts the tool: export OPENROUTER_API_KEY=...). The key is read from the "
-                             "environment only and is never written to a file.")
+    key, problem = find_key()
+    if key is None:
+        raise TranslateError(
+            f"No OpenRouter key: {problem}. Set the environment variable {KEY_ENV} (export {KEY_ENV}=... in the "
+            f"shell that starts the tool), or add the key to the login keychain with: security add-generic-password "
+            f"-a {keychain_service() or KEY_ENV} -s {keychain_service() or KEY_ENV} -w (it asks for the key). "
+            f"The service name is the setting {KEYCHAIN_ENV}. The key is never written to a file.")
 
 
 def parse_languages(value) -> list:
@@ -225,7 +305,7 @@ class Client:
     """OpenRouter's chat completions API. The key goes into one header and nowhere else."""
 
     def __init__(self, key: str = None, url: str = None, timeout: float = None):
-        self._key = key if key is not None else os.environ.get("OPENROUTER_API_KEY", "").strip()
+        self._key = key if key is not None else (find_key()[0] or "")
         self.url = (url or base_url()).rstrip("/")
         self.timeout = timeout or config.TRANSLATE_TIMEOUT_SEC
 
@@ -246,7 +326,8 @@ class Client:
                 pass
             detail = detail.replace(self._key, "***") if self._key else detail
             if e.code in (401, 403):
-                raise _Fatal(f"OpenRouter rejected the key (HTTP {e.code}). Check OPENROUTER_API_KEY.")
+                forget_key()
+                raise _Fatal(f"OpenRouter rejected the key (HTTP {e.code}). Check OPENROUTER_API_KEY or the keychain item.")
             if e.code == 402:
                 raise _Fatal("OpenRouter says there is no credit left (HTTP 402). Add credit to the account.")
             raise _Retry(f"HTTP {e.code} {detail}".strip())
