@@ -50,8 +50,11 @@ export VET_LUT_DIR=/Volumes/SSD/luts/slay                                  # the
 creative LUT, adds the letterbox bars of wide clips, levels the sound, and writes the file with its
 checks. `export add --preset film-master` adds a ProRes 422 HQ master that stays off until you run
 `export enable film-master`. A film that uses a LUT with a credit gets `<film>.credit.txt` next to it:
-put its line in the video description. A stopped render (`kill PID`) removes its files and starts over
-when you run the command again.
+put its line in the video description. A film longer than 2 minutes is rendered in chunks of whole scenes
+(`--chunk-seconds S` changes the length, 0 renders in one process); the finished chunks and the sound are kept in
+`<work>/chunks/<export>/`, so after a stop (`kill PID`, Ctrl+C, a failure, a crash) the same command goes on where it
+was, and `--fresh` starts over. The chunks are joined by copy, and the free space asked for is about 2.1 times the
+file. A short (under 2 minutes) is rendered in one process and starts over when it is stopped.
 
 **Shotcut, for rare hand work.** `main.py export-shotcut --work DIR` writes `DIR/film.mlt` for Shotcut (it uses the
 preview copies, because Shotcut cannot read BRAW) and `DIR/audio-synced/`, and checks the project with Shotcut's

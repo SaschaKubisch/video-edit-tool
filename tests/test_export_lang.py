@@ -18,7 +18,7 @@ import textlayout
 import translate
 import words
 from tests.fonts import requires_noto
-from tests.test_export import ExportFixture, W, H
+from tests.test_export import ExportFixture
 
 CUES = [
     {"id": "c001", "anchor": "s001", "start_s": 0.5, "end_s": 1.5, "text": "First scene.", "origin": "manual"},

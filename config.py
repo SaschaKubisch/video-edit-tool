@@ -147,6 +147,7 @@ LOUDNESS_MAX_GAIN_DB = 12.0        # most that levelling adds to a quiet segment
 # ── Final film (`render`, SPECS 5.3 and 5.6) ──
 EXPORT_GOP = 30                    # a key frame every 30 frames (about 1 s), as in the tested chain
 EXPORT_LOG_EVERY_SEC = 30          # the render prints its progress this often
+EXPORT_CHUNK_SEC = 120.0           # a film longer than this is rendered in chunks of whole scenes of about this length (SPECS 5.3, resume)
 
 # ── Words (step 4, SPECS section 9): subtitles, titles, Whisper, translation ──
 # Decisions of 2026-10-27: D12 model large-v3-turbo (file named by VET_WHISPER_MODEL), D13 form

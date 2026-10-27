@@ -20,6 +20,11 @@ encoded once, and read back to check the true peak after the encoder. Then the p
 The encoder writes `<name>.<ext>.partial`. When it ends, the file is checked (SPECS 5.7 and
 more) and renamed. A file that fails a check stays as `.partial` and the render report names
 the check. A run that is interrupted (SIGTERM, Ctrl+C) or that fails removes its files.
+
+A film that is longer than a chunk (`config.EXPORT_CHUNK_SEC`, 2 minutes) is rendered in chunks of whole scenes
+(chunks.py): each chunk is its own encoder process with the picture only, finished chunks are kept in
+`<work>/chunks/<name>/` with a key, the sound is mixed and encoded once and kept there too, and the chunks are
+joined with ffmpeg's concat in copy mode. The same command again goes on with the chunks that are finished.
 """
 
 import datetime
@@ -38,6 +43,7 @@ from pathlib import Path
 
 import numpy as np
 
+import chunks
 import config
 import convert
 import fsutil
@@ -266,6 +272,74 @@ H264_COLOUR_BSF = ("h264_metadata=colour_primaries=1:transfer_characteristics=1:
                    "matrix_coefficients=1:video_full_range_flag=0")
 
 
+def _fade_filters(plan, entry: dict, first_frame: int = 0, end_frame: int = None) -> list:
+    """The film fades as ffmpeg filters, for the frames [first_frame, end_frame) of the film (the whole film by
+    default): the fade-in when the range starts the film, the fade-out when it ends it. Frame numbers in the filters
+    count from `first_frame`, as the frames of an encoder that gets only this range do."""
+    end = plan.film_frames if end_frame is None else end_frame
+    first, last = plan.segments[0], plan.segments[-1]
+    fades = []
+    if first_frame == 0 and first.picture_fade_in_frames:
+        fades.append(f"fade=t=in:s=0:n={first.picture_fade_in_frames}")
+    m = last.picture_fade_out_frames
+    if end == plan.film_frames:
+        if m >= 2:
+            # The last frame is black, as the last sample of the sound is silent: the fade takes
+            # the m - 1 frames before it, and a frame past the end of a fade is black.
+            fades.append(f"fade=t=out:s={plan.film_frames - m - first_frame}:n={m - 1}")
+        elif m == 1:
+            fades.append(f"fade=t=out:s={plan.film_frames - 1 - first_frame}:n=1")
+    if entry["video"]["codec"].startswith("prores"):
+        # The VideoToolbox ProRes encoder writes only the matrix into the file, whatever the
+        # -color_* options say; tagging the frames makes the colr atom carry all three [measured].
+        fades.insert(0, "setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709:range=tv")
+    return fades
+
+
+def _colour_args(entry: dict) -> list:
+    out = ["-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709", "-color_range", "tv"]
+    if entry["video"]["codec"] in ("h264_videotoolbox", "libx264"):
+        # The VideoToolbox encoder writes only the matrix into the stream header; this filter
+        # sets primaries, transfer and range there too (SPECS 5.6).
+        out += ["-bsf:v", H264_COLOUR_BSF]
+    return out
+
+
+def chunk_encoder_command(ffmpeg, tl, plan, entry: dict, out_path: str, first: int, last: int, text=None) -> list:
+    """The encoder process of one chunk, the film frames [first, last): raw frames in on the standard input, no sound,
+    the fades that fall in the chunk, the text of the chunk laid over the picture before them (its frames count from
+    `first`), the same encoder settings and colour tags as the whole film."""
+    fps = tl.data["film"]["fps"]
+    fades = _fade_filters(plan, entry, first, last)
+    cmd = [ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
+           "-f", "rawvideo", "-pix_fmt", pixel_format(entry), "-s", f"{entry['width']}x{entry['height']}",
+           "-r", f"{fps['num']}/{fps['den']}", "-i", "pipe:0"]
+    if text is None:
+        cmd += ["-map", "0:v:0"]
+        if fades:
+            cmd += ["-vf", ",".join(fades)]
+    else:
+        graph, label = text.graph("0:v", 1, pixel_format(entry))
+        if fades:
+            graph += f";[{label}]{','.join(fades)}[vout]"
+            label = "vout"
+        cmd += [*text.inputs(), "-filter_complex", graph, "-map", f"[{label}]"]
+    cmd += ["-an", *video_encoder_args(entry), "-fps_mode", "cfr", "-r", f"{fps['num']}/{fps['den']}",
+            *_colour_args(entry), "-map_metadata", "-1",
+            "-f", "mov" if str(out_path).endswith((".mov", ".mov.partial")) else "mp4", str(out_path)]
+    return cmd
+
+
+def join_command(ffmpeg, entry: dict, list_path: str, audio_input: list, out_path: str,
+                 timecode: str = "00:00:00:00") -> list:
+    """The join: the chunks that the list names (ffmpeg's concat demuxer) copied, with the sound that was made first,
+    the colour tags, the timecode and `faststart`, as the single process writes them."""
+    return [ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-f", "concat", "-safe", "0",
+            "-i", str(list_path), *audio_input, "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy",
+            *_colour_args(entry), "-timecode", timecode, "-map_metadata", "-1", "-movflags", "+faststart",
+            "-f", "mov" if str(out_path).endswith((".mov", ".mov.partial")) else "mp4", str(out_path)]
+
+
 def encoder_command(ffmpeg, tl, plan, entry: dict, audio_input: list, out_path: str,
                     timecode: str = "00:00:00:00", text=None) -> list:
     """The encoder process: raw frames in on the standard input, the finished sound as a
@@ -273,21 +347,7 @@ def encoder_command(ffmpeg, tl, plan, entry: dict, audio_input: list, out_path: 
     that has been written) the cues and titles are laid over the picture before the fades, so that
     they fade with the picture; the lanes are inputs 1 to n and the sound is input n + 1."""
     fps = tl.data["film"]["fps"]
-    first, last = plan.segments[0], plan.segments[-1]
-    fades = []
-    if first.picture_fade_in_frames:
-        fades.append(f"fade=t=in:s=0:n={first.picture_fade_in_frames}")
-    m = last.picture_fade_out_frames
-    if m >= 2:
-        # The last frame is black, as the last sample of the sound is silent: the fade takes
-        # the m - 1 frames before it, and a frame past the end of a fade is black.
-        fades.append(f"fade=t=out:s={plan.film_frames - m}:n={m - 1}")
-    elif m == 1:
-        fades.append(f"fade=t=out:s={plan.film_frames - 1}:n=1")
-    if entry["video"]["codec"].startswith("prores"):
-        # The VideoToolbox ProRes encoder writes only the matrix into the file, whatever the
-        # -color_* options say; tagging the frames makes the colr atom carry all three [measured].
-        fades.insert(0, "setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709:range=tv")
+    fades = _fade_filters(plan, entry)
     cmd = [ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
            "-f", "rawvideo", "-pix_fmt", pixel_format(entry), "-s", f"{entry['width']}x{entry['height']}",
            "-r", f"{fps['num']}/{fps['den']}", "-i", "pipe:0"]
@@ -303,13 +363,7 @@ def encoder_command(ffmpeg, tl, plan, entry: dict, audio_input: list, out_path: 
         cmd += [*text.inputs(), *audio_input, "-filter_complex", graph, "-map", f"[{label}]",
                 "-map", f"{len(text.lanes) + 1}:a:0"]
     cmd += video_encoder_args(entry)
-    cmd += ["-fps_mode", "cfr", "-r", f"{fps['num']}/{fps['den']}",
-            "-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709",
-            "-color_range", "tv"]
-    if entry["video"]["codec"] in ("h264_videotoolbox", "libx264"):
-        # The VideoToolbox encoder writes only the matrix into the stream header; this filter
-        # sets primaries, transfer and range there too (SPECS 5.6).
-        cmd += ["-bsf:v", H264_COLOUR_BSF]
+    cmd += ["-fps_mode", "cfr", "-r", f"{fps['num']}/{fps['den']}", *_colour_args(entry)]
     cmd += ["-timecode", timecode, "-map_metadata", "-1", "-movflags", "+faststart",
             "-f", "mov" if str(out_path).endswith((".mov", ".mov.partial")) else "mp4", str(out_path)]
     return cmd
@@ -545,6 +599,7 @@ class ExportResult:
     srt_file: str = None
     subtitles: str = ""
     language: str = None                # the language of the burned subtitles when it is not English
+    chunks: dict = None                 # {"total", "reused", "rendered"} when the film was rendered in chunks
     report_file: str = None
     ok: bool = False
 
@@ -552,7 +607,7 @@ class ExportResult:
         return {k: getattr(self, k) for k in (
             "name", "path", "frames", "seconds", "elapsed_s", "video_fps", "realtime_factor",
             "bytes", "mbps", "stage_s", "levels", "output_loudness", "warnings", "problems",
-            "checks", "credit_file", "srt_file", "subtitles", "language", "ok")}
+            "checks", "credit_file", "srt_file", "subtitles", "language", "chunks", "ok")}
 
 
 def _now_iso() -> str:
@@ -662,10 +717,169 @@ def _check_sources(tl, plan, decoder, log) -> None:
     log(f"checked {len(seen)} clip(s): originals, sound files, sizes, frame counts, LUTs")
 
 
+class _Procs:
+    """The processes of the render that is running, so that the clean-up can stop them."""
+    enc = None
+    filt = None
+
+
+def _picture_pass(tl, plan, entry: dict, segs: list, cmd: list, scratch: str, decoder, ffmpeg: str, procs: _Procs,
+                  progress, log, warn, base_frames: int, total_frames: int, label: str = "") -> int:
+    """Run the pictures of the scenes `segs` through the encoder process `cmd`: for each scene the decoder writes its
+    frames into a segment filter (ffmpeg), whose output is the encoder's standard input. `base_frames` is the number
+    of film frames done before this pass and `total_frames` the frames of the whole render, for the progress and the
+    log. Returns the number of frames written. Raises ExportError when a process fails."""
+    fps = tl.data["film"]["fps"]
+    t0 = time.time()
+    enc_log = os.path.join(scratch, f"encoder{label}.log")
+    with open(enc_log, "wb") as enc_err:
+        procs.enc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=enc_err)
+        done_before = 0
+        last_log = time.time()
+        for i, seg in enumerate(segs, start=1):
+            src = tl.data["sources"][seg.source]
+            size = src["size"]
+            seg_log = os.path.join(scratch, f"segment{label}.log")
+            with open(seg_log, "wb") as seg_err:
+                procs.filt = subprocess.Popen(
+                    segment_command(ffmpeg, tl, seg, size, entry, (entry["width"], entry["height"])),
+                    stdin=subprocess.PIPE, stdout=procs.enc.stdin, stderr=seg_err)
+                filt = procs.filt
+                base = done_before
+                state = {"last": 0}
+
+                def on_frames(n, base=base, state=state):
+                    state["last"] = n
+                    if progress:
+                        progress(base_frames + base + n, total_frames,
+                                 (base + n) / max(1e-9, time.time() - t0))
+
+                sink = _CountingSink(filt.stdin, size["width"] * size["height"] * 6, on_frames)
+                broken = False
+                try:
+                    written = decoder.write_frame_range(src["original_video"], 1, sink, seg.in_frame, seg.out_frame)
+                except BrokenPipeError:
+                    broken = True
+                    written = state["last"]
+                except BaseException:
+                    _kill(filt)
+                    raise
+                finally:
+                    try:
+                        filt.stdin.close()
+                    except BrokenPipeError:
+                        pass
+                rc = filt.wait()
+            procs.filt = None
+            if rc != 0 or broken:
+                if procs.enc.poll() is not None and procs.enc.returncode != 0:
+                    raise ExportError(f"the encoder stopped on segment {seg.id}: {_tail(enc_log)}")
+                raise ExportError(f"the segment filter failed on segment {seg.id} "
+                                  f"({seg.source}, frames {seg.in_frame} to {seg.out_frame}): "
+                                  f"{_tail(seg_log)}")
+            if written != seg.length_frames:
+                warn(f"segment {seg.id}: the decoder gave {written} frames, the segment has "
+                     f"{seg.length_frames}")
+            done_before += seg.length_frames
+            if time.time() - last_log >= config.EXPORT_LOG_EVERY_SEC or i == len(segs):
+                last_log = time.time()
+                rate = done_before / max(1e-9, time.time() - t0)
+                eta = (total_frames - base_frames - done_before) / rate if rate else 0
+                log(f"[{label.strip() or 'film'} {i}/{len(segs)}] segment {seg.id}  "
+                    f"{base_frames + done_before}/{total_frames} frames "
+                    f"({100 * (base_frames + done_before) / total_frames:.1f} percent)  {rate:.1f} fps  "
+                    f"{rate / float(plan.fps):.2f}x real time  eta {convert._hms(eta)}")
+        try:
+            procs.enc.stdin.close()
+        except BrokenPipeError:
+            pass
+        rc = procs.enc.wait()
+        procs.enc = None
+    if rc != 0:
+        raise ExportError(f"the encoder failed (exit {rc}): {_tail(enc_log)}")
+    return done_before
+
+
+def _count_frames(path: str, ffprobe: str) -> int:
+    r = subprocess.run([ffprobe, "-v", "error", "-count_packets", "-select_streams", "v:0", "-show_entries",
+                        "stream=nb_read_packets", "-of", "csv=p=0", str(path)], capture_output=True, text=True)
+    try:
+        return int(r.stdout.strip().split(",")[0])
+    except (ValueError, IndexError):
+        return -1
+
+
+def _audio_key(tl, plan, entry: dict) -> str:
+    """What the finished sound file is made from: the keys of every scene's sound (the WAV, where in it the sound
+    starts, the handles, the fades, the gain), the WAV files as they are on the disk, the loudness settings and the
+    audio settings of the export."""
+    import hashlib
+    keys = render.sound_keys(tl, plan)
+    wavs = sorted({tl.data["sources"][s.source]["audio"] for s in plan.segments})
+    material = {"format": chunks.CHUNK_FORMAT, "scenes": [keys[s.id] for s in plan.segments],
+                "wav": [chunks._file_state(w) for w in wavs], "audio": entry["audio"],
+                "loudness": render.loudness_settings(tl), "samples": plan.film_samples, "rate": plan.sample_rate}
+    return hashlib.sha256(json.dumps(material, sort_keys=True, default=str).encode("utf-8")).hexdigest()[:20]
+
+
+def _sound(tl, plan, entry: dict, work_dir: str, dest: str, ffmpeg: str, loader, mix_cache: bool, result, log, warn,
+           keep: bool) -> str:
+    """The film's sound (SPECS 5.4): the mix, its loudness, one encode, read back. The file goes into `dest`. With
+    `keep` it stays there with a record of its key, and a later render of the same sound takes it without mixing."""
+    record = os.path.join(dest, "audio.json")
+    key = _audio_key(tl, plan, entry) if keep else None
+    if keep:
+        try:
+            with open(record, encoding="utf-8") as f:
+                rec = json.load(f)
+            path = os.path.join(dest, rec["file"])
+            if rec.get("key") == key and os.path.getsize(path) == rec["bytes"]:
+                result.levels = rec.get("levels")
+                for w in rec.get("warnings") or []:
+                    warn(w)
+                result.stage_s["mix_s"] = result.stage_s["audio_s"] = 0.0
+                log("sound: the file of the earlier run is kept, nothing is mixed again")
+                return path
+        except (OSError, ValueError, KeyError):
+            pass
+    mine = []
+
+    def note(message):
+        mine.append(message)
+        warn(message)
+
+    t0 = time.time()
+    cache_path = os.path.join(work_dir, "reports", "loudness-cache.json")
+    cache = render._read_cache(cache_path) if mix_cache else None
+    loader = loader or (lambda path: render.load_wav(path, plan.sample_rate))
+    mix = render.build_mix(tl, plan, loader, cache=cache)
+    if mix_cache:
+        render._write_cache(cache_path, cache)
+    result.levels = mix.levels
+    for w in mix.warnings:
+        note(w)
+    result.stage_s["mix_s"] = round(time.time() - t0, 1)
+    log(f"sound mixed in {result.stage_s['mix_s']} s" + (
+        f"; film {mix.levels['film']['after']['lufs']} LUFS, true peak "
+        f"{mix.levels['film']['after']['true_peak_dbtp']} dBTP" if mix.levels else ""))
+    t0 = time.time()
+    audio_path, _ = make_audio_file(
+        mix.samples, entry, render.loudness_settings(tl), plan.sample_rate, dest, ffmpeg, note)
+    result.stage_s["audio_s"] = round(time.time() - t0, 1)
+    del mix
+    gc.collect()
+    if keep:
+        fsutil.write_json_atomic(record, {"key": key, "file": os.path.basename(audio_path),
+                                          "bytes": os.path.getsize(audio_path), "levels": result.levels,
+                                          "warnings": mine})
+    return audio_path
+
+
 def render_export(tl, name: str, work_dir: str, decoder, timeline_hash: str = None, protected=None,
                   loader=None, free_bytes=None, ffmpeg: str = None, ffprobe: str = None,
                   log=print, progress=None, force: bool = False, report_name: str = "render-report",
-                  mix_cache: bool = True, subtitles: str = None, subtitle_lang: str = None) -> ExportResult:
+                  mix_cache: bool = True, subtitles: str = None, subtitle_lang: str = None,
+                  chunk_seconds: float = None, fresh: bool = False) -> ExportResult:
     """Render the export `name` of the timeline `tl` from the original `.braw` files.
 
     `decoder` is a Decoder (decoder.py). `loader(path)` returns a WAV as float32 stereo at
@@ -674,6 +888,8 @@ def render_export(tl, name: str, work_dir: str, decoder, timeline_hash: str = No
     none) replaces the form of the subtitles for this render only; the timeline file is not changed.
     `subtitle_lang` (one of config.TRANSLATE_LANGUAGES) draws the translated cues instead of the English ones, from the
     translation cache (`subtitles translate` fills it), into `<film>.<lang>.<ext>`; the form must draw (burned or both).
+    A film longer than `chunk_seconds` (default `config.EXPORT_CHUNK_SEC`; 0 switches it off) is rendered in chunks that
+    are kept when the render stops, so that the same call goes on where it was; `fresh` removes the chunks first.
     Raises ExportError
     (ExportDisabled, NotEnoughSpace, AlreadyRunning) before anything is written, and
     KeyboardInterrupt after it has removed what it made. On a failed check the file stays as
@@ -719,14 +935,28 @@ def render_export(tl, name: str, work_dir: str, decoder, timeline_hash: str = No
     frames = plan.film_frames
     seconds = float(frames / fps)
     free_bytes = free_bytes or convert._default_free_bytes
-    need = int((estimate_bytes(entry, frames, fps)) * SPACE_MARGIN) + scratch_bytes(
-        frames, fps, plan.sample_rate)
-    free = free_bytes(os.path.dirname(os.path.abspath(out_path)))
-    if free < need:
-        raise NotEnoughSpace(
-            f"Not enough free space for {name!r}: the file needs about {need / 1e9:.1f} GB "
-            f"(with a margin of {int((SPACE_MARGIN - 1) * 100)} percent and the sound scratch file) "
-            f"and {free / 1e9:.1f} GB is free in {os.path.dirname(os.path.abspath(out_path))}.")
+    out_dir = os.path.dirname(os.path.abspath(out_path))
+    chunk_s = config.EXPORT_CHUNK_SEC if chunk_seconds is None else chunk_seconds
+    chunk_list = chunks.plan_chunks(plan.segments, round(chunk_s * float(fps)) if chunk_s > 0 else 0)
+    chunked = len(chunk_list) > 1
+    ext = "mov" if str(out_path).endswith(".mov") else "mp4"
+    chunk_dir = chunks.folder(work_dir, name, lang)
+    estimate = estimate_bytes(entry, frames, fps)
+    scratch_need = scratch_bytes(frames, fps, plan.sample_rate)
+
+    def check_space(existing: int = 0):
+        need = chunks.space_needed(estimate, existing, scratch_need, chunked)
+        free = free_bytes(out_dir)
+        if free < need:
+            how = (f"about {chunks.CHUNK_SPACE_FACTOR:g} times the file, because the chunks and the joined file are on the "
+                   f"disk together, less the {existing / 1e9:.1f} GB of finished chunks, "
+                   if chunked else f"with a margin of {int((SPACE_MARGIN - 1) * 100)} percent ")
+            raise NotEnoughSpace(
+                f"Not enough free space for {name!r}: the file needs about {need / 1e9:.1f} GB "
+                f"({how}and the sound scratch file) and {free / 1e9:.1f} GB is free in {out_dir}.")
+
+    if not chunked:
+        check_space()
 
     text = None
     if textlayer.has_text(text_data, burn_cues=form in ("burned", "both")):
@@ -749,6 +979,32 @@ def render_export(tl, name: str, work_dir: str, decoder, timeline_hash: str = No
     if text is not None:
         for w in text.warnings:
             warn(w)
+
+    # The chunks of a long film (SPECS 5.3): the text of each and its key, so that the free space can count what is
+    # finished already and the render knows which chunks it can keep.
+    infos = []
+    if chunked:
+        burn = form in ("burned", "both")
+        rects = render.segment_rects(plan)
+        ffv = _ffmpeg_version(ffmpeg)
+        decoder_name = getattr(decoder, "name", "decoder")
+        for n, segs in enumerate(chunk_list, start=1):
+            first = segs[0].film_start_frame
+            end = first + chunks.frames_of(segs)
+            ctext = None
+            if textlayer.has_text(text_data, burn_cues=burn):
+                ctext = textlayer.build(text_data, (entry["width"], entry["height"]), first, end, rects, burn_cues=burn)
+                if ctext.empty:
+                    ctext = None
+            fade = (plan.segments[0].picture_fade_in_frames if first == 0 else 0,
+                    plan.segments[-1].picture_fade_out_frames if end == frames else 0)
+            key = chunks.chunk_key(chunks.key_material(tl, plan, segs, entry, ctext.signature if ctext else "", fade,
+                                                       ffv, decoder_name))
+            infos.append({"n": n, "segs": segs, "first": first, "end": end, "frames": end - first, "text": ctext,
+                          "key": key})
+        wanted = {c["n"]: c["key"] for c in infos}
+        check_space(0 if fresh else chunks.existing_bytes(chunk_dir, wanted, ext))
+
     os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
     os.makedirs(work_dir, exist_ok=True)
     lock = _Lock(work_dir)
@@ -759,109 +1015,100 @@ def render_export(tl, name: str, work_dir: str, decoder, timeline_hash: str = No
     started_iso = _now_iso()
     load_start = os.getloadavg()
     keep_partial = False
-    enc = filt = None
+    procs = _Procs()
+    current = {"partial": None}                 # the chunk that is being written
+    stats = {"reused": 0, "rendered": 0}
     try:
         scratch = tempfile.mkdtemp(prefix=f"render-{name}-", dir=work_dir)
         log(f"Export {name}: {frames} frames, {seconds:.1f} s, {entry['width']}x{entry['height']}, "
             f"{entry['video']['codec']} -> {out_path}")
         _check_sources(tl, plan, decoder, log)
 
-        # The sound first (SPECS 5.4): the mix, its loudness, one encode, read back.
-        t0 = time.time()
-        cache_path = os.path.join(work_dir, "reports", "loudness-cache.json")
-        cache = render._read_cache(cache_path) if mix_cache else None
-        loader = loader or (lambda path: render.load_wav(path, plan.sample_rate))
-        mix = render.build_mix(tl, plan, loader, cache=cache)
-        if mix_cache:
-            render._write_cache(cache_path, cache)
-        result.levels = mix.levels
-        for w in mix.warnings:
-            warn(w)
-        result.stage_s["mix_s"] = round(time.time() - t0, 1)
-        log(f"sound mixed in {result.stage_s['mix_s']} s" + (
-            f"; film {mix.levels['film']['after']['lufs']} LUFS, true peak "
-            f"{mix.levels['film']['after']['true_peak_dbtp']} dBTP" if mix.levels else ""))
-        t0 = time.time()
-        audio_path, aac_level = make_audio_file(
-            mix.samples, entry, render.loudness_settings(tl), plan.sample_rate, scratch, ffmpeg, warn)
-        result.stage_s["audio_s"] = round(time.time() - t0, 1)
-        del mix
-        gc.collect()
+        if chunked:
+            log(f"{len(infos)} chunks of whole scenes, about {chunk_s:g} s each, in {chunk_dir}")
+            if fresh:
+                shutil.rmtree(chunk_dir, ignore_errors=True)
+            os.makedirs(chunk_dir, exist_ok=True)
+            for gone in chunks.prune(chunk_dir, {c["n"]: c["key"] for c in infos}, ext):
+                log(f"removed {os.path.basename(gone)}: it is not part of this render")
+
+        # The sound first (SPECS 5.4): the mix, its loudness, one encode, read back. For a chunked render the file is
+        # kept with its key, next to the chunks.
+        audio_path = _sound(tl, plan, entry, work_dir, chunk_dir if chunked else scratch, ffmpeg, loader, mix_cache,
+                            result, log, warn, keep=chunked)
 
         # The picture.
         t0 = time.time()
-        enc_log = os.path.join(scratch, "encoder.log")
-        if text is not None:
-            text.write(os.path.join(scratch, "text"))
-        cmd = encoder_command(ffmpeg, tl, plan, entry,
-                              audio_input_args(entry, audio_path, plan.sample_rate), partial, text=text)
-        with open(enc_log, "wb") as enc_err:
-            enc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=enc_err)
-            done_before = 0
-            last_log = time.time()
-            for i, seg in enumerate(plan.segments, start=1):
-                src = tl.data["sources"][seg.source]
-                size = src["size"]
-                seg_log = os.path.join(scratch, "segment.log")
-                with open(seg_log, "wb") as seg_err:
-                    filt = subprocess.Popen(
-                        segment_command(ffmpeg, tl, seg, size, entry, (entry["width"], entry["height"])),
-                        stdin=subprocess.PIPE, stdout=enc.stdin, stderr=seg_err)
-                    base = done_before
-                    state = {"last": 0}
-
-                    def on_frames(n, base=base, state=state):
-                        state["last"] = n
-                        if progress:
-                            progress(base + n, frames, (base + n) / max(1e-9, time.time() - t0))
-
-                    sink = _CountingSink(filt.stdin, size["width"] * size["height"] * 6, on_frames)
-                    broken = False
-                    try:
-                        written = decoder.write_frame_range(src["original_video"], 1, sink,
-                                                            seg.in_frame, seg.out_frame)
-                    except BrokenPipeError:
-                        broken = True
-                        written = state["last"]
-                    except BaseException:
-                        _kill(filt)
-                        raise
-                    finally:
-                        try:
-                            filt.stdin.close()
-                        except BrokenPipeError:
-                            pass
-                    rc = filt.wait()
-                filt = None
-                if rc != 0 or broken:
-                    if enc.poll() is not None and enc.returncode != 0:
-                        raise ExportError(f"the encoder stopped on segment {seg.id}: {_tail(enc_log)}")
-                    raise ExportError(f"the segment filter failed on segment {seg.id} "
-                                      f"({seg.source}, frames {seg.in_frame} to {seg.out_frame}): "
-                                      f"{_tail(seg_log)}")
-                if written != seg.length_frames:
-                    warn(f"segment {seg.id}: the decoder gave {written} frames, the segment has "
-                         f"{seg.length_frames}")
-                done_before += seg.length_frames
-                if time.time() - last_log >= config.EXPORT_LOG_EVERY_SEC or i == len(plan.segments):
-                    last_log = time.time()
-                    rate = done_before / max(1e-9, time.time() - t0)
-                    eta = (frames - done_before) / rate if rate else 0
-                    log(f"[{i}/{len(plan.segments)}] segment {seg.id}  {done_before}/{frames} frames "
-                        f"({100 * done_before / frames:.1f} percent)  {rate:.1f} fps  "
-                        f"{rate / float(fps):.2f}x real time  eta {convert._hms(eta)}")
-            try:
-                enc.stdin.close()
-            except BrokenPipeError:
-                pass
-            rc = enc.wait()
-            enc = None
-        if rc != 0:
-            raise ExportError(f"the encoder failed (exit {rc}): {_tail(enc_log)}")
-        video_s = time.time() - t0
-        result.stage_s["video_s"] = round(video_s, 1)
-        result.video_fps = round(frames / video_s, 2)
-        result.realtime_factor = round(seconds / video_s, 3)
+        if not chunked:
+            if text is not None:
+                text.write(os.path.join(scratch, "text"))
+            cmd = encoder_command(ffmpeg, tl, plan, entry,
+                                  audio_input_args(entry, audio_path, plan.sample_rate), partial, text=text)
+            _picture_pass(tl, plan, entry, plan.segments, cmd, scratch, decoder, ffmpeg, procs, progress, log, warn,
+                          0, frames)
+            video_s = time.time() - t0
+            result.stage_s["video_s"] = round(video_s, 1)
+            result.video_fps = round(frames / video_s, 2)
+            result.realtime_factor = round(seconds / video_s, 3)
+        else:
+            done_frames = rendered_frames = 0
+            for c in infos:
+                n, segs = c["n"], c["segs"]
+                path = chunks.chunk_path(chunk_dir, n, ext)
+                if chunks.reusable(chunk_dir, n, c["key"], c["frames"], ext):
+                    stats["reused"] += 1
+                    done_frames += c["frames"]
+                    log(f"chunk {n} of {len(infos)}: finished earlier, kept ({c['frames']} frames)")
+                    continue
+                part = chunks.chunk_path(chunk_dir, n, ext, partial=True)
+                current["partial"] = part
+                c0 = time.time()
+                if c["text"] is not None:
+                    c["text"].write(os.path.join(scratch, f"text-{n:04d}"))
+                log(f"chunk {n} of {len(infos)}: scenes {segs[0].id} to {segs[-1].id}, {c['frames']} frames")
+                cmd = chunk_encoder_command(ffmpeg, tl, plan, entry, part, c["first"], c["end"], text=c["text"])
+                _picture_pass(tl, plan, entry, segs, cmd, scratch, decoder, ffmpeg, procs, progress, log, warn,
+                              done_frames, frames, label=f" chunk {n}")
+                got = _count_frames(part, ffprobe)
+                if got != c["frames"]:
+                    raise ExportError(f"chunk {n} has {got} frames and the plan has {c['frames']} (scenes "
+                                      f"{segs[0].id} to {segs[-1].id}): the decoder or the encoder gave a wrong number "
+                                      f"of frames. The chunk was removed; the finished chunks are kept.")
+                os.replace(part, path)
+                current["partial"] = None
+                chunks.write_record(chunk_dir, n, {"key": c["key"], "frames": c["frames"], "scenes": [x.id for x in segs],
+                                                   "bytes": os.path.getsize(path), "elapsed_s": round(time.time() - c0, 1)})
+                stats["rendered"] += 1
+                done_frames += c["frames"]
+                rendered_frames += c["frames"]
+            render_s = time.time() - t0
+            # The join: the same parameter sets in every chunk, then the chunks and the sound in one file.
+            paths = [chunks.chunk_path(chunk_dir, c["n"], ext) for c in infos]
+            sets = [chunks.parameter_sets(p_, ffmpeg) for p_ in paths]
+            if len(set(sets)) > 1:
+                first_set = sets[0]
+                odd = [str(i + 1) for i, v in enumerate(sets) if v != first_set]
+                raise ExportError(
+                    f"The chunks of {name!r} do not have the same H.264 parameter sets (chunk 1 against chunk "
+                    f"{', '.join(odd)}), so they cannot be joined by copy. The chunks are kept in {chunk_dir}. "
+                    f"Render the film in one process instead: python main.py render --export {name} --chunk-seconds 0")
+            list_path = os.path.join(scratch, "chunks.txt")
+            chunks.write_concat_list(paths, list_path)
+            j0 = time.time()
+            joined = subprocess.run(join_command(ffmpeg, entry, list_path,
+                                                 audio_input_args(entry, audio_path, plan.sample_rate), partial),
+                                    capture_output=True, text=True)
+            if joined.returncode != 0:
+                raise ExportError(f"the join of the chunks failed (exit {joined.returncode}): {joined.stderr.strip()[-400:]}")
+            result.stage_s["join_s"] = round(time.time() - j0, 1)
+            log(f"{len(infos)} chunks joined with the sound in {result.stage_s['join_s']} s "
+                f"({stats['reused']} kept from an earlier run, {stats['rendered']} rendered now)")
+            video_s = render_s + (time.time() - j0)
+            result.stage_s["video_s"] = round(video_s, 1)
+            if rendered_frames:
+                result.video_fps = round(rendered_frames / max(1e-9, render_s), 2)
+                result.realtime_factor = round(float(rendered_frames / fps) / max(1e-9, render_s), 3)
+            result.chunks = {"total": len(infos), "reused": stats["reused"], "rendered": stats["rendered"]}
 
         # The checks, then the name.
         t0 = time.time()
@@ -894,6 +1141,12 @@ def render_export(tl, name: str, work_dir: str, decoder, timeline_hash: str = No
         else:
             os.replace(partial, out_path)
             result.ok = True
+            if chunked:                              # the file has passed its checks: the chunks are not needed
+                shutil.rmtree(chunk_dir, ignore_errors=True)
+                try:
+                    os.rmdir(os.path.dirname(chunk_dir))
+                except OSError:
+                    pass
             if form in ("srt", "both"):
                 spans = words.cue_spans(text_data)
                 srt = srt_path(entry["output"], lang or config.SUBTITLE_LANGUAGE)
@@ -910,9 +1163,19 @@ def render_export(tl, name: str, work_dir: str, decoder, timeline_hash: str = No
                 credit_path = os.path.splitext(out_path)[0] + ".credit.txt"
                 fsutil.write_text_atomic(credit_path, credit + "\n")
                 result.credit_file = credit_path
+    except BaseException:
+        if chunked:
+            finished = sum(1 for n in os.listdir(chunk_dir) if n.startswith("chunk-") and n.endswith(".json")) \
+                if os.path.isdir(chunk_dir) else 0
+            if finished:
+                log(f"Stopped: {finished} of {len(infos)} chunks are finished and kept in {chunk_dir}. Run the same "
+                    f"command again to go on from there; --fresh starts over.")
+        raise
     finally:
-        _kill(enc)
-        _kill(filt)
+        _kill(procs.enc)
+        _kill(procs.filt)
+        if current["partial"]:
+            _remove(current["partial"])
         if not keep_partial:
             _remove(partial)
         if scratch:
@@ -969,7 +1232,8 @@ def write_report(work_dir, report_name, tl, entry, result, started_iso, load_sta
         "gain_capped": [k for k, v in seg_levels.items() if v.get("capped")],
         "silent_segments": [k for k, v in seg_levels.items() if v.get("silent")],
         "warnings": result.warnings, "problems": result.problems, "checks": result.checks,
-        "credit_file": result.credit_file, "subtitles": result.subtitles, "srt_file": result.srt_file}
+        "credit_file": result.credit_file, "subtitles": result.subtitles, "srt_file": result.srt_file,
+        "chunks": result.chunks}
     report["renders"].append(row)
     report["renders"] = report["renders"][-30:]
     fsutil.write_json_atomic(path, report)

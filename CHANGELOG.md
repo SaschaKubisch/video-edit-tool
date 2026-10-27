@@ -27,6 +27,19 @@
   machine; the same with the 44 subtitles of the first shoot in 173 s. No black bar. With the window centred about 3 of
   15 scenes need a hand crop.
 
+### Added (step 6, resume of a long render)
+- `render` cuts a film longer than 2 minutes (`config.EXPORT_CHUNK_SEC`, `--chunk-seconds S`, 0 for one process) into chunks of
+  whole scenes (`chunks.py`). Each chunk is its own encoder process with the picture only; the sound is mixed and encoded
+  once; finished chunks and the sound are kept in `<work>/chunks/<export>/` with a key (the originals, the frames, the
+  placement, both LUTs, the encoder settings, the text, the fades, the versions). After a stop, a failure or a kill, the same
+  command goes on with the chunks that are finished (`--fresh` starts over); an edit renders only the chunks it touches.
+  The chunks are joined with ffmpeg's concat in copy mode with the sound, then checked as any file; the render refuses to
+  join chunks with different H.264 parameter sets (separate runs of `h264_videotoolbox` wrote identical ones in the
+  measured case). The free space asked for is about 2.1 times the file, less the finished chunks. Films of one chunk
+  and shorts are rendered as before.
+- Tested with a real render of an 82-second excerpt of the first shoot from the `.braw` files, killed with SIGKILL in the
+  second chunk and stopped with SIGTERM in the third, then finished (`SPECS.md` 5.3).
+
 ### Added (step 6, burned-in translations)
 - Subtitles in Japanese, Simplified Chinese and Thai can be burned into the film and into a short: `render --export NAME
   --lang LANG` and `short --file FILE --lang LANG` (LANG: pt-BR, zh-Hans, th, de, ja, ru, or en). The text of each cue is

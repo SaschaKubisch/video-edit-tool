@@ -5,9 +5,7 @@ named `<film>.<lang>.<ext>`. Run through the command-line parser with synthetic 
 import contextlib
 import io
 import json
-import os
 import unittest
-from pathlib import Path
 
 import numpy as np
 
@@ -15,8 +13,6 @@ import config
 import export
 import main
 import textlayout
-import timeline
-import translate
 from tests import media
 from tests.fonts import requires_inter, requires_noto
 from tests.test_export import ExportFixture, FlatDecoder

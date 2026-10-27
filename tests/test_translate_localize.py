@@ -8,12 +8,10 @@ is written into a film of another language."""
 import copy
 import unittest
 
-import config
-import shorts
 import translate
 import words
 from tests.test_shorts import build, make_film
-from tests.test_translate_shorten import (DURATION, ENGLISH, JA, JA_SHORT, TH, ZH, FollowUpCase, real_film)
+from tests.test_translate_shorten import ENGLISH, JA, JA_SHORT, FollowUpCase
 from tests.timeline_fixture import short_example
 
 

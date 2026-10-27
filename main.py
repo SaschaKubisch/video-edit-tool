@@ -810,8 +810,8 @@ def cmd_render(args, decoder=None):
         print(f"  Process: {pid_path}")
         print(f"  Watch:   tail -f '{log_path}'")
         print(f"  Stop:    kill {pid}   (SIGTERM: the render removes its files and exits)")
-        print(f"  Restart: run the same command again; a stopped render is not resumed, it starts "
-              "from the beginning.")
+        print(f"  Restart: run the same command again; a long film goes on with its finished chunks, a short "
+              "one starts from the beginning (--fresh starts a long one over).")
         return
     decoder = decoder or BrawSourceDecoder()
     try:
@@ -837,6 +837,7 @@ def cmd_render(args, decoder=None):
                 result = export.render_export(
                     tl, name, work_dir, decoder, timeline_hash=timeline.file_hash(path),
                     protected=originals, force=args.force, subtitles=form, subtitle_lang=args.lang,
+                    chunk_seconds=args.chunk_seconds, fresh=args.fresh,
                     log=lambda s: print(f"{time.strftime('%H:%M:%S')}  {s}", flush=True))
             except (export.ExportError, safety.OriginalsProtectedError) as e:
                 print(f"Error: {e}", file=sys.stderr, flush=True)
@@ -850,8 +851,8 @@ def cmd_render(args, decoder=None):
                 print(f"  credit for the video description: {result.credit_file}", flush=True)
             failed = failed or not result.ok
     except KeyboardInterrupt:
-        print("Interrupted. The files of the render were removed. Run the same command again to "
-              "start over.", flush=True)
+        print("Interrupted. The file that was being written was removed. Run the same command again: a long film goes "
+              "on with the chunks that are finished, a short one starts over.", flush=True)
         sys.exit(130)
     sys.exit(1 if failed else 0)
 
@@ -2043,6 +2044,11 @@ def build_parser():
         help="Burn the subtitles in this language (" + ", ".join(config.TRANSLATE_LANGUAGES) + "), from the translations "
              "that `subtitles translate` made, into <film>.<LANG>.<ext>; the form is burned unless you say both "
              "(Japanese, Chinese and Thai need VET_NOTO_FONT_DIR)")
+    p_render.add_argument("--chunk-seconds", type=float, metavar="S",
+        help=f"A film longer than this is rendered in chunks of whole scenes that are kept when the render stops, so that "
+             f"the same command goes on where it was (default {config.EXPORT_CHUNK_SEC:g}; 0 renders in one process)")
+    p_render.add_argument("--fresh", action="store_true",
+        help="Throw away the chunks of an earlier run of this export and render everything again")
     p_render.add_argument("--detach", action="store_true",
         help="Run in the background, in a session of its own, with a log and a pid file in <work>/reports")
     p_render.set_defaults(func=cmd_render)
