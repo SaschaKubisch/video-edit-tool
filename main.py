@@ -1755,6 +1755,9 @@ def build_parser():
     sp.add_argument("--dry-run", action="store_true", help="Count what would be sent and the cost; send nothing")
     sp.add_argument("--no-shorten", action="store_true",
         help="Do not ask the model for a shorter text where a translation does not fit its cue")
+    sp.add_argument("--save-raw", metavar="DIR",
+        help="Write the text of every answer of the model that cannot be read to a file in DIR (never a header or the "
+             "key), and name the files in the warnings")
     p_sub.set_defaults(func=cmd_subtitles)
 
     # ── title ──

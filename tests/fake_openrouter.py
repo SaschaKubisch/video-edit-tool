@@ -3,7 +3,11 @@ answers POST /api/v1/chat/completions the way the real one does. It "translates"
 "[<language code>] <text>". `script` is a list of behaviours that are used up one request at a time
 (the rest of the requests are answered normally): "ok", "http500", "http429", "http401", "garbage",
 "missing" (drops one id), "extra" (adds an id), "empty" (an empty text), "number" (a number as a text),
-"fenced" (the JSON in a markdown fence).
+"fenced" (the JSON in a markdown fence), and the ways a model wraps or spoils the answer: "prose" (the JSON between
+a sentence before and a sentence after), "fenced_prose" (a fence that is not the whole text), "controlchar" (a line
+break inside the first text, which strict JSON forbids), "echo_list" (a list of {"id", "translation"} instead of an
+object), "truncated" (the JSON cut off halfway), "garbage_key" (text that is no JSON and holds the API key, to check
+that a saved answer never does).
 
 A request with "translate" is a translation; a request with "shorten" is the follow-up that asks for a shorter
 text (SPECS 9.9). `translations` maps (language code, English text) to the translation to give instead of
@@ -26,6 +30,7 @@ class FakeOpenRouter:
         self.shorten_mode = shorten_mode
         self.shortenings = dict(shortenings or {})
         self.usage = []
+        self.contents = []                  # the text of every answer, as sent
         self.requests = []
         self.lock = threading.Lock()
         outer = self
@@ -70,6 +75,26 @@ class FakeOpenRouter:
                     content = "I cannot help with that {"
                 elif behaviour == "fenced":
                     content = "```json\n" + content + "\n```"
+                elif behaviour == "prose":
+                    content = "Here are the translations:\n" + content + "\nI hope this helps."
+                elif behaviour == "fenced_prose":
+                    content = "Here you go:\n```json\n" + content + "\n```\nTell me if you want them shorter."
+                elif behaviour == "controlchar" and answer:
+                    first = next(iter(answer))
+                    text = answer[first]
+                    broken = dict(answer)
+                    broken[first] = "@@"
+                    content = json.dumps(broken, ensure_ascii=False).replace(
+                        '"@@"', '"' + json.dumps(text[:1], ensure_ascii=False)[1:-1] + "\n"
+                        + json.dumps(text[1:], ensure_ascii=False)[1:-1] + '"')
+                elif behaviour == "echo_list":
+                    content = json.dumps([{"id": k, "translation": v} for k, v in answer.items()], ensure_ascii=False)
+                elif behaviour == "truncated":
+                    content = content[: max(2, len(content) // 2)]
+                elif behaviour == "garbage_key":
+                    content = "I cannot help with that {" + outer.key
+                with outer.lock:
+                    outer.contents.append(content)
                 tokens = max(1, len(json.dumps(user)) // 4)
                 with outer.lock:
                     outer.usage.append((tokens + 100, tokens))

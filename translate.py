@@ -26,6 +26,10 @@ the files line up.
   kept when it fits better; otherwise the first stays and the warning stays. The follow-up is counted in the tokens and
   the cost and is cached under a key of its own (the maximum is part of the key). `shorten=False` or
   `--no-shorten` switches it off.
+- The answer of the model is read by `parse_answer`: the one JSON object that maps every id to a text, also among
+  prose or in a fence that is not the whole text; nothing is repaired. A request is tried 3 times (an unreadable
+  answer, a network error, HTTP 429 and 5xx alike). With `save_raw` (`--save-raw DIR`) the text of every answer that
+  cannot be read is written to a file there, for finding out what the model sent.
 - Each translation is wrapped again for its language: 42 characters per line for pt-BR, de and ru, 35 for Thai
   (tone marks and vowel marks not counted), 16 for Simplified Chinese, 13 full-width characters for Japanese;
   two lines at most. A line of Chinese, Japanese or Thai has no spaces, so it is cut at the phrase boundaries that
@@ -314,6 +318,10 @@ class Client:
         self.url = (url or base_url()).rstrip("/")
         self.timeout = timeout or config.TRANSLATE_TIMEOUT_SEC
 
+    def scrub(self, text: str) -> str:
+        """`text` without the key, for a text that is written to a file."""
+        return text.replace(self._key, "***") if self._key else text
+
     def chat(self, model: str, messages: list) -> dict:
         body = json.dumps({"model": model, "messages": messages, "temperature": 0,
                            "response_format": {"type": "json_object"}, "usage": {"include": True}}).encode("utf-8")
@@ -367,6 +375,8 @@ SHORTEN_SYSTEM = """You shorten subtitle translations for a film. The target lan
 You get one JSON object with "target_language" and "shorten": a list of {{"id", "english", "translation", "max_chars"}}.
 For each item, write a shorter translation of the English text in {name}: at most "max_chars" characters.{unit}
 Answer with one JSON object and nothing else: it maps every id in "shorten" to the shorter translation, as a string.
+For the ids in this request the answer looks like this: {example}
+No text before or after it and no markdown fence.
 Rules:
 - Keep what matters most of the meaning, and keep names and numbers. Leave out detail first.
 - Natural, spoken {name}, as a good subtitler would write it. One line, without line breaks.
@@ -385,38 +395,101 @@ def build_shorten_messages(lang: str, items: list) -> list:
     """The follow-up request: `items` is a list of {id, english, translation, max_chars}."""
     rule = config.TRANSLATE_LANGUAGE_RULES[lang]
     user = {"target_language": lang, "shorten": items}
-    return [{"role": "system", "content": SHORTEN_SYSTEM.format(name=rule["name"], unit=_UNIT_NOTES.get(rule["unit"], ""))},
+    example = "{" + ", ".join(f'"{i["id"]}": "<shorter translation>"' for i in items[:2]) + "}"
+    return [{"role": "system", "content": SHORTEN_SYSTEM.format(name=rule["name"], unit=_UNIT_NOTES.get(rule["unit"], ""),
+                                                                example=example)},
             {"role": "user", "content": json.dumps(user, ensure_ascii=False)}]
 
 
-def parse_answer(content, ids: list) -> dict:
-    """The translations in an answer: {id: text}. Raises _Retry when it is not what was asked for."""
-    if not isinstance(content, str):
-        raise _Retry("the answer has no text")
-    text = content.strip()
-    fence = re.match(r"^```(?:json)?\s*(.*?)\s*```$", text, re.S)
-    if fence:
-        text = fence.group(1)
+_FENCE = re.compile(r"```[A-Za-z0-9_-]*[ \t]*\r?\n?(.*?)```", re.S)
+
+
+def _json_values(text: str) -> list:
+    """The JSON values that can be read from the text of an answer, in this order: the whole text; each fenced block
+    (``` ... ```) wherever it is; each object or list that stands among other text. `strict=False` lets a text
+    hold a line break or a tab, which strict JSON forbids inside a string. Nothing is repaired: a cut-off value, a
+    trailing comma and single quotes are not read."""
+    decoder = json.JSONDecoder(strict=False)
     try:
-        answer = json.loads(text)
+        return [decoder.decode(text)]
     except ValueError:
-        raise _Retry("the answer is not JSON")
-    if isinstance(answer, dict) and len(answer) == 1 and isinstance(next(iter(answer.values())), dict) \
-            and set(answer) != set(ids):
-        answer = next(iter(answer.values()))
-    if not isinstance(answer, dict):
+        pass
+    found = []
+    for block in _FENCE.finditer(text):
+        try:
+            found.append(decoder.decode(block.group(1).strip()))
+        except ValueError:
+            pass
+    i = 0
+    while i < len(text):
+        if text[i] in "{[":
+            try:
+                value, end = decoder.raw_decode(text, i)
+            except ValueError:
+                i += 1
+                continue
+            found.append(value)
+            i = end
+        else:
+            i += 1
+    return found
+
+
+def _items_to_object(items: list) -> dict:
+    """A list of {"id", "translation"} (the item as the follow-up request sends it) or {"id", "text"} (the item of
+    the first request) as an object that maps id to text. Exactly one of the two fields must be there."""
+    out = {}
+    for item in items:
+        if not (isinstance(item, dict) and isinstance(item.get("id"), str)):
+            raise _Retry("the answer is not a JSON object")
+        fields = [k for k in ("translation", "text") if k in item]
+        if len(fields) != 1:
+            raise _Retry(f"the item of {item['id']} is not clear: it needs exactly one of 'translation' and 'text'")
+        if item["id"] in out:
+            raise _Retry(f"the id {item['id']} is in the answer more than once")
+        out[item["id"]] = item[fields[0]]
+    return out
+
+
+def _as_texts(value, ids: list) -> dict:
+    """{id: text} from one JSON value, or _Retry saying what is wrong with it."""
+    if isinstance(value, dict) and len(value) == 1 and set(value) != set(ids) \
+            and isinstance(next(iter(value.values())), (dict, list)):
+        value = next(iter(value.values()))                        # {"translations": {...}}, {"shorten": [...]}
+    if isinstance(value, list):
+        value = _items_to_object(value)
+    if not isinstance(value, dict):
         raise _Retry("the answer is not a JSON object")
-    missing = [i for i in ids if i not in answer]
-    extra = [i for i in answer if i not in ids]
+    missing = [i for i in ids if i not in value]
+    extra = [i for i in value if i not in ids]
     if missing or extra:
         raise _Retry(f"the answer misses {missing} and has {extra} that were not asked for")
     out = {}
     for i in ids:
-        v = answer[i]
+        v = value[i]
         if not isinstance(v, str) or not v.strip():
             raise _Retry(f"the translation of {i} is empty or not a text")
         out[i] = flat(v)
     return out
+
+
+def parse_answer(content, ids: list) -> dict:
+    """The texts in an answer: {id: text}. The answer is the one JSON object that maps every id to its text; it may
+    stand among prose or in a fence that is not the whole text, and the tool's own shapes are read too (an object or
+    list around it, a list of {"id", "translation"}). The first value that has exactly the asked ids is taken.
+    Raises _Retry, with the reason, when there is none."""
+    if not isinstance(content, str):
+        raise _Retry("the answer has no text")
+    values = _json_values(content.strip())
+    if not values:
+        raise _Retry("the answer is not JSON")
+    first = None
+    for value in values:
+        try:
+            return _as_texts(value, ids)
+        except _Retry as e:
+            first = first or e
+    raise first
 
 
 # ── The run ─────────────────────────────────────────────────────
@@ -456,10 +529,32 @@ def _warnings(spans, texts, lang) -> list:
     return out
 
 
-def _ask(client, model: str, messages: list, ids: list, report: dict, follow_up: bool = False):
-    """One request, tried config.TRANSLATE_TRIES times. Returns (the answer {id: text}, "") or (None, why it failed).
-    The tokens of every answer that comes back are added to the report, also those of an answer that cannot be used;
-    a rejected key or no credit raises TranslateError at once."""
+def _save_raw(save_raw, client, content, lang: str, kind: str, ids: list, attempt: int, report: dict, reason: str):
+    """Write the text of an answer that could not be read to a file in the folder `save_raw` (if there is one) and
+    note it in the report. Only the text of the answer is written, never a header, and the key, if it were in the
+    text, is replaced. Returns the path, or None."""
+    if not save_raw:
+        return None
+    text = content if isinstance(content, str) else json.dumps(content, ensure_ascii=False)
+    scrub = getattr(client, "scrub", None)
+    if scrub:
+        text = scrub(text)
+    n = len(report["raw_answers"]) + 1
+    name = f"{time.strftime('%Y%m%d-%H%M%S')}-{n:02d}-{lang}-{kind}-{ids[0]}-{ids[-1]}-try{attempt + 1}.txt"
+    path = os.path.join(save_raw, name)
+    fsutil.write_text_atomic(path, text)
+    report["raw_answers"].append({"lang": lang, "kind": kind, "ids": list(ids), "try": attempt + 1, "reason": reason,
+                                  "file": path})
+    return path
+
+
+def _ask(client, model: str, messages: list, ids: list, report: dict, follow_up: bool = False, lang: str = "",
+         kind: str = "translate", save_raw=None):
+    """One request, tried config.TRANSLATE_TRIES times, with a wait between the tries (an unusable answer, a network
+    error, HTTP 429 and 5xx are all tried again the same way). Returns (the answer {id: text}, "") or (None, why the
+    last try failed). The tokens of every answer that comes back are added to the report, also those of an answer
+    that cannot be read; a rejected key or no credit raises TranslateError at once. The text of every answer that
+    cannot be read goes to `save_raw` (see _save_raw)."""
     why = ""
     for attempt in range(config.TRANSLATE_TRIES):
         if follow_up:
@@ -469,8 +564,12 @@ def _ask(client, model: str, messages: list, ids: list, report: dict, follow_up:
             usage = resp.get("usage") or {}
             report["tokens_in"] += int(usage.get("prompt_tokens") or 0)
             report["tokens_out"] += int(usage.get("completion_tokens") or 0)
-            choice = (resp.get("choices") or [{}])[0].get("message", {}).get("content")
-            return parse_answer(choice, ids), ""
+            content = (resp.get("choices") or [{}])[0].get("message", {}).get("content")
+            try:
+                return parse_answer(content, ids), ""
+            except _Retry as e:
+                _save_raw(save_raw, client, content, lang, kind, ids, attempt, report, str(e))
+                raise
         except _Retry as e:
             why = str(e)
             if attempt + 1 < config.TRANSLATE_TRIES:
@@ -479,7 +578,7 @@ def _ask(client, model: str, messages: list, ids: list, report: dict, follow_up:
 
 
 def _shorten(client, model: str, lang: str, spans: list, firsts: dict, cache: dict, work_dir: str, report: dict,
-             log, on_batch) -> dict:
+             log, on_batch, save_raw=None) -> dict:
     """The final text of every cue of one language: the first translation, or a shorter one when the first does not
     fit the cue and the shorter one fits better. Asks the model once for each cue that does not fit and has no
     shorter text in the cache. Returns {cue id: text}."""
@@ -503,12 +602,18 @@ def _shorten(client, model: str, lang: str, spans: list, firsts: dict, cache: di
         items = [{"id": s["id"], "english": english, "translation": firsts[s["id"]], "max_chars": limit}
                  for s, english, limit, key in batch]
         ids = [i["id"] for i in items]
-        answer, why = _ask(client, model, build_shorten_messages(lang, items), ids, report, follow_up=True)
+        saved_before = len(report["raw_answers"])
+        answer, why = _ask(client, model, build_shorten_messages(lang, items), ids, report, follow_up=True, lang=lang,
+                           kind="shorten", save_raw=save_raw)
         on_batch(f"{lang}: asked for shorter texts of {min(b + len(batch), len(pending))} of {len(pending)} cues")
         report["follow_up_cues"] += len(batch)
         if answer is None:
             for s, english, limit, key in batch:
                 failed[key] = why
+            files = [e["file"] for e in report["raw_answers"][saved_before:]]
+            if files:
+                report["warnings"].append(f"{lang}: the follow-up request for {len(batch)} cue(s) failed; the answers "
+                                          f"that could not be read are saved in: {', '.join(files)}")
             continue
         for s, english, limit, key in batch:
             cache[key] = {"lang": lang, "model": model, "kind": "short", "max_chars": limit, "text": answer[s["id"]]}
@@ -516,8 +621,8 @@ def _shorten(client, model: str, lang: str, spans: list, firsts: dict, cache: di
     for s, english, limit, key, found in plan:
         cid = s["id"]
         if key not in cache:
-            report["warnings"].append(f"{lang} {cid}: no shorter translation, the follow-up request failed "
-                                      f"({failed.get(key, 'no answer')})")
+            report["warnings"].append(f"{lang} {cid}: no shorter translation, the follow-up request failed after "
+                                      f"{config.TRANSLATE_TRIES} tries ({failed.get(key, 'no answer')})")
             continue
         candidate = cache[key]["text"]
         duration = max(1e-6, s["end_s"] - s["start_s"])
@@ -532,9 +637,10 @@ def _shorten(client, model: str, lang: str, spans: list, firsts: dict, cache: di
 
 
 def translate_film(tl, work_dir: str, entry: dict, langs: list, model: str = None, progress=None, client=None,
-                   dry_run: bool = False, log=lambda s: None, shorten: bool = True) -> dict:
+                   dry_run: bool = False, log=lambda s: None, shorten: bool = True, save_raw: str = None) -> dict:
     """Translate the film's cues into `langs` and write the SRT files next to the export's file. Returns the report.
     With `shorten`, a translation that does not fit its cue is asked for once more, shorter (see the module text).
+    With `save_raw` (a folder), the text of every answer of the model that cannot be read is written there.
     Raises TranslateError (the message names the language and the cues that failed)."""
     spans = words.cue_spans(tl.data)
     if not spans:
@@ -547,7 +653,7 @@ def translate_film(tl, work_dir: str, entry: dict, langs: list, model: str = Non
     report = {"version": 1, "model": model, "export": entry["name"], "languages": {}, "written": [], "warnings": [],
               "sent_cues": 0, "cached_cues": 0, "to_send_cues": sum(len(v) for v in todo.values()),
               "tokens_in": 0, "tokens_out": 0, "cost_usd": 0.0, "estimate_usd": None, "dry_run": dry_run,
-              "follow_up_requests": 0, "follow_up_cues": 0, "shortened": []}
+              "follow_up_requests": 0, "follow_up_cues": 0, "shortened": [], "raw_answers": []}
     report["estimate_usd"] = _estimate_todo(todo, model)
     if dry_run:
         for lang in langs:
@@ -577,11 +683,14 @@ def translate_film(tl, work_dir: str, entry: dict, langs: list, model: str = Non
             after = cues[last + 1:last + 1 + config.TRANSLATE_CONTEXT]
             messages = build_messages(lang, batch, before, after)
             ids = [c["id"] for c in batch]
-            answer, why = _ask(client, model, messages, ids, report)
+            saved_before = len(report["raw_answers"])
+            answer, why = _ask(client, model, messages, ids, report, lang=lang, kind="translate", save_raw=save_raw)
             if answer is None:
+                files = [e["file"] for e in report["raw_answers"][saved_before:]]
+                saved = f" The answers that could not be read are saved in: {', '.join(files)}." if files else ""
                 raise TranslateError(
                     f"The translation into {lang} stopped: {config.TRANSLATE_TRIES} tries failed for the cues "
-                    f"{', '.join(ids)} ({why}). The cues translated before are kept; run the command again. "
+                    f"{', '.join(ids)} ({why}).{saved} The cues translated before are kept; run the command again. "
                     f"No file of {lang} was written.")
             for c in batch:
                 cache[cache_key(model, lang, c["text"])] = {"lang": lang, "model": model, "text": answer[c["id"]]}
@@ -596,7 +705,7 @@ def translate_film(tl, work_dir: str, entry: dict, langs: list, model: str = Non
                 progress_state["total"] += 1
                 step(message)
                 log(message)
-            texts = _shorten(client, model, lang, spans, firsts, cache, work_dir, report, log, on_batch)
+            texts = _shorten(client, model, lang, spans, firsts, cache, work_dir, report, log, on_batch, save_raw)
         else:
             texts = firsts
         out = [dict(s, text="\n".join(wrap_translation(texts[s["id"]], lang))) for s in spans]
@@ -666,11 +775,21 @@ def cli(args, timeline_path: str, work_dir_of) -> None:
     except timeline.TimelineError as e:
         fail(str(e))
     work = work_dir_of(args, lambda m, code=2: fail(m, code))
+    save_raw = getattr(args, "save_raw", None)
+    if save_raw:
+        import safety
+        from project import Project
+        project_file = getattr(args, "project", None) or config.PROJECT_FILE
+        if os.path.exists(project_file):
+            try:
+                safety.assert_not_inside(save_raw, safety.originals_folders(Project.load(project_file)))
+            except safety.OriginalsProtectedError as e:
+                fail(str(e))
     try:
         langs = parse_languages(args.lang)
         entry = pick_export(tl.data, args.export)
         report = translate_film(tl, work, entry, langs, model=args.model, dry_run=args.dry_run,
-                                shorten=not getattr(args, "no_shorten", False),
+                                shorten=not getattr(args, "no_shorten", False), save_raw=save_raw,
                                 log=lambda s: print(f"{time.strftime('%H:%M:%S')}  {s}", flush=True))
     except TranslateError as e:
         fail(str(e))
@@ -689,6 +808,10 @@ def cli(args, timeline_path: str, work_dir_of) -> None:
         for item in report["shortened"]:
             print(f"  {item['lang']} {item['id']}: {item['before_chars']:g} -> {item['after_chars']:g} characters "
                   f"(at most {item['max_chars']})")
+    if report["raw_answers"]:
+        print(f"{len(report['raw_answers'])} answer(s) of the model that could not be read are saved in {save_raw}:")
+        for item in report["raw_answers"]:
+            print(f"  {item['file']}  ({item['lang']} {item['kind']}, try {item['try']}: {item['reason']})")
     for path in report["written"]:
         print(f"  {path}")
     for w in report["warnings"]:
