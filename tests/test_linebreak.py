@@ -4,6 +4,7 @@ balanced within the limit of the language. The strings are those of the first re
 (2026-10-27, model google/gemini-2.5-flash-lite), whose lines were cut inside words: ハン|ドブレンダー, 倒|进, จา|ก,
 and a line that began with ー."""
 
+import json
 import os
 import unicodedata
 import unittest
@@ -55,14 +56,26 @@ def real(lang):
     return {row[0]: row[COLUMN[lang]] for row in REAL}
 
 
+PARTICLES = ("は", "が", "を", "に", "で", "と", "の", "も", "へ", "や", "から", "まで", "より")
+
+
 def phrase_ends(text, lang):
-    """The lengths, with the spaces left out, at which BudouX ends a phrase."""
+    """The lengths, with the spaces left out, at which BudouX ends a phrase; for Japanese also where its word model
+    ends a particle word that no other particle follows."""
     parser = {"ja": budoux.load_default_japanese_parser, "zh-Hans": budoux.load_default_simplified_chinese_parser,
               "th": budoux.load_default_thai_parser}[lang]()
     ends, total = set(), 0
     for chunk in parser.parse(text):
         total += len(chunk.replace(" ", ""))
         ends.add(total)
+    if lang == "ja":
+        with open(os.path.join(os.path.dirname(budoux.__file__), "models", "ja_word.json"), encoding="utf-8") as f:
+            words = budoux.Parser(json.load(f)).parse(text)
+        total = 0
+        for word, following in zip(words, words[1:]):
+            total += len(word)
+            if word in PARTICLES and following not in PARTICLES:
+                ends.add(total)
     return ends
 
 
@@ -160,11 +173,11 @@ class RealStringsTests(unittest.TestCase):
             ("ja", "c002"): ["ドレッシングは", "淡く滑らかになる。"],
             ("ja", "c003"): ["材料の入った小さなボウルが", "カウンターに並んでいる。"],
             ("ja", "c004"): ["彼女は淡い黄色の", "ドレッシングを", "容器から小さな白い", "ティーポットに注ぐ。"],
-            ("ja", "c005"): ["粘土のすり鉢とまな", "板が準備されている。"],
+            ("ja", "c005"): ["粘土のすり鉢と", "まな板が準備されている。"],          # was 粘土のすり鉢とまな / 板が...: まな板 was split
             ("ja", "c006"): ["テーブルには皿、スプーン、", "フォークが並べられている。"],
             ("ja", "c007"): ["手が緑のサラダボウルを", "テーブルに置く。"],
             ("ja", "c008"): ["その横には丸い木製の", "トレイが置かれている。"],
-            ("ja", "c009"): ["赤いブレンダーが", "紫色の混ぜ物が入った", "状態で動いている。"],
+            ("ja", "c009"): ["赤いブレンダーが", "紫色の混ぜ物が", "入った状態で動いている。"],     # the 2nd cut follows が, not った
             ("ja", "c010"): ["彼女は蓋に", "片手を添えている。"],
             ("ja", "c011"): ["カウンターには水の入った", "グラスが置かれている。"],
             ("zh-Hans", "c001"): ["她手里拿着一个", "高罐子里的手持搅拌棒。"],
@@ -176,6 +189,32 @@ class RealStringsTests(unittest.TestCase):
         for (lang, cue), lines in want.items():
             with self.subTest(lang=lang, cue=cue):
                 self.assertEqual(lines_of(real(lang)[cue], lang), lines)
+
+    def test_a_japanese_cut_follows_a_particle_when_that_costs_no_line(self):
+        """c005: BudouX gives no boundary after the particle と (its phrase is すり鉢とまな), so the cut fell inside the
+        word まな板 (`粘土のすり鉢とまな` / `板が準備されている。`). The cut after と is allowed (BudouX's word model
+        marks it) and preferred: 7 and 12 of 13."""
+        self.assertEqual(lines_of(real("ja")["c005"], "ja"), ["粘土のすり鉢と", "まな板が準備されている。"])
+
+    def test_the_word_model_of_budoux_is_in_the_package(self):
+        self.assertTrue(os.path.isfile(os.path.join(os.path.dirname(budoux.__file__), "models", "ja_word.json")))
+        # after the particle words の, と and が (the cuts after a particle word that is not followed by another one)
+        self.assertEqual(linebreak.word_boundaries("粘土のすり鉢とまな板が準備されている。", "ja"), [3, 7, 11])
+        self.assertEqual(linebreak.word_boundaries("テーブルには皿、", "ja"), [6])                   # after には, not between に and は
+
+    def test_no_cut_is_made_between_two_particles(self):
+        text = real("ja")["c006"]                                           # テーブルには皿、スプーン、フォークが...
+        self.assertNotIn(text.index("には") + 1, linebreak._candidates(text, "ja", 13, lambda s: float(len(s))))
+
+    def test_a_particle_preference_never_adds_a_line(self):
+        # c011 has one way to make two lines, a cut after った (not a particle); it stays two lines.
+        self.assertEqual(len(lines_of(real("ja")["c011"], "ja")), 2)
+        # c001 needs three lines; the cuts after に and を are particles
+        self.assertEqual(len(lines_of(real("ja")["c001"], "ja")), 3)
+
+    def test_chinese_and_thai_are_cut_as_before(self):
+        self.assertEqual(lines_of(real("zh-Hans")["c004"], "zh-Hans"), ["她把罐子里淡黄色的酱汁", "倒进一个小小的白色茶壶里。"])
+        self.assertEqual(linebreak.word_boundaries("她把罐子里淡黄色的酱汁倒进一个小小的白色茶壶里。", "zh-Hans"), [])
 
     def test_a_line_that_fits_is_one_line_in_every_language(self):
         for lang in ("zh-Hans", "th"):

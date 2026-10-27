@@ -13,13 +13,16 @@ at the boundaries of phrases only.
   3.1.7, 3.1.8, 3.1.10 and the character classes of its annex A) and W3C "Requirements for Chinese Text Layout"
   (CLREQ, 6.1.1 level "basic", 6.1.2). Thai has no W3C table of such characters; its few rules are in THAI_* below.
 - `break_lines` picks the cuts: the fewest lines first, then the lowest cost: after punctuation or at a space
-  where there is one, and the lower line the longer when there are two lines (the same bottom-heavy rule as the
-  English wrapping in words.py).
+  where there is one, in Japanese after a particle rather than between other phrases (the boundaries after particle
+  words of BudouX's word model are cuts too), and the lower line the longer when there are two lines (the same
+  bottom-heavy rule as the English wrapping in words.py).
 - A phrase that is wider than a line by itself is the only thing that is cut inside; the result says so
   (`Layout.split_phrase`) so that the caller can warn.
 """
 
 import functools
+import json
+import os
 import unicodedata
 from dataclasses import dataclass
 
@@ -75,10 +78,20 @@ _STOPS = set("，。、！？；：,.!?;:．")                      # a cut afte
 _INSEPARABLE = set("—―…‥")                               # two in a row stay together (JLREQ 3.1.10, CLREQ 6.1.2.1)
 LANGUAGES = tuple(_NOT_START)
 
+# Japanese particles (postpositions) after which a line may end: は が を に で と の も へ や から まで より. A cut after one
+# is better than a cut between two other phrases: the particle closes the phrase before it, so the line ends on a
+# unit and the next line begins with a new one. The list was given with the request of 2026-10-27; it is not from a standard.
+JA_PARTICLES = ("は", "が", "を", "に", "で", "と", "の", "も", "へ", "や", "から", "まで", "より")
+
 # Costs: a cut at a space or after punctuation is free; between two phrases it costs a little; inside a phrase that is
-# wider than a line it costs a lot (it is only used when nothing else fits).
+# wider than a line it costs a lot (it is only used when nothing else fits). In Japanese a cut that does not follow a
+# particle costs more than one that does, by more than the balance of two lines can make up for in a usual case (the
+# balance of two lines costs 0 to 4, usually less than 1); the cost never adds a line, because the number of lines
+# is chosen first.
 COST_AFTER_STOP = 0.0
 COST_BETWEEN_PHRASES = 3.0
+COST_AFTER_PARTICLE = 3.0
+COST_NOT_AFTER_PARTICLE = 5.0               # Japanese only
 COST_INSIDE_PHRASE = 50.0
 MAX_LINES_TRIED = 8
 
@@ -100,6 +113,35 @@ def _parser(lang: str):
     return {"ja": budoux.load_default_japanese_parser,
             "zh-Hans": budoux.load_default_simplified_chinese_parser,
             "th": budoux.load_default_thai_parser}[lang]()
+
+
+@functools.lru_cache(maxsize=None)
+def _word_parser():
+    """BudouX's word-level Japanese model (`ja_word.json` in the package; the public loaders give only the phrase
+    model). It splits a sentence into words, particles included, where the phrase model keeps `すり鉢とまな` as one."""
+    try:
+        import budoux
+        from budoux import parser as budoux_parser
+        with open(os.path.join(budoux_parser.MODEL_DIR, "ja_word.json"), encoding="utf-8") as f:
+            return budoux.Parser(json.load(f))
+    except ImportError:
+        raise BudouXMissing("The package budoux is not installed. Install it: uv pip install --python .venv/bin/python "
+                            "-r requirements.txt") from None
+
+
+def word_boundaries(text: str, lang: str) -> list:
+    """The indexes where a Japanese cue may end because a particle word ends there: BudouX's word model puts a
+    boundary after a word that is one of JA_PARTICLES and the next word is not a particle too (so not between に and は
+    of には). Other languages: none. These are cuts that the phrase model may not offer."""
+    if lang != "ja":
+        return []
+    out, at = [], 0
+    words = _word_parser().parse(text)
+    for word, following in zip(words, words[1:]):
+        at += len(word)
+        if word in JA_PARTICLES and following not in JA_PARTICLES:
+            out.append(at)
+    return out
 
 
 def boundaries(text: str, lang: str) -> list:
@@ -154,6 +196,18 @@ class Layout:
     split_phrase: bool = False       # a phrase wider than a line was cut inside
 
 
+def _phrase_cost(text: str, j: int, lang: str) -> float:
+    """The cost of a cut at the phrase boundary j: free after a stop mark; in Japanese cheaper after a particle than
+    after any other phrase; 3 in the other languages."""
+    prev = text[j - 1] if text[j - 1] != " " else text[:j].rstrip()[-1:]
+    if prev in _STOPS:
+        return COST_AFTER_STOP
+    if lang == "ja":
+        before = text[:j].rstrip()
+        return COST_AFTER_PARTICLE if before.endswith(JA_PARTICLES) else COST_NOT_AFTER_PARTICLE
+    return COST_BETWEEN_PHRASES
+
+
 def _candidates(text: str, lang: str, limit: float, measure) -> dict:
     """The places where a line may end: {index: cost}. Phrase boundaries first; inside a phrase only when that
     phrase is wider than a line by itself."""
@@ -170,8 +224,10 @@ def _candidates(text: str, lang: str, limit: float, measure) -> dict:
             j += 1
         if j in cuts or not allowed(text, j, lang):
             continue
-        prev = text[j - 1] if text[j - 1] != " " else text[:j].rstrip()[-1:]
-        cuts[j] = COST_AFTER_STOP if prev in _STOPS else COST_BETWEEN_PHRASES
+        cuts[j] = _phrase_cost(text, j, lang)
+    for j in word_boundaries(text, lang):                   # after a particle, where the phrase model has no boundary
+        if j not in cuts and allowed(text, j, lang):
+            cuts[j] = COST_AFTER_PARTICLE
     for i in range(1, n):                                   # a stop mark that BudouX did not cut after
         if i not in cuts and text[i - 1] in _STOPS and allowed(text, i, lang):
             cuts[i] = COST_AFTER_STOP
