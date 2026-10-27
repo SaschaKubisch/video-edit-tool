@@ -259,7 +259,7 @@ class ShortPlan:
     target_frames: int = 0
     frames: int = 0
     fps: Fraction = Fraction(30000, 1001)
-    scenes: list = field(default_factory=list)   # one dict per kept scene, see `_scene_row`
+    scenes: list = field(default_factory=list)   # one dict per kept scene: ids, film and short times, crop, why, cues
     cues_kept: list = field(default_factory=list)
     cues_dropped: list = field(default_factory=list)       # {"id", "scene", "text", "why"}
     titles_kept: list = field(default_factory=list)
@@ -276,8 +276,8 @@ def _check_ids(film: dict, names, what: str, enabled_only: bool = False) -> list
     out = []
     for n in names or []:
         if n not in known:
-            hint = f" Did you mean {difflib.get_close_matches(n, list(known), n=1, cutoff=0.7)[0]}?" \
-                if difflib.get_close_matches(n, list(known), n=1, cutoff=0.7) else ""
+            close = difflib.get_close_matches(n, list(known), n=1, cutoff=0.7)
+            hint = f" Did you mean {close[0]}?" if close else ""
             raise ShortError(f"{what}: there is no scene {n}.{hint}")
         if enabled_only and not known[n].get("enabled", True):
             raise ShortError(f"{what}: scene {n} is removed from the film. Put it back first: "
