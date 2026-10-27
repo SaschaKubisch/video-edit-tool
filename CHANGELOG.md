@@ -2,6 +2,16 @@
 
 ## Unreleased (editor, step 2 in progress)
 
+### Fixed (translations, answers of the model)
+- In the first real run every Japanese follow-up request failed with "the answer is not JSON" and one Portuguese one
+  with HTTP 429. The answer is now read when the JSON object stands among prose, in a fence that is not the whole text,
+  or holds a line break inside a text, and when it comes as a list of `{"id", "translation"}`; a cut-off answer, a
+  trailing comma or a missing id are still refused. The follow-up prompt shows the answer with the ids of its request.
+- `subtitles translate --save-raw DIR` writes every answer of the model that cannot be read to a file (the text
+  only) and names the files in the warning, to see what the model sent.
+- The warning of a follow-up that failed says "after 3 tries". HTTP 429 was already tried again with the waits of the
+  first request; a test now checks it.
+
 ### Fixed (`timeline undo` and the shared history folder)
 - All timeline files of one folder share one `timeline.history` folder, and `timeline undo` took the newest snapshot
   that differed from the file, even one made from another file, and wrote that file's film into this one. Each

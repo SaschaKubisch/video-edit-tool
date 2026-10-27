@@ -113,7 +113,10 @@ faster than its language allows (Japanese 4, Chinese 9, the others 17 characters
 more, with the most characters it may have (the smaller of two lines and the reading speed times the length of the
 cue). The shorter text is kept only when it fits better; the first text and its warning stay otherwise. The command
 prints how many cues were asked again and which were shortened; the follow-up counts in the tokens and the cost.
-`--no-shorten` leaves it out.
+`--no-shorten` leaves it out. A request is tried 3 times (waits of 1 s and 3 s) after an answer that cannot be read, a
+network error, HTTP 429 or a server error. `--save-raw DIR` writes the text of every answer of the model that cannot
+be read to a file in `DIR` (the text only, never the key or a header) and names the files in the warnings, to see what
+the model sent.
 
 **Claude Code writes subtitles and titles from a prompt** by running these commands, or by writing a JSON file that the
 tool checks and imports. Example: the owner says "put the title Sunday kitchen over the first 4 seconds, and subtitle the
