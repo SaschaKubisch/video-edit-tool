@@ -120,6 +120,47 @@ command goes through the validator and keeps the old file as a snapshot (`timeli
 cues that do not fit the safe area. Not built: burned-in subtitles in Chinese, Japanese or Thai (Inter has no such
 glyphs; the SRT files are fine) and subtitles and titles in the Shotcut project. See `SPECS.md` section 9.
 
+## Prompt edits (step 5, work in progress)
+
+You tell Claude Code what to change in words, and it finds the scene. Example: you type "please cut out the scene where I
+am frying a sausage". The tool cannot show the film to Claude Code, so it prepares what Claude Code can read: an index
+of every scene (film times, clip, speech if a transcript exists, subtitles, scene text) and one still sheet per scene.
+`CLAUDE.md` in this repository tells Claude Code what to do with a request like this:
+
+1. It makes or refreshes the index and the sheets, reads the index, and looks at the overview pages and the sheets
+   of the scenes that could match.
+2. It tells you what it found: scene ids, film times, what it saw in which still, how sure it is. If no scene fits it
+   says so.
+3. When you agree, it runs the command with `--dry-run` (what would change: scenes, film length before and after,
+   subtitles affected), shows you, and runs it for real. The tool keeps the old file as one snapshot.
+4. It runs `timeline validate`. If you do not like the result, `timeline undo` takes the change back.
+
+```bash
+.venv/bin/python main.py scenes index --sheets --file timeline.json --work /Volumes/SSD/work   # index.md, index.json and the sheets
+.venv/bin/python main.py scenes sheets --file timeline.json --work /Volumes/SSD/work           # only the sheets (kept when unchanged)
+.venv/bin/python main.py scenes frames s017 --every 1s --file timeline.json --work /Volumes/SSD/work   # a finer look inside one scene
+.venv/bin/python main.py scenes remove s017 --dry-run          # what would change; nothing is written
+.venv/bin/python main.py scenes remove s017                    # take the scene out of the film (it stays in the file)
+.venv/bin/python main.py scenes keep s017,s018                 # keep only these scenes
+.venv/bin/python main.py scenes cut s017 --from 724.5 --to 731 # take a moment (film seconds) out of one scene
+.venv/bin/python main.py scenes restore s017                   # put a removed scene back
+.venv/bin/python main.py timeline validate && .venv/bin/python main.py timeline undo   # check; go back
+```
+
+The files go to `<work>/index/<timeline name>/`: `index.md` (read by Claude Code), `index.json`, `overview-01.jpg` and
+more (one still from the middle of each of 12 scenes), `sheets/s017.jpg` (3, 6 or 9 stills across the scene, each
+labelled with the scene id and its film time) and `frames/` (finer looks). The stills come from the preview copies. A
+sheet is drawn again only when its scene, its place in the film, its frames or its label changed, and the stills are
+kept, so after a removal only new labels are drawn. The index says which timeline hash it was written from; run
+`scenes index` again after every change, because the film times after a removed scene move.
+
+"Cut out" is read as "remove from the film" (decision D14 is still open: the owner has not confirmed this reading).
+`scenes cut` splits a scene: the first part keeps its id, the second part is a new scene; the sound crossfades over the
+usual half second at the new join, subtitles go with their picture, and the text box of the scene stays with the first
+part. The scene search is Claude Code reading still sheets, the scene texts and, when `subtitles auto` has run, the
+Whisper transcript. It can be wrong; the dry run, the preview and `timeline undo` are there for that. See `SPECS.md`
+section 10.
+
 ## UI workflow
 
 1. **Match** - pick the video folder and the audio folder, click Match. The result list shows each pair, its offset and a confidence value (green high, red low - check red ones by hand).
@@ -149,6 +190,10 @@ python3 main.py timeline validate [--file timeline.json] [--no-file-checks]
 python3 main.py timeline history [--file timeline.json] [--json]
 python3 main.py timeline undo [--file timeline.json]
 python3 main.py timeline frames [--file timeline.json] [--work DIR] (--film-s 12.0,48.5 | --source CLIP --at 3.0)
+python3 main.py scenes index|sheets [--file timeline.json] [--work DIR]       # the scene index and still sheets (step 5)
+python3 main.py scenes frames SCENE [--every 1s] [--from S --to S] [--file timeline.json] [--work DIR]
+python3 main.py scenes remove|keep|restore ID[,ID...] [--dry-run] [--file timeline.json]
+python3 main.py scenes cut SCENE --from S --to S [--dry-run] [--file timeline.json]
 ```
 
 - `match` writes `project.json` and the thumbnails.
