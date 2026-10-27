@@ -440,10 +440,35 @@ def _encoder_args(settings: PreviewSettings) -> list:
     raise ValueError(f"Unknown preview encoder: {settings.encoder}")
 
 
-def segment_filter(tl, plan: RenderPlan, seg: SegmentPlan, copy_size=None) -> str:
+def picture_rect(placement: dict, frame) -> tuple:
+    """The rectangle (x0, y0, x1, y1) that a segment's picture fills in the frame: a letterboxed
+    picture fills less than the frame (text stays inside it, SPECS 9.5)."""
+    if placement["mode"] == "fit":
+        return (placement["x"], placement["y"], placement["x"] + placement["w"], placement["y"] + placement["h"])
+    return (0, 0, frame[0], frame[1])
+
+
+def segment_rects(plan: RenderPlan) -> dict:
+    return {s.id: picture_rect(s.placement, plan.frame) for s in plan.segments}
+
+
+def segment_text(tl, plan: RenderPlan, seg: SegmentPlan, burn_text: bool = True):
+    """The text that falls in the segment, as a textlayer plan with frames counted from the segment's
+    first frame; None when the film has no text or `burn_text` is off. Nothing is drawn yet."""
+    import textlayer
+    if not burn_text or not textlayer.has_text(tl.data):
+        return None
+    text = textlayer.build(tl.data, plan.frame, seg.film_start_frame, seg.film_start_frame + seg.length_frames,
+                           segment_rects(plan))
+    return None if text.empty else text
+
+
+def segment_filter(tl, plan: RenderPlan, seg: SegmentPlan, copy_size=None, text=None) -> str:
     """The ffmpeg filter chain that turns frames of the preview copy into the segment's
     picture in the film preview: new time stamps, the creative LUT if there is one, the
-    placement (SPECS 5.2), the film fades, 4:2:0."""
+    placement (SPECS 5.2), the text (cues and titles, SPECS 9.6) if there is any, the film
+    fades, 4:2:0. With `text` (a textlayer plan that has been written) the chain is a filter
+    graph that ends in the label [vout]; without it a plain chain."""
     import convert
     fps = tl.data["film"]["fps"]
     chain = [f"setpts=N/({fps['num']}/{fps['den']})/TB"]
@@ -470,16 +495,20 @@ def segment_filter(tl, plan: RenderPlan, seg: SegmentPlan, copy_size=None) -> st
                   f"*n/{span}")
         chain.append(f"crop={ww}:{wh}:'{wx}':{wy}")
         chain.append(f"scale={W}:{H}:flags=bicubic")
+    tail = []
     if seg.picture_fade_in_frames:
-        chain.append(f"fade=t=in:s=0:n={seg.picture_fade_in_frames}")
+        tail.append(f"fade=t=in:s=0:n={seg.picture_fade_in_frames}")
     if seg.picture_fade_out_frames:
-        chain.append(f"fade=t=out:s={seg.length_frames - seg.picture_fade_out_frames}:"
-                     f"n={seg.picture_fade_out_frames}")
-    chain.append("format=yuv420p")
-    return ",".join(chain)
+        tail.append(f"fade=t=out:s={seg.length_frames - seg.picture_fade_out_frames}:"
+                    f"n={seg.picture_fade_out_frames}")
+    tail.append("format=yuv420p")
+    if text is None:
+        return ",".join(chain + tail)
+    graph, label = text.graph("pic", 1, "yuv420p")
+    return f"[0:v]{','.join(chain)}[pic];{graph};[{label}]{','.join(tail)}[vout]"
 
 
-def segment_command(ffmpeg, tl, plan, seg, out_path, settings, copy_size=None) -> list:
+def segment_command(ffmpeg, tl, plan, seg, out_path, settings, copy_size=None, text=None) -> list:
     fps = tl.data["film"]["fps"]
     src = tl.data["sources"][seg.source]
     cmd = [ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-y"]
@@ -487,9 +516,15 @@ def segment_command(ffmpeg, tl, plan, seg, out_path, settings, copy_size=None) -
         # Seek half a frame before the first frame wanted, so that the frame at `in` is
         # kept and the frame before it is dropped, whatever rounding the time gets.
         cmd += ["-ss", f"{(seg.in_frame - 0.5) * fps['den'] / fps['num']:.6f}"]
-    cmd += ["-i", src["preview_copy"], "-an", "-sn", "-frames:v", str(seg.length_frames),
-            "-vf", segment_filter(tl, plan, seg, copy_size),
-            "-fps_mode", "cfr", "-r", f"{fps['num']}/{fps['den']}"]
+    cmd += ["-i", src["preview_copy"]]
+    if text is not None:
+        cmd += text.inputs()
+    cmd += ["-an", "-sn", "-frames:v", str(seg.length_frames)]
+    if text is None:
+        cmd += ["-vf", segment_filter(tl, plan, seg, copy_size)]
+    else:
+        cmd += ["-filter_complex", segment_filter(tl, plan, seg, copy_size, text), "-map", "[vout]"]
+    cmd += ["-fps_mode", "cfr", "-r", f"{fps['num']}/{fps['den']}"]
     cmd += _encoder_args(settings)
     cmd += ["-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709",
             "-color_range", "tv", "-f", "mp4", str(out_path)]
@@ -502,21 +537,35 @@ def _copy_size(path):
 
 
 def render_segment(tl, plan: RenderPlan, seg: SegmentPlan, out_path: str,
-                   settings: PreviewSettings, ffmpeg: str = None) -> None:
+                   settings: PreviewSettings, ffmpeg: str = None, burn_text: bool = True) -> None:
     """Cut one segment from its preview copy and write it as a small H.264 file with
-    exactly `seg.length_frames` frames. The file is written as .partial and renamed."""
+    exactly `seg.length_frames` frames, with the cues and titles that fall in it drawn over the
+    picture. The file is written as .partial and renamed."""
+    import shutil
     import subprocess
+    import tempfile
+    import textlayout
     import tools
     ffmpeg = ffmpeg or tools.ffmpeg_path()
     src = tl.data["sources"][seg.source]
     copy_size = _copy_size(src["preview_copy"])
     partial = out_path + ".partial"
-    cmd = segment_command(ffmpeg, tl, plan, seg, partial, settings, copy_size)
-    r = subprocess.run(cmd, capture_output=True, text=True)
-    if r.returncode != 0:
-        _remove(partial)
-        raise RenderError(f"ffmpeg failed on segment {seg.id}: {r.stderr.strip()[-600:]}")
-    os.replace(partial, out_path)
+    text = segment_text(tl, plan, seg, burn_text)
+    scratch = tempfile.mkdtemp(prefix="text-", dir=os.path.dirname(out_path))
+    try:
+        if text is not None:
+            try:
+                text.write(scratch)
+            except textlayout.FontMissing as e:
+                raise RenderError(f"The film has text, and the font is missing. {e}")
+        cmd = segment_command(ffmpeg, tl, plan, seg, partial, settings, copy_size, text)
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        if r.returncode != 0:
+            _remove(partial)
+            raise RenderError(f"ffmpeg failed on segment {seg.id}: {r.stderr.strip()[-600:]}")
+        os.replace(partial, out_path)
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
 
 
 def _remove(path):
@@ -526,10 +575,12 @@ def _remove(path):
         pass
 
 
-def segment_key(tl, plan: RenderPlan, seg: SegmentPlan, settings: PreviewSettings) -> str:
+def segment_key(tl, plan: RenderPlan, seg: SegmentPlan, settings: PreviewSettings,
+                burn_text: bool = True) -> str:
     """A name for the segment file that changes when anything that shapes the picture
     changes: the preview copy (path, size, modification time), in and out, the placement,
-    the preview frame, the creative LUT, the film fades that touch the segment, the settings."""
+    the preview frame, the creative LUT, the film fades that touch the segment, the text that falls
+    in the segment, the settings."""
     import hashlib
     import json
     src = tl.data["sources"][seg.source]
@@ -541,6 +592,9 @@ def segment_key(tl, plan: RenderPlan, seg: SegmentPlan, settings: PreviewSetting
         "frame": list(plan.frame), "lut": lut["sha256"] if lut else None,
         "fade_in": seg.picture_fade_in_frames, "fade_out": seg.picture_fade_out_frames,
         "fps": tl.data["film"]["fps"], "settings": settings.as_dict()}
+    text = segment_text(tl, plan, seg, burn_text)
+    if text is not None:
+        material["text"] = text.signature        # only when there is text: films without text keep their keys
     digest = hashlib.sha256(json.dumps(material, sort_keys=True).encode()).hexdigest()[:20]
     return f"seg-{digest}.mp4"
 
@@ -590,7 +644,8 @@ def _write_cache(path: str, cache: dict) -> None:
     fsutil.write_json_atomic(path, cache)
 
 
-def pending_work(tl, work_dir: str, settings: PreviewSettings = None, name: str = "preview") -> dict:
+def pending_work(tl, work_dir: str, settings: PreviewSettings = None, name: str = "preview",
+                 burn_text: bool = True) -> dict:
     """What the next film preview has to do for the film as it is now: the segments whose
     picture file does not exist yet (`picture`) and the segments whose sound differs from
     the sound of the last preview (`sound`). A changed offset changes the sound only. Reads
@@ -603,7 +658,7 @@ def pending_work(tl, work_dir: str, settings: PreviewSettings = None, name: str 
     picture = []
     for s in plan.segments:
         try:
-            target = os.path.join(folder, segment_key(tl, plan, s, settings))
+            target = os.path.join(folder, segment_key(tl, plan, s, settings, burn_text))
         except OSError:                     # the preview copy is missing: nothing can be reused
             picture.append(s.id)
             continue
@@ -675,7 +730,7 @@ def verify_preview(path: str, frames: int, fps: Fraction) -> list:
 
 def render_preview(tl, work_dir: str, name: str = "preview", settings: PreviewSettings = None,
                    film_range=None, loader=None, timeline_hash: str = None, protected=None,
-                   log=print, progress=None) -> PreviewResult:
+                   log=print, progress=None, burn_text: bool = True) -> PreviewResult:
     """Render the film preview of `tl` to <work_dir>/previews/<name>.mp4.
 
     Picture: one small file per segment in previews/seg-<key>.mp4, cut from the preview
@@ -683,7 +738,8 @@ def render_preview(tl, work_dir: str, name: str = "preview", settings: PreviewSe
     without a new encode. Sound: the whole mix of build_mix, encoded as AAC. A second file,
     previews/<name>.json, records the timeline hash and the segments, so the page can tell
     whether the preview is up to date. `film_range` (from, to) in film seconds renders
-    only the segments that touch it. `protected` lists folders that hold originals; the
+    only the segments that touch it. The cues and titles that fall in a segment are drawn into its
+    picture (SPECS 9.6) unless `burn_text` is off; moving one cue renders again only the scenes it touches. `protected` lists folders that hold originals; the
     work directory must not lie inside one.
     """
     import datetime
@@ -725,12 +781,12 @@ def render_preview(tl, work_dir: str, name: str = "preview", settings: PreviewSe
     # Picture: one file per segment, from the cache where it exists.
     files = []
     for i, s in enumerate(segs):
-        target = os.path.join(folder, segment_key(tl, plan, s, settings))
+        target = os.path.join(folder, segment_key(tl, plan, s, settings, burn_text))
         if os.path.isfile(target) and os.path.getsize(target) > 0:
             result.cached.append(s.id)
         else:
             log(f"[{i + 1}/{len(segs)}] rendering segment {s.id} ({s.length_frames} frames)")
-            render_segment(tl, plan, s, target, settings, ffmpeg)
+            render_segment(tl, plan, s, target, settings, ffmpeg, burn_text)
             result.rendered.append(s.id)
         files.append(target)
         if progress:

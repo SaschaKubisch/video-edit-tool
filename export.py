@@ -45,8 +45,11 @@ import look
 import loudness
 import render
 import safety
+import textlayer
+import textlayout
 import timeline
 import tools
+import words
 
 # ── Presets (SPECS 5.6, 8.5) ────────────────────────────────────
 
@@ -105,6 +108,17 @@ def find_export(data: dict, name: str) -> dict:
             return e
     known = ", ".join(e.get("name", "?") for e in data.get("exports") or []) or "none"
     raise ExportError(f"the timeline file has no export {name!r} (exports: {known})")
+
+
+def subtitle_form(entry: dict, kind: str = "film") -> str:
+    """What this export does with the subtitles (D13): `srt`, `burned`, `both` or `none`. An entry that
+    names none gets the starting value for its kind (config.SUBTITLE_FORM_DEFAULT)."""
+    return entry.get("subtitles") or config.SUBTITLE_FORM_DEFAULT.get(kind, "srt")
+
+
+def srt_path(output: str, lang: str = "en") -> str:
+    """The SRT file next to the film: <film>.en.srt (language codes as YouTube writes them)."""
+    return os.path.splitext(output)[0] + f".{lang}.srt"
 
 
 def with_export(data: dict, entry: dict, replace: bool = False) -> dict:
@@ -234,9 +248,11 @@ H264_COLOUR_BSF = ("h264_metadata=colour_primaries=1:transfer_characteristics=1:
 
 
 def encoder_command(ffmpeg, tl, plan, entry: dict, audio_input: list, out_path: str,
-                    timecode: str = "00:00:00:00") -> list:
+                    timecode: str = "00:00:00:00", text=None) -> list:
     """The encoder process: raw frames in on the standard input, the finished sound as a
-    second input, fades, the colour tags, the timecode, `faststart`."""
+    second input, fades, the colour tags, the timecode, `faststart`. With `text` (a textlayer plan
+    that has been written) the cues and titles are laid over the picture before the fades, so that
+    they fade with the picture; the lanes are inputs 1 to n and the sound is input n + 1."""
     fps = tl.data["film"]["fps"]
     first, last = plan.segments[0], plan.segments[-1]
     fades = []
@@ -255,10 +271,18 @@ def encoder_command(ffmpeg, tl, plan, entry: dict, audio_input: list, out_path: 
         fades.insert(0, "setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709:range=tv")
     cmd = [ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
            "-f", "rawvideo", "-pix_fmt", pixel_format(entry), "-s", f"{entry['width']}x{entry['height']}",
-           "-r", f"{fps['num']}/{fps['den']}", "-i", "pipe:0", *audio_input,
-           "-map", "0:v:0", "-map", "1:a:0"]
-    if fades:
-        cmd += ["-vf", ",".join(fades)]
+           "-r", f"{fps['num']}/{fps['den']}", "-i", "pipe:0"]
+    if text is None:
+        cmd += [*audio_input, "-map", "0:v:0", "-map", "1:a:0"]
+        if fades:
+            cmd += ["-vf", ",".join(fades)]
+    else:
+        graph, label = text.graph("0:v", 1, pixel_format(entry))
+        if fades:
+            graph += f";[{label}]{','.join(fades)}[vout]"
+            label = "vout"
+        cmd += [*text.inputs(), *audio_input, "-filter_complex", graph, "-map", f"[{label}]",
+                "-map", f"{len(text.lanes) + 1}:a:0"]
     cmd += video_encoder_args(entry)
     cmd += ["-fps_mode", "cfr", "-r", f"{fps['num']}/{fps['den']}",
             "-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709",
@@ -499,6 +523,8 @@ class ExportResult:
     problems: list = field(default_factory=list)
     checks: dict = field(default_factory=dict)
     credit_file: str = None
+    srt_file: str = None
+    subtitles: str = ""
     report_file: str = None
     ok: bool = False
 
@@ -506,7 +532,7 @@ class ExportResult:
         return {k: getattr(self, k) for k in (
             "name", "path", "frames", "seconds", "elapsed_s", "video_fps", "realtime_factor",
             "bytes", "mbps", "stage_s", "levels", "output_loudness", "warnings", "problems",
-            "checks", "credit_file", "ok")}
+            "checks", "credit_file", "srt_file", "subtitles", "ok")}
 
 
 def _now_iso() -> str:
@@ -662,8 +688,25 @@ def render_export(tl, name: str, work_dir: str, decoder, timeline_hash: str = No
             f"(with a margin of {int((SPACE_MARGIN - 1) * 100)} percent and the sound scratch file) "
             f"and {free / 1e9:.1f} GB is free in {os.path.dirname(os.path.abspath(out_path))}.")
 
-    result = ExportResult(name=name, path=out_path, frames=frames, seconds=seconds)
+    form = subtitle_form(entry, tl.data["kind"])
+    text = None
+    if textlayer.has_text(tl.data, burn_cues=form in ("burned", "both")):
+        text = textlayer.build(tl.data, (entry["width"], entry["height"]), 0, frames,
+                               render.segment_rects(plan), burn_cues=form in ("burned", "both"))
+        if text.empty:
+            text = None
+        else:
+            try:
+                textlayout.get_font("subtitle", 12)
+                textlayout.get_font("title", 12)
+            except textlayout.FontMissing as e:
+                raise ExportError(f"The film has text to draw, and the font is missing. {e}")
+
+    result = ExportResult(name=name, path=out_path, frames=frames, seconds=seconds, subtitles=form)
     warn = result.warnings.append
+    if text is not None:
+        for w in text.warnings:
+            warn(w)
     os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
     os.makedirs(work_dir, exist_ok=True)
     lock = _Lock(work_dir)
@@ -706,8 +749,10 @@ def render_export(tl, name: str, work_dir: str, decoder, timeline_hash: str = No
         # The picture.
         t0 = time.time()
         enc_log = os.path.join(scratch, "encoder.log")
+        if text is not None:
+            text.write(os.path.join(scratch, "text"))
         cmd = encoder_command(ffmpeg, tl, plan, entry,
-                              audio_input_args(entry, audio_path, plan.sample_rate), partial)
+                              audio_input_args(entry, audio_path, plan.sample_rate), partial, text=text)
         with open(enc_log, "wb") as enc_err:
             enc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=enc_err)
             done_before = 0
@@ -807,6 +852,13 @@ def render_export(tl, name: str, work_dir: str, decoder, timeline_hash: str = No
         else:
             os.replace(partial, out_path)
             result.ok = True
+            if form in ("srt", "both"):
+                spans = words.cue_spans(tl.data)
+                srt = srt_path(out_path)
+                fsutil.write_text_atomic(srt, words.srt_text(spans, words.RULES_FACTORY(tl.data)))
+                result.srt_file = srt
+                if not spans:
+                    warn("the film has no subtitles, so the SRT file is empty")
             credit = look.film_credit(tl.data)
             if credit:
                 credit_path = os.path.splitext(out_path)[0] + ".credit.txt"
@@ -870,7 +922,7 @@ def write_report(work_dir, report_name, tl, entry, result, started_iso, load_sta
         "gain_capped": [k for k, v in seg_levels.items() if v.get("capped")],
         "silent_segments": [k for k, v in seg_levels.items() if v.get("silent")],
         "warnings": result.warnings, "problems": result.problems, "checks": result.checks,
-        "credit_file": result.credit_file}
+        "credit_file": result.credit_file, "subtitles": result.subtitles, "srt_file": result.srt_file}
     report["renders"].append(row)
     report["renders"] = report["renders"][-30:]
     fsutil.write_json_atomic(path, report)

@@ -85,10 +85,10 @@ class Measurer:
 
 
 class EstimateMeasurer:
-    """A rough width for when the font is missing: 0.57 em per character, the mean of the
-    Inter SemiBold letters in English text [measured with the real font, tests/test_textlayout.py]."""
+    """A rough width for when the font is missing: 0.48 em per character, the mean advance of
+    Inter SemiBold in English text with spaces [measured with the real font, tests/test_textlayout.py]."""
     exact = False
-    EM = 0.57
+    EM = 0.48
 
     def __init__(self, size: int):
         self.size = int(size)
@@ -192,12 +192,14 @@ def _text_box(draw_font, text):
 
 
 def render_lines(lines, geo: Geometry, kind="subtitle", canvas=None, align="center", anchor_x=None,
-                 size=None, colour=None):
+                 size=None, colour=None, center_x=None):
     """Draw `lines` (a list of strings) white with a black outline and a soft shadow.
 
     With `canvas` = (w, h) the image has that size and the text sits at the bottom, with the
     last line at the same place whatever the number of lines (subtitles use this, so that a cue
-    of one line and a cue of two lines share one lane). Without it the image is cut to the text.
+    of one line and a cue of two lines share one lane). The text is centred on `center_x`, by
+    default the middle of the safe area (which is not the middle of a 9:16 frame). Without a
+    canvas the image is cut to the text.
     Returns (image, (x, y)): the RGBA image and its place in the frame, in pixels.
     """
     from PIL import Image, ImageDraw, ImageFilter
@@ -239,7 +241,9 @@ def render_lines(lines, geo: Geometry, kind="subtitle", canvas=None, align="cent
         return base, (0, 0)
     cw, ch = canvas
     out = Image.new("RGBA", (cw, ch), (0, 0, 0, 0))
-    x = int(round((cw - w) / 2.0)) if align == "center" else int(anchor_x or 0)
+    if center_x is None:
+        center_x = (geo.safe[0] + geo.safe[2]) / 2.0
+    x = int(round(center_x - w / 2.0)) if align == "center" else int(anchor_x or 0)
     y = ch - h
     out.alpha_composite(base, (max(0, x), max(0, y)))
     return out, (0, 0)
