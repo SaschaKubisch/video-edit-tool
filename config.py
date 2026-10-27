@@ -183,6 +183,26 @@ TEXT_STYLE = {
     "shadow_alpha": 0.6,
     "line_height_em": 1.2,
 }
+# Burned-in translations (SPECS 9.6, step 6). Inter has no glyphs for Japanese, Chinese or Thai, so the subtitle of
+# each of those languages is drawn with a Noto font (SIL Open Font License 1.1), from the folder VET_NOTO_FONT_DIR
+# names. The other translations (pt-BR, de, ru) are Latin or Cyrillic and use Inter. `font` is the file name,
+# `family` what the message says, `line_height_em` the distance between two lines: Thai stacks tone marks over vowel
+# marks and has tails below the line, so it needs more room than Inter's 1.2 em, and the outline of a line (0.075 em
+# on each side) must not touch the next line [measured at 64 px: SPECS 9.6]. Thai needs Pillow's raqm layout
+# engine: without it the tone mark is drawn on the vowel mark.
+TEXT_NOTO_DIR_ENV = "VET_NOTO_FONT_DIR"
+TEXT_LANG_STYLE = {
+    "ja": {"font": "NotoSansJP-Bold.otf", "family": "Noto Sans JP", "line_height_em": 1.3,
+           "source": "https://github.com/notofonts/noto-cjk"},
+    "zh-Hans": {"font": "NotoSansSC-Bold.otf", "family": "Noto Sans SC", "line_height_em": 1.3,
+                "source": "https://github.com/notofonts/noto-cjk"},
+    "th": {"font": "NotoSansThai-SemiBold.ttf", "family": "Noto Sans Thai", "line_height_em": 1.45, "needs_raqm": True,
+           "source": "https://github.com/notofonts/thai"},
+}
+# The credit line that goes into <film>.credit.txt for the fonts that were drawn into the film. The OFL does not ask for a
+# credit in a film made with a font; the line says which fonts and under which licence, for the video description.
+TEXT_FONT_LICENCE = "SIL Open Font License 1.1 (https://openfontlicense.org/)"
+TEXT_INTER_SOURCE = "https://rsms.me/inter/"
 # Layouts by the shape of the frame. `safe` is the margin of the safe area as a fraction of the
 # frame: (left, top, right, bottom). 16:9: the graphics safe area of EBU R 95 (5 percent on every
 # side). 9:16: the margins of SPECS 11.6 (secondary source). `size_pct` is the font size as a

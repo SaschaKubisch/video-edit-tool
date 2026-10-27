@@ -38,6 +38,10 @@ the files line up.
   two lines at most. A line of Chinese, Japanese or Thai has no spaces, so it is cut at the phrase boundaries that
   BudouX gives, with the line-start and line-end rules of W3C JLREQ and CLREQ kept (linebreak.py). The limits are
   those of the Netflix Timed Text Style Guide of each language (config.TRANSLATE_LANGUAGE_RULES).
+- Burning a translation into a film (step 6): `final_texts` gives the text each cue ended up with, read from the cache
+  without a request (the first translation, or the shorter one when the follow-up found one that fits better), and
+  `localize` returns a copy of a film or a short whose cues have those texts and whose `subtitles.language` is the
+  language. The picture is drawn from that copy (textlayer.py).
 """
 
 import collections
@@ -321,6 +325,98 @@ def save_cache(work_dir: str, entries: dict) -> None:
 
 def flat(text: str) -> str:
     return " ".join(text.split())
+
+
+# ── Burning a translation: the text each cue ended up with ───────
+
+def final_texts(spans: list, work_dir: str, lang: str, model: str = None) -> dict:
+    """The text of every cue of `spans` (words.cue_spans) in `lang`, as `subtitles translate` left it in the cache:
+    the first translation, or the shorter one when the cue needs one (it has a problem the follow-up can mend) and the
+    shorter one fits better (`better`): the same choice that `_shorten` made when it wrote the SRT file. Nothing is
+    sent and nothing is written. Returns {cue id: text}. A cue with no translation (never translated, another model, a
+    text that changed since) is an error that names the cues and the command: no English is put into another
+    language."""
+    if lang not in config.TRANSLATE_LANGUAGES:
+        raise TranslateError(f"Unknown language {lang!r}. The languages are: {', '.join(config.TRANSLATE_LANGUAGES)}.")
+    model = model_name(model)
+    cache = load_cache(work_dir)
+    out, missing = {}, []
+    for s in spans:
+        english = flat(s["text"])
+        found = cache.get(cache_key(model, lang, english))
+        if found is None:
+            missing.append(s["id"])
+            continue
+        first = found["text"]
+        duration = max(1e-6, s["end_s"] - s["start_s"])
+        problems = assess(first, lang, duration)
+        limit = max_chars_for(lang, duration)
+        text = first
+        if problems["problems"] and limit >= config.TRANSLATE_SHORTEN_MIN_CHARS:
+            shorter = cache.get(short_cache_key(model, lang, english, limit))
+            if shorter is not None and better(assess(shorter["text"], lang, duration), problems):
+                text = shorter["text"]
+        out[s["id"]] = text
+    if missing:
+        raise TranslateError(
+            f"No translation into {lang} (model {model}) for the cues {', '.join(missing)}. Translate them first: "
+            f"python main.py subtitles translate --lang {lang}")
+    return out
+
+
+def localize(data: dict, work_dir: str, lang: str, film=None, model: str = None):
+    """A copy of the timeline data `data` (a film, or a short) whose cues are in `lang`, and a list of notes. The
+    copy has `subtitles.language` set to `lang` and, for each cue that is in the film, the text that `final_texts`
+    gives; the times and the scenes are the cue's own. It is for drawing, never saved: `data` is not changed.
+    English returns `data` itself.
+
+    A short has the pieces that the 9:16 layout made of one cue of the film, each naming its cue (`x_film_cue`). The
+    pieces of one cue that follow each other on one scene become one cue again, from the start of the first to the end
+    of the last, with the text of the film's cue; the layout for the narrow frame is done again when the picture is
+    drawn. `film` is the film's data; when it is not given, the file named by `derived_from.film` is read. A cue of a
+    short that names no cue of the film cannot be translated and is an error."""
+    import copy
+    import timeline
+    if lang == config.SUBTITLE_LANGUAGE:
+        return data, []
+    out = copy.deepcopy(data)
+    subs = out.setdefault("subtitles", {"language": config.SUBTITLE_LANGUAGE, "cues": []})
+    notes = []
+    if data.get("kind") == "short":
+        path = (data.get("derived_from") or {}).get("film", "")
+        if film is None:
+            try:
+                film = timeline.Timeline.load(path).data
+            except (OSError, ValueError, KeyError, timeline.TimelineError) as e:
+                raise TranslateError(f"The short was made from the film {path}, and that file cannot be read "
+                                     f"({e}). A short in another language takes its text from the cues of the film.")
+        final = final_texts(words.cue_spans(film), work_dir, lang, model)
+        cues, unnamed = [], []
+        for c in (data.get("subtitles") or {}).get("cues") or []:
+            name = c.get("x_film_cue")
+            if name is None:
+                unnamed.append(c["id"])
+                continue
+            if name not in final:
+                raise TranslateError(f"The cue {c['id']} of the short comes from the cue {name} of the film, and the "
+                                     f"film ({path or 'the film file'}) has no such cue.")
+            piece = dict(copy.deepcopy(c), text=final[name])
+            if cues and cues[-1].get("x_film_cue") == name and cues[-1]["anchor"] == c["anchor"]:
+                cues[-1]["end_s"] = max(cues[-1]["end_s"], c["end_s"])
+                continue
+            cues.append(piece)
+        if unnamed:
+            raise TranslateError(f"The cue(s) {', '.join(unnamed)} of the short name no cue of the film (x_film_cue), "
+                                 f"so they cannot be translated. A short that was planned before this key existed "
+                                 f"must be planned again: python main.py short --file <film> ...")
+        subs["cues"] = cues
+    else:
+        spans = words.cue_spans(data)
+        final = final_texts(spans, work_dir, lang, model)
+        by_id = {s["id"]: s for s in spans}
+        subs["cues"] = [dict(c, text=final[c["id"]]) for c in subs.get("cues") or [] if c["id"] in by_id]
+    subs["language"] = lang
+    return out, notes
 
 
 # ── The service ─────────────────────────────────────────────────

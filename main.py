@@ -826,10 +826,16 @@ def cmd_render(args, decoder=None):
     failed = False
     try:
         for name in names:
+            form = args.subtitles
+            if args.lang and args.lang != config.SUBTITLE_LANGUAGE and not form:
+                # asking for a language means drawing it: the form of the export when it draws, else burned
+                entry = next((e for e in tl.data.get("exports") or [] if e.get("name") == name), {})
+                own = export.subtitle_form(entry, tl.data["kind"])
+                form = own if own in ("burned", "both") else "burned"
             try:
                 result = export.render_export(
                     tl, name, work_dir, decoder, timeline_hash=timeline.file_hash(path),
-                    protected=originals, force=args.force, subtitles=args.subtitles,
+                    protected=originals, force=args.force, subtitles=form, subtitle_lang=args.lang,
                     log=lambda s: print(f"{time.strftime('%H:%M:%S')}  {s}", flush=True))
             except (export.ExportError, safety.OriginalsProtectedError) as e:
                 print(f"Error: {e}", file=sys.stderr, flush=True)
@@ -936,6 +942,8 @@ def cmd_short(args, decoder=None):
         argv = [sys.executable, os.path.abspath(__file__), "short", "--file", plan_path, "--work", work]
         if args.stills:
             argv.append("--stills")
+        if args.lang:
+            argv += ["--lang", args.lang]
         log_path = os.path.join(work, "reports", f"short-{name}.log")
         pid_path = os.path.join(work, "reports", f"short-{name}.pid")
         try:
@@ -957,7 +965,7 @@ def cmd_short(args, decoder=None):
     try:
         result = export.render_export(short_tl, name, work, decoder, timeline_hash=timeline.file_hash(plan_path),
                                       protected=originals, report_name="short-report", subtitles=args.subtitles,
-                                      log=log)
+                                      subtitle_lang=args.lang, log=log)
     except (export.ExportError, safety.OriginalsProtectedError) as e:
         fail(str(e))
     except KeyboardInterrupt:
@@ -1992,6 +2000,10 @@ def build_parser():
     p_short.add_argument("--exclude", metavar="IDS", help="Do not use these scenes")
     p_short.add_argument("--subtitles", choices=config.SUBTITLE_FORMS,
         help="The form of the subtitles: srt, burned, both or none (default for a short: burned)")
+    p_short.add_argument("--lang", choices=config.TRANSLATE_LANGUAGES + (config.SUBTITLE_LANGUAGE,), metavar="LANG",
+        help="Render the short with its subtitles in this language, from the translations that `subtitles translate` "
+             "made for the film, into <short>.<LANG>.mp4 (the plan stays English; Japanese, Chinese and Thai need "
+             "VET_NOTO_FONT_DIR)")
     p_short.add_argument("--dry-run", action="store_true",
         help="Print the plan (kept scenes, film and short times, kept and dropped subtitles) and write nothing")
     p_short.add_argument("--no-render", action="store_true", help="Write the plan file and stop")
@@ -2013,6 +2025,10 @@ def build_parser():
     p_render.add_argument("--subtitles", choices=config.SUBTITLE_FORMS,
         help="The form of the subtitles for this render only: srt, burned, both or none (default: the "
              "setting of the export; change that with: export set NAME --subtitles FORM)")
+    p_render.add_argument("--lang", choices=config.TRANSLATE_LANGUAGES + (config.SUBTITLE_LANGUAGE,), metavar="LANG",
+        help="Burn the subtitles in this language (" + ", ".join(config.TRANSLATE_LANGUAGES) + "), from the translations "
+             "that `subtitles translate` made, into <film>.<LANG>.<ext>; the form is burned unless you say both "
+             "(Japanese, Chinese and Thai need VET_NOTO_FONT_DIR)")
     p_render.add_argument("--detach", action="store_true",
         help="Run in the background, in a session of its own, with a log and a pid file in <work>/reports")
     p_render.set_defaults(func=cmd_render)

@@ -598,7 +598,7 @@ def plan_short(film: dict, film_path: str = "", length_s: float = None, size=Non
             for ps, pe, text in pieces:
                 cue_out.append({"anchor": new_ids[i], "start_s": _snap(start + ps, fps),
                                 "end_s": min(_snap(start + pe, fps), _snap(scene_len, fps)), "text": text,
-                                "origin": cue.get("origin", "manual")})
+                                "origin": cue.get("origin", "manual"), "x_film_cue": cue["id"]})
             mine["kept"].append(cue["id"])
             mine["pieces"] += len(pieces)
             cues_kept.append(cue["id"])
@@ -608,7 +608,7 @@ def plan_short(film: dict, film_path: str = "", length_s: float = None, size=Non
     for k, cue in enumerate(cue_out):
         cue["id"] = f"c{k + 1:03d}"
         cue_out[k] = {"id": cue["id"], "anchor": cue["anchor"], "start_s": cue["start_s"], "end_s": cue["end_s"],
-                      "text": cue["text"], "origin": cue["origin"]}
+                      "text": cue["text"], "origin": cue["origin"], "x_film_cue": cue["x_film_cue"]}
 
     titles_dropped = []
     rows_by_id = {r["seg"]["id"]: r for r in rows}

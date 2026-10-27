@@ -65,6 +65,7 @@ class TextPlan:
     signature: str = ""
     cue_count: int = 0
     title_count: int = 0
+    lang: str = "en"             # the language of the cues (`subtitles.language`): its font and line height
 
     @property
     def empty(self) -> bool:
@@ -95,7 +96,7 @@ class TextPlan:
     def _draw(self, item: Item, lane: Lane):
         W, H = self.frame
         if item.kind == "cue":
-            g = textlayout.geometry(self.frame, picture=None)
+            g = textlayout.geometry(self.frame, picture=None, lang=self.lang)
             g.bottom = item.geometry[0]
             g.safe = (g.safe[0], g.safe[1], g.safe[2], g.safe[3])
             image, _ = textlayout.render_lines(list(item.lines), g, "subtitle", canvas=(lane.width, lane.height),
@@ -252,7 +253,9 @@ def build(data: dict, frame, first: int, last: int, rects: dict, burn_cues: bool
     `rects` maps a segment id to the rectangle (x0, y0, x1, y1) that its picture fills in the frame (a
     letterboxed picture fills less than the frame). Frames in the plan count from `first`."""
     fps = words._fps(data)
-    plan = TextPlan(frame=tuple(frame), fps=fps)
+    lang = (data.get("subtitles") or {}).get("language") or "en"
+    own = textlayout.own_font(lang)                       # Japanese, Simplified Chinese, Thai: a Noto font (9.6)
+    plan = TextPlan(frame=tuple(frame), fps=fps, lang=lang)
     W, H = frame
     rows = {r["seg"]["id"]: r for r in words.film_segments(data)}
     rules_cache, geo_cache = {}, {}
@@ -270,19 +273,27 @@ def build(data: dict, frame, first: int, last: int, rects: dict, burn_cues: bool
                 continue
             rect = tuple(rects.get(row["seg"]["id"]) or (0, 0, W, H))
             if rect not in geo_cache:
-                geo_cache[rect] = textlayout.geometry(frame, rect)
-                rules_cache[rect] = textlayout.rules(frame, rect)
-            g, rules = geo_cache[rect], rules_cache[rect]
-            lines = c["text"].strip().split("\n")
-            if len(lines) > rules.max_lines or not all(words._fits(rules, s) for s in lines):
-                wrapped = words.wrap(" ".join(c["text"].split()), rules, max_lines=6)
-                if wrapped is None or len(wrapped) > config.SUBTITLE_MAX_LINES:
-                    plan.warnings.append(f"cue {c['id']} does not fit two lines of the safe width; it is drawn "
-                                         f"in {len(wrapped) if wrapped else '?'} lines")
-                lines = wrapped or lines
+                geo_cache[rect] = textlayout.geometry(frame, rect, lang=lang if own else None)
+                if not own:
+                    rules_cache[rect] = textlayout.rules(frame, rect)
+            g = geo_cache[rect]
             key = (g.bottom, (g.safe[0] + g.safe[2]) / 2.0)
-            cue_lanes.setdefault(key, []).append(
-                Item("cue", a - first, b - first, tuple(lines), (g.bottom, 0, (g.safe[0] + g.safe[2]) / 2.0), 1.0, c["id"]))
+            if own:
+                pieces = _lang_pieces(c, lang, g, a, b, fps, plan)
+            else:
+                rules = rules_cache[rect]
+                lines = c["text"].strip().split("\n")
+                if len(lines) > rules.max_lines or not all(words._fits(rules, s) for s in lines):
+                    wrapped = words.wrap(" ".join(c["text"].split()), rules, max_lines=6)
+                    if wrapped is None or len(wrapped) > config.SUBTITLE_MAX_LINES:
+                        plan.warnings.append(f"cue {c['id']} does not fit two lines of the safe width; it is drawn "
+                                             f"in {len(wrapped) if wrapped else '?'} lines")
+                    lines = wrapped or lines
+                pieces = [(a, b, tuple(lines))]
+            for pa, pb, piece_lines in pieces:
+                cue_lanes.setdefault(key, []).append(
+                    Item("cue", pa - first, pb - first, tuple(piece_lines),
+                         (g.bottom, 0, (g.safe[0] + g.safe[2]) / 2.0), 1.0, c["id"]))
             plan.cue_count += 1
 
     for (bottom, cx), items in sorted(cue_lanes.items()):
@@ -338,7 +349,51 @@ def build(data: dict, frame, first: int, last: int, rects: dict, burn_cues: bool
     return plan
 
 
-def _signature(plan: TextPlan) -> str:
+def font_credit(plan: TextPlan):
+    """The line for the credit file of a film that has this text drawn into it: the fonts that were used (Inter for titles
+    and for the subtitles of the languages it draws, the Noto font of a translated language) with their source and the
+    licence (SPECS 9.6). None when nothing is drawn."""
+    kinds = {i.kind for lane in plan.lanes for i in lane.items}
+    names = []
+    if "cue" in kinds:
+        if textlayout.own_font(plan.lang):
+            style = config.TEXT_LANG_STYLE[plan.lang]
+            names.append(f"{style['family']} ({style['source']})")
+        else:
+            names.append(f"Inter ({config.TEXT_INTER_SOURCE})")
+    if "title" in kinds and f"Inter ({config.TEXT_INTER_SOURCE})" not in names:
+        names.append(f"Inter ({config.TEXT_INTER_SOURCE})")
+    if not names:
+        return None
+    return f"Fonts: {', '.join(names)}; {config.TEXT_FONT_LICENCE}"
+
+
+def _lang_pieces(cue: dict, lang: str, g, a: int, b: int, fps, plan: TextPlan) -> list:
+    """The cue `cue` (frames [a, b)) in Japanese, Simplified Chinese or Thai as [(first, end, lines)]: lines cut at
+    phrase boundaries in the real font (`textlayout.lang_lines`). A text that needs more than two lines is cut into
+    cues of two lines each (the last may have one) that share the time of the cue in proportion to their length, as the
+    English cues of a 9:16 frame do (`words.spread`); nothing is drawn smaller."""
+    lines, split = textlayout.lang_lines(cue["text"], lang, g)
+    if split:
+        plan.warnings.append(f"cue {cue['id']}: a phrase is wider than a line and was cut inside")
+    if len(lines) <= config.SUBTITLE_MAX_LINES:
+        return [(a, b, tuple(lines))]
+    groups = [lines[i:i + config.SUBTITLE_MAX_LINES] for i in range(0, len(lines), config.SUBTITLE_MAX_LINES)]
+    spans, report = words.spread(["".join(g_) for g_ in groups], float((b - a) / fps), fps,
+                                 max_cps=config.TRANSLATE_LANGUAGE_RULES[lang]["cps"])
+    if report["overflow"]:
+        plan.warnings.append(f"cue {cue['id']}: its {len(groups)} pieces need more time than the cue has "
+                             f"({report['needed_s']} s of {report['available_s']:.2f} s); they are shorter than the "
+                             f"reading speed of {lang} allows")
+    out = []
+    for (s0, s1), group in zip(spans, groups):
+        pa, pb = a + int(round(s0 * fps)), a + int(round(s1 * fps))
+        if pb > pa:
+            out.append((pa, min(pb, b), tuple(group)))
+    return out
+
+
+def _signature_material(plan: TextPlan) -> dict:
     material = {
         "v": 1, "frame": list(plan.frame), "fps": [plan.fps.numerator, plan.fps.denominator],
         "style": config.TEXT_STYLE, "layouts": config.TEXT_LAYOUTS, "titles": config.TITLE_TEMPLATES,
@@ -346,19 +401,29 @@ def _signature(plan: TextPlan) -> str:
         "lanes": [{"x": l.x, "y": l.y, "w": l.width, "h": l.height,
                    "items": [[i.kind, i.first, i.end, list(i.lines), list(map(str, i.geometry)), i.opacity]
                              for i in l.items]} for l in plan.lanes]}
-    return hashlib.sha256(json.dumps(material, sort_keys=True, default=str).encode()).hexdigest()[:20]
+    if textlayout.own_font(plan.lang):
+        # a film in English has the signature it always had; another script adds its language, its font file and its line height
+        material["lang"] = [plan.lang, config.TEXT_LANG_STYLE[plan.lang], _file_identity(
+            lambda: textlayout.lang_font_file(plan.lang), config.TEXT_LANG_STYLE[plan.lang]["font"])]
+    return material
+
+
+def _signature(plan: TextPlan) -> str:
+    return hashlib.sha256(json.dumps(_signature_material(plan), sort_keys=True, default=str).encode()).hexdigest()[:20]
+
+
+def _file_identity(find, fallback_name: str) -> list:
+    try:
+        path = find()
+        st = os.stat(path)
+        return [os.path.basename(path), st.st_size, st.st_mtime_ns]
+    except (textlayout.FontMissing, OSError):
+        return [fallback_name, 0, 0]
 
 
 def _font_identity():
-    out = []
-    for key in ("subtitle_font", "title_font"):
-        try:
-            path = textlayout.font_file(config.TEXT_STYLE[key])
-            st = os.stat(path)
-            out.append([os.path.basename(path), st.st_size, st.st_mtime_ns])
-        except (textlayout.FontMissing, OSError):
-            out.append([config.TEXT_STYLE[key], 0, 0])
-    return out
+    return [_file_identity(lambda key=key: textlayout.font_file(config.TEXT_STYLE[key]), config.TEXT_STYLE[key])
+            for key in ("subtitle_font", "title_font")]
 
 
 def has_text(data: dict, burn_cues: bool = True, burn_titles: bool = True) -> bool:

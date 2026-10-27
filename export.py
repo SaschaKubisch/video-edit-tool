@@ -49,6 +49,7 @@ import textlayer
 import textlayout
 import timeline
 import tools
+import translate
 import words
 
 # ── Presets (SPECS 5.6, 8.5) ────────────────────────────────────
@@ -128,6 +129,15 @@ def subtitle_form(entry: dict, kind: str = "film") -> str:
 def srt_path(output: str, lang: str = "en") -> str:
     """The SRT file next to the film: <film>.en.srt (language codes as YouTube writes them)."""
     return os.path.splitext(output)[0] + f".{lang}.srt"
+
+
+def lang_output(output: str, lang) -> str:
+    """The file of a film whose subtitles are burned in another language: <film>.<lang>.<ext> (the code as YouTube writes
+    it). English, or no language, is the file itself."""
+    if not lang or lang == config.SUBTITLE_LANGUAGE:
+        return output
+    root, ext = os.path.splitext(output)
+    return f"{root}.{lang}{ext}"
 
 
 def with_export(data: dict, entry: dict, replace: bool = False) -> dict:
@@ -534,6 +544,7 @@ class ExportResult:
     credit_file: str = None
     srt_file: str = None
     subtitles: str = ""
+    language: str = None                # the language of the burned subtitles when it is not English
     report_file: str = None
     ok: bool = False
 
@@ -541,7 +552,7 @@ class ExportResult:
         return {k: getattr(self, k) for k in (
             "name", "path", "frames", "seconds", "elapsed_s", "video_fps", "realtime_factor",
             "bytes", "mbps", "stage_s", "levels", "output_loudness", "warnings", "problems",
-            "checks", "credit_file", "srt_file", "subtitles", "ok")}
+            "checks", "credit_file", "srt_file", "subtitles", "language", "ok")}
 
 
 def _now_iso() -> str:
@@ -654,13 +665,16 @@ def _check_sources(tl, plan, decoder, log) -> None:
 def render_export(tl, name: str, work_dir: str, decoder, timeline_hash: str = None, protected=None,
                   loader=None, free_bytes=None, ffmpeg: str = None, ffprobe: str = None,
                   log=print, progress=None, force: bool = False, report_name: str = "render-report",
-                  mix_cache: bool = True, subtitles: str = None) -> ExportResult:
+                  mix_cache: bool = True, subtitles: str = None, subtitle_lang: str = None) -> ExportResult:
     """Render the export `name` of the timeline `tl` from the original `.braw` files.
 
     `decoder` is a Decoder (decoder.py). `loader(path)` returns a WAV as float32 stereo at
     the mix rate (default: ffmpeg). `progress(frames_done, frames_total, fps)` is called as
     frames are written. `force` renders an export that is switched off. `subtitles` (srt, burned, both,
-    none) replaces the form of the subtitles for this render only; the timeline file is not changed. Raises ExportError
+    none) replaces the form of the subtitles for this render only; the timeline file is not changed.
+    `subtitle_lang` (one of config.TRANSLATE_LANGUAGES) draws the translated cues instead of the English ones, from the
+    translation cache (`subtitles translate` fills it), into `<film>.<lang>.<ext>`; the form must draw (burned or both).
+    Raises ExportError
     (ExportDisabled, NotEnoughSpace, AlreadyRunning) before anything is written, and
     KeyboardInterrupt after it has removed what it made. On a failed check the file stays as
     `.partial`; the result has `ok` False and the problems."""
@@ -676,7 +690,23 @@ def render_export(tl, name: str, work_dir: str, decoder, timeline_hash: str = No
     ffmpeg = ffmpeg or tools.ffmpeg_path()
     ffprobe = ffprobe or tools.ffprobe_path()
     protected = protected or []
-    out_path = entry["output"]
+    if subtitles is not None and subtitles not in config.SUBTITLE_FORMS:
+        raise ExportError(f"subtitles must be one of {', '.join(config.SUBTITLE_FORMS)}, not {subtitles!r}")
+    form = subtitles or subtitle_form(entry, tl.data["kind"])
+    lang = subtitle_lang if subtitle_lang and subtitle_lang != config.SUBTITLE_LANGUAGE else None
+    text_data = tl.data                        # what the cues are drawn from: the film, or its translation
+    if lang:
+        if lang not in config.TRANSLATE_LANGUAGES:
+            raise ExportError(f"unknown language {lang!r}. The languages are: {', '.join(config.TRANSLATE_LANGUAGES)} "
+                              f"(and en, the default).")
+        if form not in ("burned", "both"):
+            raise ExportError(f"--lang {lang} draws the translated subtitles into the picture, and the form of this "
+                              f"render is {form!r}. Use --subtitles burned or --subtitles both.")
+        try:
+            text_data, _ = translate.localize(tl.data, work_dir, lang)
+        except translate.TranslateError as e:
+            raise ExportError(str(e))
+    out_path = lang_output(entry["output"], lang)
     if protected:
         safety.assert_not_inside(out_path, protected)
         safety.assert_not_inside(work_dir, protected)
@@ -698,23 +728,23 @@ def render_export(tl, name: str, work_dir: str, decoder, timeline_hash: str = No
             f"(with a margin of {int((SPACE_MARGIN - 1) * 100)} percent and the sound scratch file) "
             f"and {free / 1e9:.1f} GB is free in {os.path.dirname(os.path.abspath(out_path))}.")
 
-    if subtitles is not None and subtitles not in config.SUBTITLE_FORMS:
-        raise ExportError(f"subtitles must be one of {', '.join(config.SUBTITLE_FORMS)}, not {subtitles!r}")
-    form = subtitles or subtitle_form(entry, tl.data["kind"])
     text = None
-    if textlayer.has_text(tl.data, burn_cues=form in ("burned", "both")):
-        text = textlayer.build(tl.data, (entry["width"], entry["height"]), 0, frames,
-                               render.segment_rects(plan), burn_cues=form in ("burned", "both"))
+    if textlayer.has_text(text_data, burn_cues=form in ("burned", "both")):
+        try:
+            text = textlayer.build(text_data, (entry["width"], entry["height"]), 0, frames,
+                                   render.segment_rects(plan), burn_cues=form in ("burned", "both"))
+        except textlayout.FontMissing as e:
+            raise ExportError(f"The film has {lang or 'English'} text to draw, and the font cannot be used. {e}")
         if text.empty:
             text = None
         else:
             try:
-                textlayout.get_font("subtitle", 12)
+                textlayout.get_font("subtitle", 12, lang)
                 textlayout.get_font("title", 12)
             except textlayout.FontMissing as e:
                 raise ExportError(f"The film has text to draw, and the font is missing. {e}")
 
-    result = ExportResult(name=name, path=out_path, frames=frames, seconds=seconds, subtitles=form)
+    result = ExportResult(name=name, path=out_path, frames=frames, seconds=seconds, subtitles=form, language=lang)
     warn = result.warnings.append
     if text is not None:
         for w in text.warnings:
@@ -865,13 +895,17 @@ def render_export(tl, name: str, work_dir: str, decoder, timeline_hash: str = No
             os.replace(partial, out_path)
             result.ok = True
             if form in ("srt", "both"):
-                spans = words.cue_spans(tl.data)
-                srt = srt_path(out_path)
-                fsutil.write_text_atomic(srt, words.srt_text(spans, words.RULES_FACTORY(tl.data)))
+                spans = words.cue_spans(text_data)
+                srt = srt_path(entry["output"], lang or config.SUBTITLE_LANGUAGE)
+                if lang:        # the lines of a translation are cut for its language, as `subtitles translate` writes them
+                    spans = [dict(s, text="\n".join(translate.wrap_translation(s["text"], lang))) for s in spans]
+                    fsutil.write_text_atomic(srt, words.srt_text(spans))
+                else:
+                    fsutil.write_text_atomic(srt, words.srt_text(spans, words.RULES_FACTORY(tl.data)))
                 result.srt_file = srt
                 if not spans:
                     warn("the film has no subtitles, so the SRT file is empty")
-            credit = look.film_credit(tl.data)
+            credit = "\n".join(c for c in (look.film_credit(tl.data), textlayer.font_credit(text) if text else None) if c)
             if credit:
                 credit_path = os.path.splitext(out_path)[0] + ".credit.txt"
                 fsutil.write_text_atomic(credit_path, credit + "\n")
@@ -918,7 +952,8 @@ def write_report(work_dir, report_name, tl, entry, result, started_iso, load_sta
     levels = result.levels or {}
     seg_levels = levels.get("segments") or {}
     row = {
-        "export": entry["name"], "output": entry["output"], "started_at": started_iso,
+        "export": entry["name"], "output": result.path or entry["output"], "language": result.language,
+        "started_at": started_iso,
         "finished_at": _now_iso(), "ok": result.ok, "timeline_hash": timeline_hash,
         "tools": {"ffmpeg": _ffmpeg_version(ffmpeg), "decoder": getattr(decoder, "name", "decoder"),
                   "python": platform.python_version()},
