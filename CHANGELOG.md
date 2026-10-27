@@ -2,6 +2,19 @@
 
 ## Unreleased (editor, step 2 in progress)
 
+### Fixed (translations, limits of a request, waits, Japanese cuts)
+- Every request to the model carries `max_tokens`, sized from its cues. In the second real run two follow-up requests for
+  9 short cues were billed 65538 tokens out because the model ran on without a limit. An answer that ends at the limit
+  (`finish_reason` "length", "MAX_TOKENS", or as many tokens out as allowed) is a failed try with the reason "the answer
+  was cut off at max_tokens", also when the JSON in it can be read; it is tried once more and a second one ends the
+  request. `translate-report.json` lists every try with its tokens, and the command names the tries that failed.
+- HTTP 429 and 503 wait for `Retry-After` (seconds or an HTTP date, at most 60 s), else 5, 15 and 30 s, and make up to 4
+  tries; other errors keep 1 s, 3 s and 3 tries.
+- A Japanese line is cut after a particle (は が を に で と の も へ や から まで より) rather than between other phrases,
+  without adding a line. For this the word model of BudouX (`ja_word.json`) adds cuts after particle words that the phrase
+  model does not offer: `粘土のすり鉢とまな` / `板が準備されている。` (the word まな板 split) is now `粘土のすり鉢と` /
+  `まな板が準備されている。`. Chinese and Thai are cut as before.
+
 ### Fixed (translations, answers of the model)
 - In the first real run every Japanese follow-up request failed with "the answer is not JSON" and one Portuguese one
   with HTTP 429. The answer is now read when the JSON object stands among prose, in a fence that is not the whole text,

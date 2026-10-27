@@ -107,14 +107,18 @@ the access. The key goes into one request header and is never printed, logged, c
 
 **Lines of the translations.** Each language is wrapped for its own limit (42 characters for pt-BR, de and ru, 35 for
 Thai, 16 for Chinese, 13 full-width characters for Japanese; two lines). Chinese, Japanese and Thai have no spaces, so
-the lines are cut only at phrase boundaries (the `budoux` package), and never so that a line starts with a closing
-mark, a small kana or `ー`, or ends with an opening bracket. A translation that needs more than two lines or is read
+the lines are cut only at phrase boundaries (the `budoux` package), in Japanese preferably after a particle (は が を に
+で と の も へ や から まで より), and never so that a line starts with a closing mark, a small kana or `ー`, or ends
+with an opening bracket. A translation that needs more than two lines or is read
 faster than its language allows (Japanese 4, Chinese 9, the others 17 characters per second) is sent to the model once
 more, with the most characters it may have (the smaller of two lines and the reading speed times the length of the
 cue). The shorter text is kept only when it fits better; the first text and its warning stay otherwise. The command
 prints how many cues were asked again and which were shortened; the follow-up counts in the tokens and the cost.
 `--no-shorten` leaves it out. A request is tried 3 times (waits of 1 s and 3 s) after an answer that cannot be read, a
-network error, HTTP 429 or a server error. `--save-raw DIR` writes the text of every answer of the model that cannot
+network error or a server error. HTTP 429 and 503 wait for the `Retry-After` of the answer (at most 60 s) or 5, 15 and
+30 s, and make up to 4 tries. Every request has an output limit (`max_tokens`, from the number of cues in it); an answer
+that ends at the limit counts as failed even when the JSON in it can be read, is tried once more, and a second one ends
+the request. The command lists the tries that failed, and `translate-report.json` has every try with its tokens. `--save-raw DIR` writes the text of every answer of the model that cannot
 be read to a file in `DIR` (the text only, never the key or a header) and names the files in the warnings, to see what
 the model sent.
 
